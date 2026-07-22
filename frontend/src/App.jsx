@@ -83,12 +83,9 @@ function CurrentTime() {
   }, []);
 
   return (
-    <div className="sidebar-clock" aria-label="현재 시간">
-      <span className="clock-icon"><Clock size={18} weight="bold" /></span>
-      <div>
-        <small>CURRENT TIME</small>
-        <time dateTime={time.toISOString()}>{time.toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
-      </div>
+    <div className="panel-clock" aria-label="현재 시간">
+      <Clock size={15} weight="bold" />
+      <time dateTime={time.toISOString()}>{time.toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
     </div>
   );
 }
@@ -97,7 +94,6 @@ function Sidebar({ active, onNavigate }) {
   return (
     <aside className="sidebar" aria-label="주 메뉴">
       <div className="sidebar-main">
-        <CurrentTime />
         <nav className="nav-primary">
           {navItems.map(({ id, label, icon: Icon, badge }) => (
             <button key={id} type="button" className={`nav-item ${active === id ? "active" : ""}`} onClick={() => onNavigate(id)}>
@@ -130,7 +126,10 @@ function MapPanel({ onLocate }) {
   return (
     <section className="panel map-panel">
       <PanelHeader eyebrow="LIVE MAP" title="2D SLAM 지도" action={
-        <button type="button" className="icon-action" aria-label="로봇 위치로 이동" title="로봇 위치로 이동" onClick={onLocate}><Crosshair size={19} /></button>
+        <div className="panel-actions">
+          <CurrentTime />
+          <button type="button" className="icon-action" aria-label="로봇 위치로 이동" title="로봇 위치로 이동" onClick={onLocate}><Crosshair size={19} /></button>
+        </div>
       } />
       <div className="map-stage">
         <img src={slamMap} alt="산업 시설 2D SLAM 지도와 파란색 순찰 경로" />
@@ -314,9 +313,8 @@ function Settings({ notify, apiOnline }) {
     <div className="settings-page">
       <div className="page-heading">
         <div><span className="eyebrow">SYSTEM SETTINGS</span><h1>화재 판정 설정</h1><p>열화상 센서의 온도와 지속 시간을 조합해 경고 단계를 정의합니다.</p></div>
-        <span className={`api-status ${apiOnline ? "online" : ""}`}><span />{apiOnline ? "Backend 연결됨" : "로컬 데모 모드"}</span>
+        <span className={`api-status ${apiOnline ? "online" : ""}`}><span />{apiOnline ? "서버 연결" : "서버 미연결"}</span>
       </div>
-      <div className="settings-notice"><Info size={20} weight="fill" /><div><strong>데모 기준값</strong><p>실제 현장 적용 전 센서 정확도, 설치 거리, 대상 설비의 정상 온도 범위를 기준으로 반드시 재검증해야 합니다.</p></div></div>
       <form onSubmit={save} className="settings-form">
         <section className="settings-card warning-card">
           <header><div className="setting-icon"><Warning size={21} weight="fill" /></div><div><h2>경고 조건</h2><p>초기 과열 징후를 관리자에게 알립니다.</p></div></header>
