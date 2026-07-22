@@ -1,0 +1,2 @@
+"""HazardGuard WebUI mock backend."""
+

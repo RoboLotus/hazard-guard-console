@@ -1,0 +1,39 @@
+# Local orchestration and documentation (never commit)
+*.md
+docs/
+AGENTS*
+.codex/
+.harness/
+design-qa.md
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Frontend
+node_modules/
+dist/
+.vite/
+coverage/
+
+# Python / backend
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# ROS / colcon outputs
+build/
+install/
+log/
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
