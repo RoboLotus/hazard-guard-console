@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bell,
   Camera,
@@ -6,6 +6,7 @@ import {
   ChartBar,
   Check,
   CheckCircle,
+  Clock,
   ClockCounterClockwise,
   Crosshair,
   Gear,
@@ -17,7 +18,6 @@ import {
   Play,
   Question,
   Robot,
-  ShieldCheck,
   Siren,
   SlidersHorizontal,
   Stop,
@@ -58,14 +58,6 @@ const initialEvents = [
   { id: 5, level: "info", title: "LiDAR 데이터 정상", time: "14:12:05", location: "시스템 · T-MINI Plus", temperature: null, detail: "주행 센서 데이터가 정상 수신되고 있습니다.", acknowledged: true },
 ];
 
-function BrandMark() {
-  return (
-    <div className="brand-mark" aria-hidden="true">
-      <ShieldCheck weight="fill" size={23} />
-    </div>
-  );
-}
-
 function StatusPill({ tone = "success", children }) {
   return <span className={`status-pill ${tone}`}><span className="status-dot" />{children}</span>;
 }
@@ -82,18 +74,40 @@ function PanelHeader({ eyebrow, title, action }) {
   );
 }
 
+function CurrentTime() {
+  const [time, setTime] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setTime(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="sidebar-clock" aria-label="현재 시간">
+      <span className="clock-icon"><Clock size={18} weight="bold" /></span>
+      <div>
+        <small>CURRENT TIME</small>
+        <time dateTime={time.toISOString()}>{time.toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
+      </div>
+    </div>
+  );
+}
+
 function Sidebar({ active, onNavigate }) {
   return (
     <aside className="sidebar" aria-label="주 메뉴">
-      <nav className="nav-primary">
-        {navItems.map(({ id, label, icon: Icon, badge }) => (
-          <button key={id} type="button" className={`nav-item ${active === id ? "active" : ""}`} onClick={() => onNavigate(id)}>
-            <Icon size={20} weight={active === id ? "fill" : "regular"} />
-            <span>{label}</span>
-            {badge ? <span className="nav-badge">{badge}</span> : null}
-          </button>
-        ))}
-      </nav>
+      <div className="sidebar-main">
+        <CurrentTime />
+        <nav className="nav-primary">
+          {navItems.map(({ id, label, icon: Icon, badge }) => (
+            <button key={id} type="button" className={`nav-item ${active === id ? "active" : ""}`} onClick={() => onNavigate(id)}>
+              <Icon size={20} weight={active === id ? "fill" : "regular"} />
+              <span>{label}</span>
+              {badge ? <span className="nav-badge">{badge}</span> : null}
+            </button>
+          ))}
+        </nav>
+      </div>
       <nav className="nav-secondary" aria-label="보조 메뉴">
         <button type="button" className={`nav-item ${active === "settings" ? "active" : ""}`} onClick={() => onNavigate("settings")}>
           <Gear size={20} weight={active === "settings" ? "fill" : "regular"} />
@@ -351,7 +365,6 @@ export function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const pendingEvents = useMemo(() => events.filter((event) => !event.acknowledged).length, [events]);
   const acknowledge = (id) => {
     setEvents((current) => current.map((event) => event.id === id ? { ...event, acknowledged: true } : event));
     notify("이벤트를 확인 처리했습니다.");
@@ -363,11 +376,6 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="brand"><BrandMark /><div><strong>HazardGuard</strong><span>통합 안전 관제</span></div></div>
-        <div className="robot-context"><strong className="context-title">통합 관제</strong><span className="context-divider" /><span className="robot-avatar"><Robot size={22} weight="fill" /></span><div><small>현재 로봇</small><strong>ROSMASTER M1</strong></div><StatusPill>{active === "overview" ? "순찰 중" : "온라인"}</StatusPill></div>
-        <div className="topbar-actions"><div className="system-summary"><span><i />ROS 2</span><span><i />센서 3/3</span></div><button type="button" className="notification-button" aria-label={`미확인 알림 ${pendingEvents}개`} onClick={() => notify(`미확인 이벤트가 ${pendingEvents}개 있습니다.`, "info")}><Bell size={20} /><b>{pendingEvents}</b></button><div className="operator"><span>관리자</span><small>14:34 KST</small></div></div>
-      </header>
       <Sidebar active={active} onNavigate={navigate} />
       <main className="main-content">
         {active === "settings" ? <Settings notify={notify} apiOnline={apiOnline} /> : <Overview events={events} onAcknowledge={acknowledge} notify={notify} />}
