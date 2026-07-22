@@ -241,7 +241,6 @@ function WarningDevicesCard() {
   return (
     <article className="dock-block devices">
       <div className="dock-title"><Bell size={18} /><span>후면 경고장치</span><span className="mock-badge">UI MOCK</span></div>
-      <p>장치 설계 확정 후 연결 예정</p>
       <div className="device-row">
         {[1, 2, 3].map((slot) => <button type="button" disabled key={slot}><Bell size={16} />장치 {slot}<span>대기</span></button>)}
       </div>

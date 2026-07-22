@@ -109,12 +109,12 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .view-all:hover { color: var(--blue); background: #f4f8ff; }
 
 .control-dock { min-height: 0; }
-.dock-block { min-width: 0; padding: clamp(12px, .7vw, 18px); background: #fff; border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 3px 12px rgba(18,38,63,.045); overflow: hidden; }
-.dock-title { display: flex; align-items: center; gap: clamp(7px, .4vw, 10px); color: #34465c; }
+.dock-block { min-width: 0; padding: clamp(12px, .7vw, 18px); display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 3px 12px rgba(18,38,63,.045); overflow: hidden; }
+.dock-title { flex: 0 0 auto; display: flex; align-items: center; gap: clamp(7px, .4vw, 10px); color: #34465c; }
 .dock-title > svg { width: clamp(21px, .9vw, 25px); height: clamp(21px, .9vw, 25px); flex: 0 0 auto; }
 .dock-title > span:not(.status-pill):not(.mock-badge) { font-size: clamp(14px, .65vw, 17px); font-weight: 700; }
 .dock-title .status-pill { margin-left: auto; font-size: clamp(10px, .42vw, 12px); }
-.button-row { margin-top: clamp(10px, .8vh, 14px); }
+.button-row { margin-top: 0; }
 .operation-buttons { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(6px, .35vw, 9px); }
 .button { min-height: clamp(44px, 3vw, 50px); padding: 0 clamp(6px, .45vw, 12px); display: inline-flex; align-items: center; justify-content: center; gap: clamp(4px, .3vw, 7px); border-radius: 7px; border: 1px solid transparent; font-size: clamp(12px, .52vw, 14px); font-weight: 700; cursor: pointer; transition: 150ms ease; }
 .button > svg { width: clamp(19px, .8vw, 23px); height: clamp(19px, .8vw, 23px); flex: 0 0 auto; }
@@ -127,8 +127,9 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .controller-toggle.active { color: #fff; background: var(--blue); border-color: var(--blue); box-shadow: 0 3px 9px rgba(23,105,224,.18); }
 .controller-toggle > span { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.05; }
 .controller-toggle small { margin-top: 3px; font-size: .78em; font-weight: 800; letter-spacing: .35px; }
-.telemetry-grid { margin-top: clamp(10px, .8vh, 14px); display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: clamp(12px, .8vw, 20px); }
-.telemetry-grid > div { min-width: 0; display: flex; flex-direction: column; }
+.telemetry-grid { margin-top: 0; display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: clamp(12px, .8vw, 20px); }
+.telemetry-grid > div { position: relative; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.telemetry-grid > div:not(:last-child)::after { content: ""; position: absolute; top: 50%; right: max(-10px, -.4vw); width: 1px; height: clamp(38px, 4.5vh, 52px); background: #dfe5eb; transform: translateY(-50%); }
 .telemetry-grid span { color: #8994a3; font-size: clamp(11px, .5vw, 13px); }
 .telemetry-grid strong { min-height: clamp(26px, 1.6vw, 31px); margin-top: 3px; display: flex; align-items: center; gap: 4px; color: #2d3d51; font: 700 clamp(15px, .68vw, 18px) "Pretendard Variable", Pretendard, sans-serif; }
 .telemetry-grid strong svg { width: clamp(18px, .75vw, 22px); height: clamp(18px, .75vw, 22px); }
@@ -137,11 +138,11 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .meter { height: clamp(5px, .3vw, 7px); margin-top: 4px; background: #e6ebef; border-radius: 4px; overflow: hidden; }
 .meter i { height: 100%; display: block; background: var(--success); border-radius: 4px; }
 .mock-badge { margin-left: auto; padding: 4px 7px; color: #756595; background: #f2eef8; border-radius: 8px; font: 700 clamp(9px, .38vw, 11px) "Pretendard Variable", Pretendard, sans-serif; }
-.devices p { margin: 6px 0 8px; color: #8e99a8; font-size: clamp(11px, .48vw, 13px); }
 .device-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(7px, .45vw, 11px); }
 .device-row button { min-width: 0; height: clamp(46px, 3.2vw, 54px); padding: 5px; display: grid; grid-template-columns: auto auto; align-items: center; justify-content: center; gap: 2px 6px; color: #7c8998; background: #f6f7f9; border: 1px dashed #d4dbe3; border-radius: 7px; font-size: clamp(11px, .46vw, 12px); cursor: not-allowed; }
 .device-row button svg { width: clamp(17px, .72vw, 21px); height: clamp(17px, .72vw, 21px); }
 .device-row button span { grid-column: 1 / -1; font-size: clamp(9px, .36vw, 10px); color: #9da7b3; }
+.operation-buttons, .telemetry-grid, .device-row { flex: 1; min-height: 0; align-content: center; align-items: center; }
 
 .settings-page { min-height: 100vh; padding: 28px 34px 40px; }
 .page-heading { max-width: 1120px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: flex-start; }
