@@ -9,9 +9,9 @@ import {
   Clock,
   ClockCounterClockwise,
   Crosshair,
+  GameController,
   Gear,
   House,
-  Info,
   ListChecks,
   MapTrifold,
   Pause,
@@ -25,7 +25,6 @@ import {
   VideoCamera,
   Warning,
   WifiHigh,
-  X,
 } from "@phosphor-icons/react";
 import rgbFeed from "./assets/industrial-rgb.png";
 import thermalFeed from "./assets/industrial-thermal.png";
@@ -198,61 +197,77 @@ function EventsPanel({ events, onAcknowledge, onViewAll }) {
   );
 }
 
-function ControlDock({ patrolState, onTogglePatrol, onStop, onManual }) {
+function OperationControlCard({ patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
   const stopped = patrolState === "stopped";
   return (
-    <section className="control-dock">
-      <div className="dock-block operations">
-        <div className="dock-title"><Robot size={18} weight="fill" /><span>운행 제어</span><StatusPill tone={stopped ? "neutral" : "success"}>{stopped ? "정지됨" : "자율 순찰 중"}</StatusPill></div>
-        <div className="button-row">
-          <button type="button" className="button secondary" onClick={onTogglePatrol} disabled={stopped}>
-            {patrolState === "paused" ? <Play size={17} weight="fill" /> : <Pause size={17} weight="fill" />}
-            {patrolState === "paused" ? "순찰 재개" : "일시정지"}
-          </button>
-          <button type="button" className="button danger" onClick={onStop} disabled={stopped}><Stop size={17} weight="fill" />운행 정지 요청</button>
-          <button type="button" className="button ghost" onClick={onManual}>수동 제어</button>
-        </div>
+    <article className="dock-block operations">
+      <div className="dock-title"><Robot size={18} weight="fill" /><span>운행 제어</span><StatusPill tone={stopped ? "neutral" : "success"}>{stopped ? "정지됨" : "자율 순찰 중"}</StatusPill></div>
+      <div className="button-row operation-buttons">
+        <button type="button" className="button secondary" onClick={onTogglePatrol} disabled={stopped}>
+          {patrolState === "paused" ? <Play size={17} weight="fill" /> : <Pause size={17} weight="fill" />}
+          {patrolState === "paused" ? "순찰 재개" : "일시정지"}
+        </button>
+        <button type="button" className="button danger" onClick={onStop} disabled={stopped}><Stop size={17} weight="fill" />운행 정지</button>
+        <button
+          type="button"
+          className={`button controller-toggle ${controllerEnabled ? "active" : "ghost"}`}
+          aria-pressed={controllerEnabled}
+          title={controllerEnabled ? "컨트롤러 입력 끄기" : "컨트롤러 입력 켜기"}
+          onClick={onToggleController}
+        >
+          <GameController size={17} weight="fill" />
+          <span>컨트롤러<small>{controllerEnabled ? "ON" : "OFF"}</small></span>
+        </button>
       </div>
-      <div className="dock-block telemetry">
-        <div className="dock-title"><ChartBar size={18} /><span>로봇 상태</span></div>
-        <div className="telemetry-grid">
-          <div><span>배터리</span><strong>78%</strong><div className="meter"><i style={{ width: "78%" }} /></div></div>
-          <div><span>네트워크</span><strong><WifiHigh size={17} weight="fill" /> 양호</strong><small>-48 dBm</small></div>
-          <div><span>LiDAR</span><strong className="healthy">정상</strong><small>10.2 Hz</small></div>
-          <div><span>속도</span><strong>0.32 m/s</strong><small>제한 0.5 m/s</small></div>
-        </div>
-      </div>
-      <div className="dock-block devices">
-        <div className="dock-title"><Bell size={18} /><span>후면 경고장치</span><span className="mock-badge">UI MOCK</span></div>
-        <p>장치 설계 확정 후 연결 예정</p>
-        <div className="device-row">
-          {[1, 2, 3].map((slot) => <button type="button" disabled key={slot}><Bell size={16} />장치 {slot}<span>대기</span></button>)}
-        </div>
-      </div>
-    </section>
+    </article>
   );
 }
 
-function ManualControl({ onClose }) {
+function RobotStatusCard() {
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="manual-title" onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><span className="eyebrow">DEMO CONTROL</span><h2 id="manual-title">수동 제어</h2></div><button type="button" className="icon-action" onClick={onClose} aria-label="닫기"><X size={20} /></button></header>
-        <div className="safety-note"><Info size={18} weight="fill" /><p>현재는 UI 프로토타입입니다. 실제 로봇 구동 명령은 전송되지 않습니다.</p></div>
-        <div className="direction-pad" aria-label="수동 이동 목업">
-          <button type="button">전진</button>
-          <button type="button">좌회전</button><button type="button" className="stop-key">정지</button><button type="button">우회전</button>
-          <button type="button">후진</button>
-        </div>
-        <button type="button" className="button primary wide" onClick={onClose}>확인</button>
-      </section>
-    </div>
+    <article className="dock-block telemetry">
+      <div className="dock-title"><ChartBar size={18} /><span>로봇 상태</span></div>
+      <div className="telemetry-grid">
+        <div><span>배터리</span><strong>78%</strong><div className="meter"><i style={{ width: "78%" }} /></div></div>
+        <div><span>네트워크</span><strong><WifiHigh size={17} weight="fill" /> 양호</strong><small>-48 dBm</small></div>
+        <div><span>LiDAR</span><strong className="healthy">정상</strong><small>10.2 Hz</small></div>
+        <div><span>속도</span><strong>0.32 m/s</strong><small>제한 0.5 m/s</small></div>
+      </div>
+    </article>
+  );
+}
+
+function WarningDevicesCard() {
+  return (
+    <article className="dock-block devices">
+      <div className="dock-title"><Bell size={18} /><span>후면 경고장치</span><span className="mock-badge">UI MOCK</span></div>
+      <p>장치 설계 확정 후 연결 예정</p>
+      <div className="device-row">
+        {[1, 2, 3].map((slot) => <button type="button" disabled key={slot}><Bell size={16} />장치 {slot}<span>대기</span></button>)}
+      </div>
+    </article>
+  );
+}
+
+function ControlDock({ patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
+  return (
+    <section className="control-dock" aria-label="로봇 관제 제어 및 상태">
+      <RobotStatusCard />
+      <WarningDevicesCard />
+      <OperationControlCard
+        patrolState={patrolState}
+        controllerEnabled={controllerEnabled}
+        onTogglePatrol={onTogglePatrol}
+        onStop={onStop}
+        onToggleController={onToggleController}
+      />
+    </section>
   );
 }
 
 function Overview({ events, onAcknowledge, notify }) {
   const [patrolState, setPatrolState] = useState("running");
-  const [manualOpen, setManualOpen] = useState(false);
+  const [controllerEnabled, setControllerEnabled] = useState(false);
   const togglePatrol = () => {
     const next = patrolState === "paused" ? "running" : "paused";
     setPatrolState(next);
@@ -262,6 +277,11 @@ function Overview({ events, onAcknowledge, notify }) {
     setPatrolState("stopped");
     notify("운행 정지 요청을 기록했습니다. (데모)", "warning");
   };
+  const toggleController = () => {
+    const next = !controllerEnabled;
+    setControllerEnabled(next);
+    notify(`동봉 컨트롤러 입력을 ${next ? "활성화" : "비활성화"}했습니다.`);
+  };
   return (
     <div className="overview-layout">
       <div className="dashboard-grid">
@@ -269,8 +289,13 @@ function Overview({ events, onAcknowledge, notify }) {
         <div className="camera-stack"><CameraPanel /><CameraPanel thermal /></div>
         <EventsPanel events={events} onAcknowledge={onAcknowledge} onViewAll={() => notify("전체 이벤트 화면은 다음 단계에서 연결됩니다.")} />
       </div>
-      <ControlDock patrolState={patrolState} onTogglePatrol={togglePatrol} onStop={stopPatrol} onManual={() => setManualOpen(true)} />
-      {manualOpen && <ManualControl onClose={() => setManualOpen(false)} />}
+      <ControlDock
+        patrolState={patrolState}
+        controllerEnabled={controllerEnabled}
+        onTogglePatrol={togglePatrol}
+        onStop={stopPatrol}
+        onToggleController={toggleController}
+      />
     </div>
   );
 }
