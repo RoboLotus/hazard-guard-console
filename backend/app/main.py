@@ -1,12 +1,25 @@
 import asyncio
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from .models import MockCommand, ThresholdSettings
+from .bridge import ros_bridge, telemetry_store
+from .models import CommandRequest, MockCommand, RobotTelemetry, ThresholdSettings
 
-app = FastAPI(title="HazardGuard Console API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    ros_bridge.start()
+    try:
+        yield
+    finally:
+        ros_bridge.stop()
+
+
+app = FastAPI(
+    title="HazardGuard Console API", version="0.2.0", lifespan=lifespan
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -20,20 +33,16 @@ thresholds = ThresholdSettings()
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "mode": "mock", "ros_bridge": False}
-
-
-@app.get("/api/v1/robot/status")
-def robot_status():
     return {
-        "robot_id": "rosmaster-m1",
-        "mode": "patrol",
-        "battery": 78,
-        "network_dbm": -48,
-        "lidar_hz": 10.2,
-        "speed_mps": 0.32,
-        "mock": True,
+        "status": "ok",
+        "mode": "ros-mock" if ros_bridge.active else "mock",
+        "ros_bridge": ros_bridge.active,
     }
+
+
+@app.get("/api/v1/robot/status", response_model=RobotTelemetry)
+def robot_status():
+    return telemetry_store.snapshot()
 
 
 @app.get("/api/v1/settings/thresholds", response_model=ThresholdSettings)
@@ -49,8 +58,9 @@ def update_thresholds(settings: ThresholdSettings):
 
 
 @app.post("/api/v1/commands/{command}", response_model=MockCommand)
-def mock_command(command: str):
-    return MockCommand(command=command)
+def robot_command(command: str, request: CommandRequest | None = None):
+    enabled = request.enabled if request is not None else False
+    return ros_bridge.command(command, enabled)
 
 
 @app.websocket("/ws/telemetry")
@@ -58,16 +68,7 @@ async def telemetry(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            await websocket.send_json(
-                {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "battery": 78,
-                    "speed_mps": 0.32,
-                    "max_temperature": 84.6,
-                    "mock": True,
-                }
-            )
-            await asyncio.sleep(1)
+            await websocket.send_json(telemetry_store.snapshot())
+            await asyncio.sleep(0.5)
     except WebSocketDisconnect:
         return
-

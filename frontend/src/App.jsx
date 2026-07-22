@@ -149,7 +149,7 @@ function MapPanel({ onLocate }) {
   );
 }
 
-function CameraPanel({ thermal = false }) {
+function CameraPanel({ thermal = false, maxTemperature = 84.6 }) {
   return (
     <section className="panel camera-panel">
       <PanelHeader eyebrow={thermal ? "THERMAL CAMERA" : "RGB CAMERA"} title={thermal ? "열화상 영상" : "실시간 영상"} action={<span className="live-label"><span />LIVE</span>} />
@@ -158,7 +158,7 @@ function CameraPanel({ thermal = false }) {
         <div className="camera-meta top-left">CAM-{thermal ? "TH01" : "RGB01"}</div>
         {thermal ? (
           <>
-            <div className="thermal-reading"><span>MAX</span><strong>84.6°C</strong></div>
+            <div className="thermal-reading"><span>MAX</span><strong>{maxTemperature.toFixed(1)}°C</strong></div>
             <div className="thermal-scale" aria-label="열화상 색상 범위"><span>90°</span><i /><span>20°</span></div>
           </>
         ) : <div className="camera-meta bottom-right">A동 펌프실</div>}
@@ -199,9 +199,10 @@ function EventsPanel({ events, onAcknowledge, onViewAll }) {
 
 function OperationControlCard({ patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
   const stopped = patrolState === "stopped";
+  const modeLabel = stopped ? "정지됨" : patrolState === "paused" ? "일시정지" : "자율 순찰 중";
   return (
     <article className="dock-block operations">
-      <div className="dock-title"><Robot size={18} weight="fill" /><span>운행 제어</span><StatusPill tone={stopped ? "neutral" : "success"}>{stopped ? "정지됨" : "자율 순찰 중"}</StatusPill></div>
+      <div className="dock-title"><Robot size={18} weight="fill" /><span>운행 제어</span><StatusPill tone={stopped || patrolState === "paused" ? "neutral" : "success"}>{modeLabel}</StatusPill></div>
       <div className="button-row operation-buttons">
         <button type="button" className="button secondary" onClick={onTogglePatrol} disabled={stopped}>
           {patrolState === "paused" ? <Play size={17} weight="fill" /> : <Pause size={17} weight="fill" />}
@@ -223,15 +224,18 @@ function OperationControlCard({ patrolState, controllerEnabled, onTogglePatrol, 
   );
 }
 
-function RobotStatusCard() {
+function RobotStatusCard({ telemetry }) {
+  const battery = Math.round(telemetry?.battery_percent ?? 78);
+  const networkGood = (telemetry?.network_quality ?? "good") === "good";
+  const lidarNormal = (telemetry?.lidar_status ?? "normal") === "normal";
   return (
     <article className="dock-block telemetry">
       <div className="dock-title"><ChartBar size={18} /><span>로봇 상태</span></div>
       <div className="telemetry-grid">
-        <div><span>배터리</span><strong>78%</strong><div className="meter"><i style={{ width: "78%" }} /></div></div>
-        <div><span>네트워크</span><strong><WifiHigh size={17} weight="fill" /> 양호</strong><small>-48 dBm</small></div>
-        <div><span>LiDAR</span><strong className="healthy">정상</strong><small>10.2 Hz</small></div>
-        <div><span>속도</span><strong>0.32 m/s</strong><small>제한 0.5 m/s</small></div>
+        <div><span>배터리</span><strong>{battery}%</strong><div className="meter"><i style={{ width: `${battery}%` }} /></div></div>
+        <div><span>네트워크</span><strong><WifiHigh size={17} weight="fill" /> {networkGood ? "양호" : "불안정"}</strong><small>{telemetry?.network_rssi_dbm ?? -48} dBm</small></div>
+        <div><span>LiDAR</span><strong className={lidarNormal ? "healthy" : ""}>{lidarNormal ? "정상" : "확인 필요"}</strong><small>{(telemetry?.lidar_hz ?? 10.2).toFixed(1)} Hz</small></div>
+        <div><span>속도</span><strong>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</strong><small>제한 0.5 m/s</small></div>
       </div>
     </article>
   );
@@ -248,10 +252,10 @@ function WarningDevicesCard() {
   );
 }
 
-function ControlDock({ patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
+function ControlDock({ telemetry, patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
   return (
     <section className="control-dock" aria-label="로봇 관제 제어 및 상태">
-      <RobotStatusCard />
+      <RobotStatusCard telemetry={telemetry} />
       <WarningDevicesCard />
       <OperationControlCard
         patrolState={patrolState}
@@ -264,31 +268,59 @@ function ControlDock({ patrolState, controllerEnabled, onTogglePatrol, onStop, o
   );
 }
 
-function Overview({ events, onAcknowledge, notify }) {
-  const [patrolState, setPatrolState] = useState("running");
+function Overview({ events, onAcknowledge, notify, telemetry, sendCommand }) {
+  const [patrolState, setPatrolState] = useState("patrol");
   const [controllerEnabled, setControllerEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!telemetry) return;
+    if (telemetry.mode) setPatrolState(telemetry.mode);
+    if (typeof telemetry.controller_enabled === "boolean") {
+      setControllerEnabled(telemetry.controller_enabled);
+    }
+  }, [telemetry]);
+
+  const issueCommand = async (command, enabled, fallbackMessage, tone = "success") => {
+    try {
+      const result = await sendCommand(command, enabled);
+      if (!result.accepted) {
+        notify(result.message, "warning");
+        return;
+      }
+      if (result.mode) setPatrolState(result.mode);
+      if (typeof result.controller_enabled === "boolean") {
+        setControllerEnabled(result.controller_enabled);
+      }
+      notify(result.message || fallbackMessage, tone);
+    } catch {
+      notify(`${fallbackMessage} 서버 미연결 상태라 화면에만 반영했습니다.`, "warning");
+    }
+  };
   const togglePatrol = () => {
-    const next = patrolState === "paused" ? "running" : "paused";
+    const command = patrolState === "paused" ? "resume" : "pause";
+    const next = command === "resume" ? "patrol" : "paused";
     setPatrolState(next);
-    notify(next === "paused" ? "순찰을 일시정지했습니다." : "순찰을 재개했습니다.");
+    void issueCommand(command, false, next === "paused" ? "순찰을 일시정지했습니다." : "순찰을 재개했습니다.");
   };
   const stopPatrol = () => {
     setPatrolState("stopped");
-    notify("운행 정지 요청을 기록했습니다. (데모)", "warning");
+    setControllerEnabled(false);
+    void issueCommand("stop", false, "운행 정지 요청을 기록했습니다. (mock)", "warning");
   };
   const toggleController = () => {
     const next = !controllerEnabled;
     setControllerEnabled(next);
-    notify(`동봉 컨트롤러 입력을 ${next ? "활성화" : "비활성화"}했습니다.`);
+    void issueCommand("controller", next, `동봉 컨트롤러 입력을 ${next ? "활성화" : "비활성화"}했습니다.`);
   };
   return (
     <div className="overview-layout">
       <div className="dashboard-grid">
         <MapPanel onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")} />
-        <div className="camera-stack"><CameraPanel /><CameraPanel thermal /></div>
+        <div className="camera-stack"><CameraPanel /><CameraPanel thermal maxTemperature={telemetry?.max_temperature_c ?? 84.6} /></div>
         <EventsPanel events={events} onAcknowledge={onAcknowledge} onViewAll={() => notify("전체 이벤트 화면은 다음 단계에서 연결됩니다.")} />
       </div>
       <ControlDock
+        telemetry={telemetry}
         patrolState={patrolState}
         controllerEnabled={controllerEnabled}
         onTogglePatrol={togglePatrol}
@@ -368,18 +400,51 @@ export function App() {
   const [events, setEvents] = useState(initialEvents);
   const [toast, setToast] = useState(null);
   const [apiOnline, setApiOnline] = useState(false);
+  const [telemetry, setTelemetry] = useState(null);
 
   const notify = (message, tone = "success") => {
     setToast({ message, tone, id: Date.now() });
   };
   useEffect(() => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1200);
-    fetch("/api/health", { signal: controller.signal })
-      .then((response) => setApiOnline(response.ok))
-      .catch(() => setApiOnline(false))
-      .finally(() => clearTimeout(timer));
-    return () => { clearTimeout(timer); controller.abort(); };
+    let disposed = false;
+    const checkHealth = async () => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 1200);
+      try {
+        const response = await fetch("/api/health", { signal: controller.signal });
+        if (!disposed) setApiOnline(response.ok);
+      } catch {
+        if (!disposed) setApiOnline(false);
+      } finally {
+        window.clearTimeout(timer);
+      }
+    };
+    void checkHealth();
+    const interval = window.setInterval(checkHealth, 5000);
+    return () => { disposed = true; window.clearInterval(interval); };
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    let socket;
+    let reconnectTimer;
+    const connect = () => {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry`);
+      socket.onmessage = ({ data }) => {
+        try { setTelemetry(JSON.parse(data)); }
+        catch { /* ignore malformed prototype telemetry */ }
+      };
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
+        if (!disposed) reconnectTimer = window.setTimeout(connect, 1500);
+      };
+    };
+    connect();
+    return () => {
+      disposed = true;
+      window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
   }, []);
   useEffect(() => {
     if (!toast) return undefined;
@@ -395,12 +460,21 @@ export function App() {
     if (["overview", "settings"].includes(id)) setActive(id);
     else notify(`${navItems.find((item) => item.id === id)?.label || "도움말"} 화면은 다음 단계에서 연결됩니다.`, "info");
   };
+  const sendCommand = async (command, enabled = false) => {
+    const response = await fetch(`/api/v1/commands/${command}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) throw new Error(`Command failed: ${response.status}`);
+    return response.json();
+  };
 
   return (
     <div className="app-shell">
       <Sidebar active={active} onNavigate={navigate} />
       <main className="main-content">
-        {active === "settings" ? <Settings notify={notify} apiOnline={apiOnline} /> : <Overview events={events} onAcknowledge={acknowledge} notify={notify} />}
+        {active === "settings" ? <Settings notify={notify} apiOnline={apiOnline} /> : <Overview events={events} onAcknowledge={acknowledge} notify={notify} telemetry={telemetry} sendCommand={sendCommand} />}
       </main>
       {toast && <div className={`toast ${toast.tone}`} role="status"><CheckCircle size={19} weight="fill" /><span>{toast.message}</span></div>}
     </div>

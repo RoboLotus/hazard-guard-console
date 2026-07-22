@@ -33,3 +33,22 @@ def test_mock_command_never_claims_hardware_action():
     response = client.post("/api/v1/commands/stop")
     assert response.status_code == 200
     assert response.json()["mock"] is True
+
+
+def test_robot_status_exposes_dashboard_telemetry_contract():
+    response = client.get("/api/v1/robot/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["robot_id"] == "rosmaster-m1-mock"
+    assert isinstance(payload["battery_percent"], float)
+    assert payload["lidar_status"] == "normal"
+
+
+def test_controller_command_updates_fallback_telemetry():
+    response = client.post(
+        "/api/v1/commands/controller", json={"enabled": True}
+    )
+    assert response.status_code == 200
+    assert response.json()["controller_enabled"] is True
+    status = client.get("/api/v1/robot/status").json()
+    assert status["controller_enabled"] is True

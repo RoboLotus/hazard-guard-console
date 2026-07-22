@@ -19,7 +19,7 @@ dist/
 coverage/
 
 # Python / backend
-.venv/
+.venv*/
 venv/
 __pycache__/
 *.py[cod]
@@ -36,4 +36,3 @@ log/
 .vscode/
 .DS_Store
 Thumbs.db
-
