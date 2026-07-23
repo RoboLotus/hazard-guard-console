@@ -40,6 +40,24 @@ class NavigationGoal(BaseModel):
     frame_id: str = Field("map", pattern=r"^[A-Za-z][A-Za-z0-9_/]*$")
 
 
+class ThermalDetection(BaseModel):
+    detection_id: str = Field(
+        "thermal-detection",
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+    frame_id: str = Field("map", pattern=r"^[A-Za-z][A-Za-z0-9_/]*$")
+    x: float = Field(..., ge=-1000, le=1000)
+    y: float = Field(..., ge=-1000, le=1000)
+    z: float = Field(0, ge=-100, le=100)
+    temperature_c: float = Field(..., ge=-273.15, le=1000)
+    confidence: float = Field(1, ge=0, le=1)
+    radius_m: float = Field(0.35, gt=0, le=20)
+    source: str = Field("api", min_length=1, max_length=120)
+    simulated: bool = True
+
+
 class RobotTelemetry(BaseModel):
     timestamp: str
     robot_id: str

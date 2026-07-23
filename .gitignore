@@ -1,5 +1,6 @@
 # Local orchestration and documentation (never commit)
 *.md
+!README.md
 docs/
 AGENTS*
 .codex/

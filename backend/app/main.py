@@ -4,12 +4,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from .bridge import media_store, navigation_store, ros_bridge, telemetry_store
+from .bridge import (
+    media_store,
+    navigation_store,
+    ros_bridge,
+    spatial_store,
+    telemetry_store,
+)
 from .models import (
     CommandRequest,
     MockCommand,
     NavigationGoal,
     RobotTelemetry,
+    ThermalDetection,
     ThresholdSettings,
 )
 
@@ -54,6 +61,16 @@ def robot_status():
 @app.get("/api/v1/media/status")
 def media_status():
     return media_store.status()
+
+
+@app.get("/api/v1/spatial/status")
+def spatial_status():
+    return spatial_store.snapshot()
+
+
+@app.post("/api/v1/spatial/detections")
+def add_spatial_detection(detection: ThermalDetection):
+    return spatial_store.add_detection(detection.model_dump(), live=not detection.simulated)
 
 
 @app.get("/api/v1/media/{kind}")
@@ -116,4 +133,15 @@ async def telemetry(websocket: WebSocket):
     except (WebSocketDisconnect, RuntimeError):
         # Some ASGI transports report an already-closed browser socket as a
         # RuntimeError instead of WebSocketDisconnect during the next send.
+        return
+
+
+@app.websocket("/ws/spatial")
+async def spatial(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.send_json(spatial_store.snapshot())
+            await asyncio.sleep(0.2)
+    except (WebSocketDisconnect, RuntimeError):
         return

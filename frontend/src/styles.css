@@ -58,12 +58,28 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .map-stage.goal-mode { cursor: crosshair; }
 .map-canvas { position: absolute; inset: 0; transform-origin: center; transition: transform 140ms ease-out; will-change: transform; pointer-events: none; }
 .map-stage.dragging .map-canvas { transition: none; }
-.map-canvas > img { width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; filter: saturate(0.92) contrast(1.02); -webkit-user-drag: none; }
-.map-canvas > img.live-map { object-fit: contain; background: #cdcdcd; image-rendering: pixelated; }
+.map-image-frame { position: absolute; overflow: hidden; background: #cfd3d6; box-shadow: 0 0 0 1px rgba(92,107,121,.16); }
+.map-image-frame > img { width: 100%; height: 100%; object-fit: fill; object-position: center; display: block; filter: saturate(0.92) contrast(1.02); -webkit-user-drag: none; }
+.map-image-frame > img.live-map { background: #cdcdcd; image-rendering: pixelated; }
+.spatial-map-overlay { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.robot-trail { fill: none; stroke: #2c79cd; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 3 2; opacity: .78; vector-effect: non-scaling-stroke; }
+.sensor-sector { stroke-width: 1; vector-effect: non-scaling-stroke; }
+.sensor-sector-depth { fill: rgba(38,117,216,.13); stroke: rgba(38,117,216,.7); }
+.sensor-sector-thermal { fill: rgba(228,88,50,.12); stroke: rgba(228,88,50,.72); stroke-dasharray: 4 2; }
+.heat-blob { mix-blend-mode: multiply; }
+.heat-core { stroke: rgba(255,255,255,.92); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.heat-ring { fill: none; stroke-width: 1.4; stroke-dasharray: 2.5 1.6; vector-effect: non-scaling-stroke; }
+.heat-label rect { fill: rgba(30,42,56,.9); stroke: rgba(255,255,255,.45); stroke-width: .4; }
+.heat-label text { fill: #fff; font: 800 3.2px "Pretendard Variable", Pretendard, sans-serif; }
+.heat-label text.heat-label-level { fill: #d6dde5; font-size: 2px; font-weight: 600; }
+.live-robot-halo { fill: #fff; stroke: rgba(29,98,174,.22); stroke-width: 1; }
+.live-robot-body { fill: #1769c9; stroke: #fff; stroke-width: .8; }
+.live-robot-heading { fill: #0e4e98; stroke: #fff; stroke-width: .55; stroke-linejoin: round; }
 .map-live-badge { position: absolute; z-index: 2; top: 11px; left: 11px; padding: 5px 8px; display: flex; align-items: center; gap: 5px; color: #386077; background: rgba(255,255,255,0.92); border: 1px solid rgba(209, 219, 228, 0.9); border-radius: 6px; box-shadow: 0 2px 7px rgba(23, 42, 60, 0.08); font-size: 8px; font-weight: 700; }
 .map-live-badge span { width: 5px; height: 5px; background: var(--success); border-radius: 50%; }
 .map-live-badge.mock { color: #7b8796; }
 .map-live-badge.mock span { background: #98a2af; }
+.heatmap-simulation-badge { position: absolute; z-index: 2; top: 11px; right: 48px; padding: 5px 8px; color: #9a4f24; background: rgba(255,248,240,.94); border: 1px solid #f0cdb5; border-radius: 6px; box-shadow: 0 2px 7px rgba(92,52,28,.08); font-size: 7px; font-weight: 800; letter-spacing: .35px; }
 .robot-marker { position: absolute; left: 21%; bottom: 15%; width: 31px; height: 31px; display: grid; place-items: center; color: #fff; background: var(--blue); border: 4px solid rgba(255,255,255,0.95); border-radius: 50%; box-shadow: 0 2px 10px rgba(18,79,162,.35); }
 .map-callout { position: absolute; top: 21%; right: 10%; display: flex; align-items: center; gap: 6px; padding: 6px 8px; color: #a92932; background: rgba(255,255,255,.95); border: 1px solid #f1b9bd; border-radius: 7px; box-shadow: 0 3px 10px rgba(129,31,39,.15); }
 .map-callout > div { display: flex; flex-direction: column; }
@@ -82,6 +98,9 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .map-footer i { width: 14px; height: 3px; border-radius: 3px; }
 .legend-route { background: var(--blue); }
 .legend-risk { background: var(--danger); }
+.legend-depth { background: #2675d8; }
+.legend-thermal { background: #e45832; }
+.legend-heat { background: linear-gradient(90deg, #f2b63f, #d8323c); }
 .map-footer strong { margin-left: auto; color: #405067; font: 700 9px "Pretendard Variable", Pretendard, sans-serif; }
 
 .camera-stack { min-height: 0; display: grid; grid-template-rows: 1fr 1fr; gap: 12px; }
@@ -199,6 +218,23 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .map-side-panel { min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
 .map-side-panel .detail-card:first-child { flex: 1 0 auto; }
 .map-side-panel .compact-card { margin-top: auto; }
+.layer-card { flex: 0 0 auto; }
+.layer-toggle-grid { margin-top: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.layer-toggle-grid button { min-width: 0; height: 34px; padding: 0 8px; display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; align-items: center; gap: 5px; color: #718095; background: #f6f8fa; border: 1px solid #e2e7ec; border-radius: 7px; font: 700 8px "Pretendard Variable", Pretendard, sans-serif; text-align: left; cursor: pointer; }
+.layer-toggle-grid button.active { color: #315e8d; background: #eef5fd; border-color: #ccddf0; }
+.layer-toggle-grid button i { position: relative; width: 15px; height: 9px; background: #c3cbd4; border-radius: 9px; }
+.layer-toggle-grid button i::after { position: absolute; content: ""; width: 5px; height: 5px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: transform .16s ease; }
+.layer-toggle-grid button.active i { background: #377bc3; }
+.layer-toggle-grid button.active i::after { transform: translateX(6px); }
+.sensor-spec-list { margin-top: 11px; padding-top: 10px; border-top: 1px solid #edf0f3; }
+.sensor-spec-list > div { min-height: 31px; display: grid; grid-template-columns: 7px minmax(0, 1fr); align-items: center; gap: 8px; }
+.sensor-color { width: 6px; height: 21px; border-radius: 5px; }
+.sensor-color-depth { background: #2675d8; }
+.sensor-color-thermal { background: #e45832; }
+.sensor-spec-list span { display: flex; flex-direction: column; gap: 2px; }
+.sensor-spec-list strong { color: #3b4f66; font-size: 8px; }
+.sensor-spec-list small { color: #8a96a5; font-size: 7px; }
+.sensor-spec-list p { margin: 8px 0 0; padding: 7px 8px; display: flex; align-items: center; gap: 5px; color: #935025; background: #fff6ef; border-radius: 6px; font-size: 7px; font-weight: 700; }
 .goal-confirm { margin-top: 12px; padding: 12px; display: flex; flex-direction: column; color: #3d526b; background: #f5f8fc; border: 1px solid #dbe5f1; border-radius: 8px; }
 .goal-confirm > span { color: #8390a0; font-size: 8px; }
 .goal-confirm > strong { margin-top: 4px; font-size: 12px; }

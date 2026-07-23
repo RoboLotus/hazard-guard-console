@@ -41,6 +41,15 @@ import {
 import rgbFeed from "./assets/industrial-rgb.png";
 import thermalFeed from "./assets/industrial-thermal.png";
 import slamMap from "./assets/slam-map.png";
+import {
+  buildFovPolygon,
+  detectionOpacity,
+  fallbackSpatialState,
+  mapToGrid,
+  resolveMapSpec,
+  temperatureColor,
+  temperatureLevel,
+} from "./spatial.js";
 
 const initialThresholds = {
   warningTemperature: 60,
@@ -188,22 +197,141 @@ function Sidebar({ active, onNavigate, pendingEvents }) {
   );
 }
 
+function SpatialMapOverlay({ spatialState, mapSpec, layers, detail }) {
+  const pose = spatialState?.pose;
+  const trail = (spatialState?.trail || [])
+    .map((point) => mapToGrid(point.x, point.y, mapSpec))
+    .filter(Boolean);
+  const sensors = spatialState?.sensors || [];
+  const detections = spatialState?.heatmap?.detections || [];
+  const posePoint = pose?.available ? mapToGrid(pose.x, pose.y, mapSpec) : null;
+  const robotRadius = Math.max(2.8, 0.18 / mapSpec.resolution);
+  const robotAngle = pose?.available ? (-pose.yaw * 180) / Math.PI : 0;
+
+  return (
+    <svg
+      className="spatial-map-overlay"
+      viewBox={`0 0 ${mapSpec.width} ${mapSpec.height}`}
+      preserveAspectRatio="xMidYMid meet"
+      role="img"
+      aria-label="로봇 위치, 카메라 시야각, 이동 궤적 및 열원 히트맵"
+    >
+      <defs>
+        <filter id="heat-blur" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="3.2" />
+        </filter>
+        <filter id="robot-shadow" x="-80%" y="-80%" width="260%" height="260%">
+          <feDropShadow dx="0" dy="1" stdDeviation="1.2" floodColor="#173e68" floodOpacity=".35" />
+        </filter>
+      </defs>
+
+      {layers.trail && trail.length > 1 && (
+        <polyline
+          className="robot-trail"
+          points={trail.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")}
+        />
+      )}
+
+      {pose?.available && sensors.map((sensor) => (
+        layers[sensor.id] ? (
+          <polygon
+            key={sensor.id}
+            className={`sensor-sector sensor-sector-${sensor.id}`}
+            points={buildFovPolygon(pose, sensor, mapSpec)}
+          />
+        ) : null
+      ))}
+
+      {layers.heatmap && detections.map((detection) => {
+        const point = mapToGrid(detection.x, detection.y, mapSpec);
+        if (!point) return null;
+        const radius = Math.max(4, detection.radius_m / mapSpec.resolution);
+        const color = temperatureColor(detection.temperature_c);
+        const opacity = detectionOpacity(detection);
+        return (
+          <g key={detection.detection_id} className="heat-detection">
+            <circle
+              className="heat-blob"
+              cx={point.x}
+              cy={point.y}
+              r={radius * 2.5}
+              fill={color}
+              opacity={opacity * 0.34}
+              filter="url(#heat-blur)"
+            />
+            <circle
+              className="heat-core"
+              cx={point.x}
+              cy={point.y}
+              r={Math.max(2.4, radius * 0.34)}
+              fill={color}
+              opacity={Math.max(0.58, opacity)}
+            />
+            <circle
+              className="heat-ring"
+              cx={point.x}
+              cy={point.y}
+              r={Math.max(4.6, radius * 0.68)}
+              stroke={color}
+              opacity={Math.max(0.5, opacity)}
+            />
+            {detail && (
+              <g className="heat-label" transform={`translate(${point.x + radius * 0.72} ${point.y - radius * 0.72})`}>
+                <rect x="0" y="-7.5" width="27" height="11" rx="2.5" />
+                <text x="3.2" y="-2.3">{detection.temperature_c.toFixed(1)}°C</text>
+                <text className="heat-label-level" x="3.2" y="1.2">{temperatureLevel(detection.temperature_c)}</text>
+              </g>
+            )}
+          </g>
+        );
+      })}
+
+      {posePoint && (
+        <g
+          className="live-robot"
+          transform={`translate(${posePoint.x} ${posePoint.y}) rotate(${robotAngle})`}
+          filter="url(#robot-shadow)"
+        >
+          <circle r={robotRadius + 1.5} className="live-robot-halo" />
+          <circle r={robotRadius} className="live-robot-body" />
+          <path
+            d={`M ${robotRadius * 0.25} ${-robotRadius * 0.55} L ${robotRadius * 1.55} 0 L ${robotRadius * 0.25} ${robotRadius * 0.55} Z`}
+            className="live-robot-heading"
+          />
+        </g>
+      )}
+    </svg>
+  );
+}
+
 function MapPanel({
   onLocate,
   onOpen,
   mediaStatus,
+  spatialState = fallbackSpatialState,
+  layers = { depth: true, thermal: true, heatmap: true, trail: true },
   detail = false,
   goalMode = false,
   goalCandidate,
   onGoalCandidate,
 }) {
   const mapLive = Boolean(mediaStatus?.map?.available);
-  const mapInfo = mediaStatus?.map;
-  const mapMetadata = mapInfo?.metadata;
+  const mapSpec = resolveMapSpec(mediaStatus, spatialState);
   const stageRef = useRef(null);
   const dragRef = useRef(null);
   const [mapView, setMapView] = useState({ zoom: 1, x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+
+  const fitScale = stageSize.width && stageSize.height
+    ? Math.min(stageSize.width / mapSpec.width, stageSize.height / mapSpec.height)
+    : 1;
+  const imageGeometry = {
+    width: mapSpec.width * fitScale,
+    height: mapSpec.height * fitScale,
+    left: (stageSize.width - mapSpec.width * fitScale) / 2,
+    top: (stageSize.height - mapSpec.height * fitScale) / 2,
+  };
 
   const clampPan = (x, y, zoom) => {
     const bounds = stageRef.current?.getBoundingClientRect();
@@ -266,20 +394,10 @@ function MapPanel({
       if (bounds) {
         const unscaledX = ((event.clientX - bounds.left) - bounds.width / 2 - mapView.x) / mapView.zoom + bounds.width / 2;
         const unscaledY = ((event.clientY - bounds.top) - bounds.height / 2 - mapView.y) / mapView.zoom + bounds.height / 2;
-        let imageLeft = 0;
-        let imageTop = 0;
-        let imageWidth = bounds.width;
-        let imageHeight = bounds.height;
-        if (mapLive && mapInfo?.width && mapInfo?.height) {
-          const fitScale = Math.min(
-            bounds.width / mapInfo.width,
-            bounds.height / mapInfo.height,
-          );
-          imageWidth = mapInfo.width * fitScale;
-          imageHeight = mapInfo.height * fitScale;
-          imageLeft = (bounds.width - imageWidth) / 2;
-          imageTop = (bounds.height - imageHeight) / 2;
-        }
+        const imageLeft = imageGeometry.left;
+        const imageTop = imageGeometry.top;
+        const imageWidth = imageGeometry.width;
+        const imageHeight = imageGeometry.height;
         const normalizedX = (unscaledX - imageLeft) / imageWidth;
         const normalizedY = (unscaledY - imageTop) / imageHeight;
         if (normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1) {
@@ -288,16 +406,16 @@ function MapPanel({
             screenY: ((imageTop + normalizedY * imageHeight) / bounds.height) * 100,
             mapX: null,
             mapY: null,
-            frameId: mapMetadata?.frame_id || "map",
+            frameId: mapSpec.frame_id || "map",
           };
           if (
             mapLive
-            && Number.isFinite(mapMetadata?.resolution)
-            && Number.isFinite(mapMetadata?.origin_x)
-            && Number.isFinite(mapMetadata?.origin_y)
+            && Number.isFinite(mapSpec.resolution)
+            && Number.isFinite(mapSpec.origin_x)
+            && Number.isFinite(mapSpec.origin_y)
           ) {
-            candidate.mapX = mapMetadata.origin_x + normalizedX * mapInfo.width * mapMetadata.resolution;
-            candidate.mapY = mapMetadata.origin_y + (1 - normalizedY) * mapInfo.height * mapMetadata.resolution;
+            candidate.mapX = mapSpec.origin_x + normalizedX * mapSpec.width * mapSpec.resolution;
+            candidate.mapY = mapSpec.origin_y + (1 - normalizedY) * mapSpec.height * mapSpec.resolution;
           }
           onGoalCandidate(candidate);
         }
@@ -309,13 +427,23 @@ function MapPanel({
 
   useEffect(() => {
     const handleResize = () => {
+      const bounds = stageRef.current?.getBoundingClientRect();
+      if (bounds) setStageSize({ width: bounds.width, height: bounds.height });
       setMapView((current) => ({
         ...current,
         ...clampPan(current.x, current.y, current.zoom),
       }));
     };
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(handleResize);
+    if (stageRef.current) observer?.observe(stageRef.current);
+    handleResize();
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", handleResize);
+    };
   }, []);
 
   return (
@@ -340,12 +468,23 @@ function MapPanel({
           className="map-canvas"
           style={{ transform: `translate3d(${mapView.x}px, ${mapView.y}px, 0) scale(${mapView.zoom})` }}
         >
-          <LiveImage className={mapLive ? "live-map" : ""} draggable="false" endpoint="/api/v1/media/map" fallback={slamMap} enabled={mapLive} interval={1000} alt="ROS 2 SLAM 점유 지도와 로봇 위치" />
-          {!mapLive && <div className="robot-marker" aria-label="목업 로봇 위치"><Robot size={18} weight="fill" /></div>}
-          {!mapLive && <div className="map-callout">
-            <ThermometerHot size={16} weight="fill" />
-            <div><strong>84.6°C</strong><span>P-02 베어링</span></div>
-          </div>}
+          <div
+            className="map-image-frame"
+            style={{
+              left: `${imageGeometry.left}px`,
+              top: `${imageGeometry.top}px`,
+              width: `${imageGeometry.width}px`,
+              height: `${imageGeometry.height}px`,
+            }}
+          >
+            <LiveImage className={mapLive ? "live-map" : ""} draggable="false" endpoint="/api/v1/media/map" fallback={slamMap} enabled={mapLive} interval={1000} alt="ROS 2 SLAM 점유 지도" />
+            <SpatialMapOverlay
+              spatialState={spatialState}
+              mapSpec={mapSpec}
+              layers={layers}
+              detail={detail}
+            />
+          </div>
           {goalCandidate && (
             <div
               className="goal-marker"
@@ -356,7 +495,8 @@ function MapPanel({
             </div>
           )}
         </div>
-        <div className={`map-live-badge ${mapLive ? "" : "mock"}`}><span />{mapLive ? "SLAM 실시간" : "지도 목업"}</div>
+        <div className={`map-live-badge ${mapLive ? "" : "mock"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : "디지털 트윈 목업"}</div>
+        {spatialState?.heatmap?.simulated && layers.heatmap && <div className="heatmap-simulation-badge">SIMULATED HEAT</div>}
         {goalMode && <div className="goal-mode-hint">지도를 클릭해 목적지 후보를 선택하세요</div>}
         <div className="map-zoom" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" aria-label="지도 확대" title="지도 확대" disabled={mapView.zoom >= 4} onClick={() => changeZoom(0.25)}>+</button>
@@ -364,8 +504,10 @@ function MapPanel({
         </div>
       </div>
       <footer className="map-footer">
-        <span><i className="legend-route" />로봇 위치</span>
-        <span><i className="legend-risk" />점유 장애물</span>
+        <span><i className="legend-route" />이동 궤적</span>
+        <span><i className="legend-depth" />Depth 73.8°</span>
+        <span><i className="legend-thermal" />Thermal 56°</span>
+        <span><i className="legend-heat" />열원</span>
         <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : `목업 · ${Math.round(mapView.zoom * 100)}%`}</strong>
       </footer>
     </section>
@@ -510,7 +652,7 @@ function ControlDock({ telemetry, patrolState, controllerEnabled, onTogglePatrol
   );
 }
 
-function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, mediaStatus, sendCommand }) {
+function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, mediaStatus, spatialState, sendCommand }) {
   const [patrolState, setPatrolState] = useState("patrol");
   const [controllerEnabled, setControllerEnabled] = useState(false);
 
@@ -557,7 +699,7 @@ function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, mediaS
   return (
     <div className="overview-layout">
       <div className="dashboard-grid">
-        <MapPanel mediaStatus={mediaStatus} onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")} onOpen={() => onNavigate("map")} />
+        <MapPanel mediaStatus={mediaStatus} spatialState={spatialState} onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")} onOpen={() => onNavigate("map")} />
         <div className="camera-stack">
           <CameraPanel mediaStatus={mediaStatus} onOpen={() => onNavigate("video")} />
           <CameraPanel thermal mediaStatus={mediaStatus} maxTemperature={telemetry?.max_temperature_c ?? 84.6} onOpen={() => onNavigate("video")} />
@@ -592,13 +734,21 @@ function DetailHeading({ eyebrow, title, description, children }) {
   );
 }
 
-function MapPage({ mediaStatus, telemetry, notify }) {
+function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
   const [goalMode, setGoalMode] = useState(false);
   const [goalCandidate, setGoalCandidate] = useState(null);
   const [activeGoal, setActiveGoal] = useState(null);
   const [navigationStatus, setNavigationStatus] = useState(null);
   const [goalSubmitting, setGoalSubmitting] = useState(false);
+  const [layers, setLayers] = useState({
+    depth: true,
+    thermal: true,
+    heatmap: true,
+    trail: true,
+  });
   const mapLive = Boolean(mediaStatus?.map?.available);
+  const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
+  const heatDetections = spatialState?.heatmap?.detections || [];
   const navActive = ["sending", "accepted", "executing", "canceling"].includes(navigationStatus?.status);
   const navStatusLabels = {
     idle: "대기",
@@ -680,16 +830,21 @@ function MapPage({ mediaStatus, telemetry, notify }) {
       notify("지도를 저장하지 못했습니다. 미디어 서버 연결을 확인하세요.", "warning");
     }
   };
+  const toggleLayer = (layer) => {
+    setLayers((current) => ({ ...current, [layer]: !current[layer] }));
+  };
 
   return (
     <div className="detail-page map-page">
-      <DetailHeading eyebrow="NAVIGATION" title="지도 관제" description="SLAM 지도와 로봇 위치를 확인하고 다음 이동 목적지를 준비합니다.">
-        <span className={`api-status ${mapLive ? "online" : ""}`}><span />{mapLive ? "SLAM 연결" : "지도 목업"}</span>
+      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="SLAM 지도 위에서 로봇 위치, 센서 시야각, 이동 궤적과 열원 분포를 실시간으로 확인합니다.">
+        <span className={`api-status ${mapLive ? "online" : ""}`}><span />{mapLive ? "공간 데이터 연결" : "디지털 트윈 목업"}</span>
       </DetailHeading>
       <div className="map-workspace">
         <MapPanel
           detail
           mediaStatus={mediaStatus}
+          spatialState={spatialState}
+          layers={layers}
           goalMode={goalMode}
           goalCandidate={goalCandidate || activeGoal}
           onGoalCandidate={selectGoal}
@@ -739,8 +894,35 @@ function MapPage({ mediaStatus, telemetry, notify }) {
               <div><dt>현재 속도</dt><dd>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</dd></div>
               <div><dt>LiDAR</dt><dd className="healthy">{telemetry?.lidar_status === "error" ? "확인 필요" : "정상"}</dd></div>
               <div><dt>지도 소스</dt><dd>{mapLive ? "ROS /map" : "UI 목업"}</dd></div>
+              <div><dt>로봇 위치</dt><dd>{spatialState?.pose?.available ? `X ${spatialState.pose.x.toFixed(2)} · Y ${spatialState.pose.y.toFixed(2)}` : "확인 중"}</dd></div>
               <div><dt>Nav2 상태</dt><dd className={navigationStatus?.status === "executing" ? "healthy" : ""}>{navStatusLabels[navigationStatus?.status] || "확인 중"}</dd></div>
             </dl>
+          </section>
+          <section className="detail-card layer-card">
+            <div className="detail-card-title"><SlidersHorizontal size={20} /><div><strong>지도 레이어</strong><span>실시간 표시 선택</span></div></div>
+            <div className="layer-toggle-grid">
+              {[
+                ["heatmap", "열원 히트맵", ThermometerHot],
+                ["depth", "Depth 시야", Camera],
+                ["thermal", "Thermal 시야", VideoCamera],
+                ["trail", "이동 궤적", Path],
+              ].map(([id, label, Icon]) => (
+                <button key={id} type="button" className={layers[id] ? "active" : ""} aria-pressed={layers[id]} onClick={() => toggleLayer(id)}>
+                  <Icon size={16} weight={layers[id] ? "fill" : "regular"} />
+                  <span>{label}</span>
+                  <i />
+                </button>
+              ))}
+            </div>
+            <div className="sensor-spec-list">
+              {sensors.map((sensor) => (
+                <div key={sensor.id}>
+                  <i className={`sensor-color sensor-color-${sensor.id}`} />
+                  <span><strong>{sensor.model}</strong><small>수평 {sensor.horizontal_fov_deg}° · {sensor.range_min_m}~{sensor.range_max_m}m</small></span>
+                </div>
+              ))}
+              <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
+            </div>
           </section>
           <section className="detail-card compact-card">
             <div className="detail-card-title"><FloppyDisk size={20} /><div><strong>지도 파일</strong><span>현재 화면 저장</span></div></div>
@@ -1097,6 +1279,7 @@ export function App() {
   const [apiOnline, setApiOnline] = useState(false);
   const [telemetry, setTelemetry] = useState(null);
   const [mediaStatus, setMediaStatus] = useState(null);
+  const [spatialState, setSpatialState] = useState(fallbackSpatialState);
 
   const notify = (message, tone = "success") => {
     setToast({ message, tone, id: Date.now() });
@@ -1118,6 +1301,29 @@ export function App() {
     void checkHealth();
     const interval = window.setInterval(checkHealth, 5000);
     return () => { disposed = true; window.clearInterval(interval); };
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    let socket;
+    let reconnectTimer;
+    const connect = () => {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${protocol}//${window.location.host}/ws/spatial`);
+      socket.onmessage = ({ data }) => {
+        try { setSpatialState(JSON.parse(data)); }
+        catch { /* keep the most recent valid spatial snapshot */ }
+      };
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
+        if (!disposed) reconnectTimer = window.setTimeout(connect, 1500);
+      };
+    };
+    connect();
+    return () => {
+      disposed = true;
+      window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
   }, []);
   useEffect(() => {
     let disposed = false;
@@ -1192,8 +1398,8 @@ export function App() {
     <div className="app-shell">
       <Sidebar active={active} onNavigate={navigate} pendingEvents={events.filter((event) => event.status === "new").length} />
       <main className="main-content">
-        {active === "overview" && <Overview events={events} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} sendCommand={sendCommand} />}
-        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} notify={notify} />}
+        {active === "overview" && <Overview events={events} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} />}
+        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} notify={notify} />}
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
         {active === "report" && <ReportsPage events={events} notify={notify} />}

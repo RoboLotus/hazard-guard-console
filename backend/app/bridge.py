@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -100,6 +101,269 @@ class NavigationStore:
             return dict(self._data)
 
 
+class SpatialStore:
+    """Live map-space state used by the 2D digital-twin overlays."""
+
+    SENSOR_SPECS = [
+        {
+            "id": "depth",
+            "label": "Depth",
+            "model": "Nuwa-HP60C",
+            "horizontal_fov_deg": 73.8,
+            "range_min_m": 0.2,
+            "range_max_m": 4.0,
+            "range_note": "제조사 깊이 측정 범위",
+            "color": "#2675d8",
+        },
+        {
+            "id": "thermal",
+            "label": "Thermal",
+            "model": "TOPDON TC001",
+            "horizontal_fov_deg": 56.0,
+            "range_min_m": 0.1,
+            "range_max_m": 5.0,
+            "range_note": "제조사 권장 유효 온도 측정거리",
+            "color": "#e45832",
+        },
+    ]
+    MOCK_MAP = {
+        "frame_id": "map",
+        "width": 240,
+        "height": 180,
+        "resolution": 0.05,
+        "origin_x": -6.0,
+        "origin_y": -4.5,
+        "source": "mock:slam-map",
+    }
+    MOCK_ROUTE = [
+        (-2.9, -2.7),
+        (-0.8, -2.7),
+        (1.3, -2.2),
+        (2.6, -0.4),
+        (2.1, 1.8),
+        (-0.4, 2.6),
+        (-2.7, 1.6),
+        (-3.2, -0.6),
+    ]
+    MOCK_HEAT_SOURCES = [
+        {
+            "detection_id": "mock-pump-p02",
+            "x": 1.8,
+            "y": 1.2,
+            "temperature_c": 84.6,
+            "confidence": 0.94,
+            "radius_m": 0.48,
+            "source": "simulation:pump_block",
+        },
+        {
+            "detection_id": "mock-partition-p01",
+            "x": -0.3,
+            "y": -1.3,
+            "temperature_c": 63.2,
+            "confidence": 0.86,
+            "radius_m": 0.38,
+            "source": "simulation:center_partition",
+        },
+        {
+            "detection_id": "mock-tank-normal",
+            "x": -1.8,
+            "y": 1.8,
+            "temperature_c": 46.8,
+            "confidence": 0.8,
+            "radius_m": 0.52,
+            "source": "simulation:tank_block",
+        },
+    ]
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._source = "mock"
+        self._map = dict(self.MOCK_MAP)
+        self._pose = {
+            "available": True,
+            "frame_id": "map",
+            "x": self.MOCK_ROUTE[0][0],
+            "y": self.MOCK_ROUTE[0][1],
+            "yaw": 0.0,
+            "mock": True,
+            "updated_at": utc_now(),
+        }
+        self._trail: list[dict[str, Any]] = []
+        self._detections: dict[str, dict[str, Any]] = {}
+        self._started_monotonic = time.monotonic()
+        self._last_mock_update = 0.0
+        self._live_initialized = False
+        for detection in self.MOCK_HEAT_SOURCES:
+            self._store_detection_locked(
+                {
+                    **detection,
+                    "frame_id": "map",
+                    "z": 0.0,
+                    "simulated": True,
+                }
+            )
+
+    def _activate_live_locked(self) -> None:
+        if self._live_initialized:
+            return
+        self._live_initialized = True
+        self._source = "ros"
+        self._trail.clear()
+        self._detections.clear()
+
+    def update_map(
+        self,
+        *,
+        frame_id: str,
+        width: int,
+        height: int,
+        resolution: float,
+        origin_x: float,
+        origin_y: float,
+    ) -> None:
+        with self._lock:
+            self._activate_live_locked()
+            self._map = {
+                "frame_id": frame_id or "map",
+                "width": int(width),
+                "height": int(height),
+                "resolution": float(resolution),
+                "origin_x": float(origin_x),
+                "origin_y": float(origin_y),
+                "source": "ros:/map",
+            }
+
+    def update_pose(
+        self,
+        *,
+        x: float,
+        y: float,
+        yaw: float,
+        frame_id: str = "map",
+        mock: bool = False,
+    ) -> None:
+        with self._lock:
+            if not mock:
+                self._activate_live_locked()
+            pose = {
+                "available": True,
+                "frame_id": frame_id,
+                "x": round(float(x), 4),
+                "y": round(float(y), 4),
+                "yaw": round(float(yaw), 5),
+                "mock": bool(mock),
+                "updated_at": utc_now(),
+            }
+            self._pose = pose
+            self._append_trail_locked(pose)
+
+    def _append_trail_locked(self, pose: dict[str, Any]) -> None:
+        point = {
+            "x": pose["x"],
+            "y": pose["y"],
+            "timestamp": pose["updated_at"],
+        }
+        if self._trail:
+            previous = self._trail[-1]
+            if math.hypot(point["x"] - previous["x"], point["y"] - previous["y"]) < 0.08:
+                return
+        self._trail.append(point)
+        self._trail = self._trail[-240:]
+
+    def _store_detection_locked(self, detection: dict[str, Any]) -> dict[str, Any]:
+        item = {
+            "detection_id": str(detection.get("detection_id") or "thermal-detection"),
+            "frame_id": str(detection.get("frame_id") or "map"),
+            "x": round(float(detection["x"]), 4),
+            "y": round(float(detection["y"]), 4),
+            "z": round(float(detection.get("z", 0.0)), 4),
+            "temperature_c": round(float(detection["temperature_c"]), 2),
+            "confidence": round(float(detection.get("confidence", 1.0)), 3),
+            "radius_m": round(float(detection.get("radius_m", 0.35)), 3),
+            "source": str(detection.get("source") or "unknown"),
+            "simulated": bool(detection.get("simulated", False)),
+            "updated_at": utc_now(),
+            "updated_monotonic": time.monotonic(),
+        }
+        self._detections[item["detection_id"]] = item
+        if len(self._detections) > 80:
+            oldest = min(
+                self._detections,
+                key=lambda key: self._detections[key]["updated_monotonic"],
+            )
+            self._detections.pop(oldest, None)
+        return dict(item)
+
+    def add_detection(self, detection: dict[str, Any], *, live: bool = False) -> dict[str, Any]:
+        with self._lock:
+            if live:
+                self._activate_live_locked()
+            return self._store_detection_locked(detection)
+
+    def _advance_mock_locked(self) -> None:
+        if self._source != "mock":
+            return
+        now = time.monotonic()
+        if now - self._last_mock_update < 0.18:
+            return
+        elapsed = (now - self._started_monotonic) % 48.0
+        segment_duration = 48.0 / len(self.MOCK_ROUTE)
+        segment = int(elapsed // segment_duration)
+        progress = (elapsed % segment_duration) / segment_duration
+        start = self.MOCK_ROUTE[segment]
+        end = self.MOCK_ROUTE[(segment + 1) % len(self.MOCK_ROUTE)]
+        x = start[0] + (end[0] - start[0]) * progress
+        y = start[1] + (end[1] - start[1]) * progress
+        yaw = math.atan2(end[1] - start[1], end[0] - start[0])
+        self._pose = {
+            "available": True,
+            "frame_id": "map",
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "yaw": round(yaw, 5),
+            "mock": True,
+            "updated_at": utc_now(),
+        }
+        self._append_trail_locked(self._pose)
+        self._last_mock_update = now
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            self._advance_mock_locked()
+            now = time.monotonic()
+            detections = []
+            for item in self._detections.values():
+                public = {
+                    key: value
+                    for key, value in item.items()
+                    if key != "updated_monotonic"
+                }
+                public["age_sec"] = round(max(0.0, now - item["updated_monotonic"]), 1)
+                detections.append(public)
+            detections.sort(key=lambda item: item["temperature_c"], reverse=True)
+            return {
+                "source": self._source,
+                "mock": self._source == "mock",
+                "map": dict(self._map),
+                "pose": dict(self._pose),
+                "trail": [dict(point) for point in self._trail],
+                "sensors": [dict(sensor) for sensor in self.SENSOR_SPECS],
+                "heatmap": {
+                    "available": bool(detections),
+                    "simulated": all(item["simulated"] for item in detections)
+                    if detections
+                    else self._source == "mock",
+                    "minimum_c": 20.0,
+                    "maximum_c": max(
+                        [item["temperature_c"] for item in detections],
+                        default=20.0,
+                    ),
+                    "detections": detections,
+                },
+                "updated_at": utc_now(),
+            }
+
+
 class TelemetryStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -185,10 +449,12 @@ class RosBridge:
         store: TelemetryStore,
         media: MediaStore,
         navigation: NavigationStore,
+        spatial: SpatialStore,
     ) -> None:
         self.store = store
         self.media = media
         self.navigation = navigation
+        self.spatial = spatial
         self.active = False
         self.error: str | None = None
         self._stop_event = threading.Event()
@@ -205,6 +471,7 @@ class RosBridge:
         self._navigate_action_client = None
         self._navigate_action_type = None
         self._navigation_goal_handle = None
+        self._last_pose_update = 0.0
 
     def start(self) -> None:
         if os.getenv("HAZARD_GUARD_ROS_ENABLED", "0") != "1":
@@ -263,6 +530,18 @@ class RosBridge:
                 self._on_rgb_image,
                 qos_profile_sensor_data,
             )
+            try:
+                from hazard_guard_interfaces.msg import HazardDetection
+
+                self._node.create_subscription(
+                    HazardDetection,
+                    "/hazard_guard/thermal_detections",
+                    self._on_thermal_detection,
+                    qos_profile_sensor_data,
+                )
+            except ImportError:
+                # Older interface workspaces can still provide map, pose and media.
+                pass
             self._navigate_action_type = NavigateToPose
             self._navigate_action_client = ActionClient(
                 self._node,
@@ -288,6 +567,7 @@ class RosBridge:
     def _spin(self) -> None:
         while not self._stop_event.is_set():
             self._executor.spin_once(timeout_sec=0.2)
+            self._update_spatial_pose()
 
     def _on_telemetry(self, message: Any) -> None:
         stamp_seconds = message.stamp.sec + message.stamp.nanosec / 1_000_000_000
@@ -326,7 +606,6 @@ class RosBridge:
             image[occupancy >= 65] = 25
             image = np.flipud(image)
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-            self._draw_robot_pose(image, message)
             ok, encoded = cv2.imencode(
                 ".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 3]
             )
@@ -345,55 +624,61 @@ class RosBridge:
                         "origin_y": float(message.info.origin.position.y),
                     },
                 )
+                self.spatial.update_map(
+                    frame_id=message.header.frame_id or "map",
+                    width=width,
+                    height=height,
+                    resolution=float(message.info.resolution),
+                    origin_x=float(message.info.origin.position.x),
+                    origin_y=float(message.info.origin.position.y),
+                )
         except Exception as exc:
             self.error = f"Map conversion failed: {exc}"
 
-    def _draw_robot_pose(self, image: Any, message: Any) -> None:
+    def _update_spatial_pose(self) -> None:
         if self._tf_buffer is None or self._ros_time_type is None:
             return
+        now = time.monotonic()
+        if now - self._last_pose_update < 0.18:
+            return
         try:
-            import cv2
-            import math
-
             transform = self._tf_buffer.lookup_transform(
                 "map", "base_footprint", self._ros_time_type()
             )
             position = transform.transform.translation
             orientation = transform.transform.rotation
-            resolution = float(message.info.resolution)
-            origin = message.info.origin.position
-            grid_x = int(round((position.x - origin.x) / resolution))
-            grid_y = int(round((position.y - origin.y) / resolution))
-            pixel_y = int(message.info.height) - 1 - grid_y
-            if not (
-                0 <= grid_x < int(message.info.width)
-                and 0 <= pixel_y < int(message.info.height)
-            ):
-                return
-
             yaw = math.atan2(
                 2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
                 1.0 - 2.0 * (orientation.y**2 + orientation.z**2),
             )
-            marker_radius = max(3, int(round(0.12 / resolution)))
-            endpoint = (
-                int(round(grid_x + marker_radius * 2.2 * math.cos(yaw))),
-                int(round(pixel_y - marker_radius * 2.2 * math.sin(yaw))),
+            self.spatial.update_pose(
+                x=float(position.x),
+                y=float(position.y),
+                yaw=yaw,
+                frame_id="map",
+                mock=False,
             )
-            cv2.circle(image, (grid_x, pixel_y), marker_radius + 2, (255, 255, 255), -1)
-            cv2.circle(image, (grid_x, pixel_y), marker_radius, (215, 91, 28), -1)
-            cv2.arrowedLine(
-                image,
-                (grid_x, pixel_y),
-                endpoint,
-                (215, 91, 28),
-                max(1, marker_radius // 2),
-                tipLength=0.45,
-            )
+            self._last_pose_update = now
         except Exception:
-            # TF can be unavailable during the first SLAM updates; the next map
-            # publication will add the marker once localization is ready.
+            # TF can be unavailable while SLAM and localization are starting.
             return
+
+    def _on_thermal_detection(self, message: Any) -> None:
+        self.spatial.add_detection(
+            {
+                "detection_id": message.detection_id,
+                "frame_id": message.frame_id or "map",
+                "x": message.x,
+                "y": message.y,
+                "z": message.z,
+                "temperature_c": message.temperature_c,
+                "confidence": message.confidence,
+                "radius_m": message.radius_m,
+                "source": message.source,
+                "simulated": message.simulated,
+            },
+            live=True,
+        )
 
     def _on_rgb_image(self, message: Any) -> None:
         try:
@@ -694,4 +979,10 @@ class RosBridge:
 telemetry_store = TelemetryStore()
 media_store = MediaStore()
 navigation_store = NavigationStore()
-ros_bridge = RosBridge(telemetry_store, media_store, navigation_store)
+spatial_store = SpatialStore()
+ros_bridge = RosBridge(
+    telemetry_store,
+    media_store,
+    navigation_store,
+    spatial_store,
+)

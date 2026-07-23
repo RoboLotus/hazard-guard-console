@@ -107,3 +107,63 @@ def test_telemetry_websocket_sends_snapshot_and_closes_cleanly():
         payload = websocket.receive_json()
         assert payload["robot_id"] == "rosmaster-m1-mock"
         assert "timestamp" in payload
+
+
+def test_spatial_status_exposes_pose_sensor_specs_and_heatmap():
+    response = client.get("/api/v1/spatial/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pose"]["available"] is True
+    assert payload["map"]["frame_id"] == "map"
+    assert payload["heatmap"]["available"] is True
+
+    sensors = {sensor["id"]: sensor for sensor in payload["sensors"]}
+    assert sensors["depth"]["horizontal_fov_deg"] == 73.8
+    assert sensors["depth"]["range_max_m"] == 4.0
+    assert sensors["thermal"]["horizontal_fov_deg"] == 56.0
+    assert sensors["thermal"]["range_max_m"] == 5.0
+
+
+def test_spatial_detection_can_be_ingested_without_claiming_real_sensor_data():
+    response = client.post(
+        "/api/v1/spatial/detections",
+        json={
+            "detection_id": "api-simulation-source",
+            "frame_id": "map",
+            "x": 1.2,
+            "y": -0.4,
+            "temperature_c": 71.5,
+            "confidence": 0.88,
+            "radius_m": 0.3,
+            "source": "test:simulation",
+            "simulated": True,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["detection_id"] == "api-simulation-source"
+    assert payload["temperature_c"] == 71.5
+    assert payload["simulated"] is True
+
+
+def test_spatial_detection_validates_temperature_and_confidence():
+    response = client.post(
+        "/api/v1/spatial/detections",
+        json={
+            "detection_id": "invalid",
+            "x": 0,
+            "y": 0,
+            "temperature_c": 1200,
+            "confidence": 2,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_spatial_websocket_sends_map_overlay_snapshot():
+    with client.websocket_connect("/ws/spatial") as websocket:
+        payload = websocket.receive_json()
+        assert payload["source"] in {"mock", "ros"}
+        assert "pose" in payload
+        assert "sensors" in payload
+        assert "heatmap" in payload
