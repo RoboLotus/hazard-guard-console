@@ -4,6 +4,7 @@ docs/
 AGENTS*
 .codex/
 .harness/
+.qa/
 design-qa.md
 
 # Environment and secrets

@@ -33,6 +33,13 @@ class CommandRequest(BaseModel):
     enabled: bool = False
 
 
+class NavigationGoal(BaseModel):
+    x: float = Field(..., ge=-1000, le=1000)
+    y: float = Field(..., ge=-1000, le=1000)
+    yaw: float = Field(0, ge=-3.141593, le=3.141593)
+    frame_id: str = Field("map", pattern=r"^[A-Za-z][A-Za-z0-9_/]*$")
+
+
 class RobotTelemetry(BaseModel):
     timestamp: str
     robot_id: str
