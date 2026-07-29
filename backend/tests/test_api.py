@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
 
+from app import bridge
+from app.bridge import MediaStore
 from app.main import app
 
 
@@ -9,7 +11,15 @@ client = TestClient(app)
 def test_health_reports_mock_mode():
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "mode": "mock", "ros_bridge": False}
+    assert response.json() == {
+        "status": "ok",
+        "mode": "mock",
+        "ros_bridge": False,
+        "capabilities": {
+            "navigate_to_pose": False,
+            "compute_path_to_pose": False,
+        },
+    }
 
 
 def test_thresholds_validate_temperature_order():
@@ -60,6 +70,33 @@ def test_unavailable_media_uses_service_unavailable_response():
     assert response.json()["detail"] == "map stream is not ready"
 
 
+def test_static_map_remains_available_while_camera_stream_expires(monkeypatch):
+    store = MediaStore()
+    store.update(
+        "map",
+        b"map",
+        "image/png",
+        width=10,
+        height=10,
+        source="ros:/map",
+    )
+    store.update(
+        "rgb",
+        b"rgb",
+        "image/jpeg",
+        width=10,
+        height=10,
+        source="ros:/camera",
+    )
+    updated_at = bridge.time.monotonic()
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: updated_at + 6.0)
+
+    status = store.status()
+
+    assert status["map"]["available"] is True
+    assert status["rgb"]["available"] is False
+
+
 def test_controller_command_updates_fallback_telemetry():
     response = client.post(
         "/api/v1/commands/controller", json={"enabled": True}
@@ -100,6 +137,88 @@ def test_navigation_status_and_cancel_are_safe_without_active_goal():
     status = client.get("/api/v1/navigation/status")
     assert status.status_code == 200
     assert status.json()["mock"] is True
+
+
+def test_route_recommendation_is_safe_and_deterministic_in_mock_mode():
+    route = {
+        "name": "테스트 순찰",
+        "frame_id": "map",
+        "return_to_start": False,
+        "waypoints": [
+            {
+                "id": "wp-a",
+                "name": "A",
+                "x": -2.0,
+                "y": -2.0,
+                "yaw": 0,
+                "dwell_seconds": 0,
+                "enabled": True,
+            },
+            {
+                "id": "wp-b",
+                "name": "B",
+                "x": 2.0,
+                "y": 2.0,
+                "yaw": 0,
+                "dwell_seconds": 1,
+                "enabled": True,
+            },
+        ],
+    }
+    response = client.post("/api/v1/navigation/route/recommend", json=route)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is True
+    assert payload["mock"] is True
+    assert set(payload["ordered_ids"]) == {"wp-a", "wp-b"}
+    assert payload["total_distance_m"] > 0
+
+
+def test_route_start_never_claims_motion_without_ros():
+    response = client.post(
+        "/api/v1/navigation/route",
+        json={
+            "name": "Mock route",
+            "frame_id": "map",
+            "waypoints": [
+                {
+                    "id": "mock-1",
+                    "name": "점검구역",
+                    "x": 0,
+                    "y": 0,
+                    "yaw": 0,
+                    "dwell_seconds": 0,
+                    "enabled": True,
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is False
+    assert payload["status"] == "mock"
+    assert payload["mock"] is True
+
+
+def test_route_rejects_duplicate_waypoint_ids():
+    waypoint = {
+        "id": "duplicate",
+        "name": "중복",
+        "x": 0,
+        "y": 0,
+        "yaw": 0,
+        "dwell_seconds": 0,
+        "enabled": True,
+    }
+    response = client.post(
+        "/api/v1/navigation/route",
+        json={
+            "name": "Invalid route",
+            "frame_id": "map",
+            "waypoints": [waypoint, {**waypoint, "x": 1}],
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_telemetry_websocket_sends_snapshot_and_closes_cleanly():

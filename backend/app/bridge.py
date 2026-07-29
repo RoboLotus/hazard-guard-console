@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import math
 import os
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -58,8 +60,11 @@ class MediaStore:
             if item is None:
                 result[kind] = {"available": False}
                 continue
+            # An occupancy map is a snapshot and may be published only once by
+            # map_server. Camera frames are streams and must remain fresh.
+            freshness_limit = math.inf if kind == "map" else 5.0
             result[kind] = {
-                "available": now - item["updated_monotonic"] < 5.0,
+                "available": now - item["updated_monotonic"] < freshness_limit,
                 "updated_at": item["updated_at"],
                 "width": item["width"],
                 "height": item["height"],
@@ -99,6 +104,83 @@ class NavigationStore:
             self._data.update(values)
             self._data["updated_at"] = utc_now()
             return dict(self._data)
+
+
+class RouteMissionStore:
+    """Thread-safe status for a named, ordered waypoint patrol."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._data: dict[str, Any] = {
+            "mission_id": None,
+            "name": None,
+            "status": "idle",
+            "accepted": False,
+            "mock": True,
+            "frame_id": "map",
+            "current_index": None,
+            "total_waypoints": 0,
+            "completed_waypoints": 0,
+            "total_distance_m": None,
+            "message": "아직 시작된 순찰 임무가 없습니다.",
+            "waypoints": [],
+            "updated_at": utc_now(),
+        }
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return copy.deepcopy(self._data)
+
+    def begin(self, route: dict[str, Any], *, mock: bool) -> dict[str, Any]:
+        active = [item for item in route["waypoints"] if item.get("enabled", True)]
+        with self._lock:
+            self._data = {
+                "mission_id": uuid.uuid4().hex,
+                "name": route["name"],
+                "status": "preparing",
+                "accepted": True,
+                "mock": mock,
+                "frame_id": route["frame_id"],
+                "current_index": None,
+                "total_waypoints": len(active),
+                "completed_waypoints": 0,
+                "total_distance_m": None,
+                "message": "웨이포인트 경로를 확인하고 있습니다.",
+                "waypoints": [
+                    {
+                        **item,
+                        "status": "pending",
+                        "message": "대기 중",
+                    }
+                    for item in active
+                ],
+                "updated_at": utc_now(),
+            }
+            return copy.deepcopy(self._data)
+
+    def update(self, values: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self._data.update(values)
+            self._data["updated_at"] = utc_now()
+            return copy.deepcopy(self._data)
+
+    def update_waypoint(
+        self,
+        index: int,
+        status: str,
+        message: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if 0 <= index < len(self._data["waypoints"]):
+                self._data["waypoints"][index].update(
+                    {
+                        "status": status,
+                        "message": message,
+                        "updated_at": utc_now(),
+                    }
+                )
+            self._data["updated_at"] = utc_now()
+            return copy.deepcopy(self._data)
 
 
 class SpatialStore:
@@ -178,7 +260,8 @@ class SpatialStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._source = "mock"
-        self._map = dict(self.MOCK_MAP)
+        self._map_id = os.getenv("HAZARD_GUARD_MAP_ID", "mock:facility-v1")
+        self._map = {**self.MOCK_MAP, "map_id": self._map_id}
         self._pose = {
             "available": True,
             "frame_id": "map",
@@ -224,6 +307,7 @@ class SpatialStore:
         with self._lock:
             self._activate_live_locked()
             self._map = {
+                "map_id": self._map_id,
                 "frame_id": frame_id or "map",
                 "width": int(width),
                 "height": int(height),
@@ -449,11 +533,13 @@ class RosBridge:
         store: TelemetryStore,
         media: MediaStore,
         navigation: NavigationStore,
+        mission: RouteMissionStore,
         spatial: SpatialStore,
     ) -> None:
         self.store = store
         self.media = media
         self.navigation = navigation
+        self.mission = mission
         self.spatial = spatial
         self.active = False
         self.error: str | None = None
@@ -470,7 +556,15 @@ class RosBridge:
         self._ros_time_type = None
         self._navigate_action_client = None
         self._navigate_action_type = None
+        self._compute_path_action_client = None
+        self._compute_path_action_type = None
+        self._thermal_stream_seen = False
         self._navigation_goal_handle = None
+        self._navigation_result_event = threading.Event()
+        self._navigation_result_status: str | None = None
+        self._mission_thread: threading.Thread | None = None
+        self._mission_cancel_event = threading.Event()
+        self._mission_lock = threading.RLock()
         self._last_pose_update = 0.0
 
     def start(self) -> None:
@@ -482,7 +576,7 @@ class RosBridge:
             from cv_bridge import CvBridge
             from hazard_guard_interfaces.msg import RobotTelemetry
             from nav_msgs.msg import OccupancyGrid
-            from nav2_msgs.action import NavigateToPose
+            from nav2_msgs.action import ComputePathToPose, NavigateToPose
             from rclpy.action import ActionClient
             from hazard_guard_interfaces.srv import RobotCommand
             from rclpy.context import Context
@@ -526,8 +620,16 @@ class RosBridge:
             self._cv_bridge = CvBridge()
             self._node.create_subscription(
                 Image,
-                "/hazard_guard_rgb_camera/image_raw",
+                os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw"),
                 self._on_rgb_image,
+                qos_profile_sensor_data,
+            )
+            self._node.create_subscription(
+                Image,
+                os.getenv(
+                    "HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"
+                ),
+                self._on_thermal_image,
                 qos_profile_sensor_data,
             )
             try:
@@ -547,6 +649,12 @@ class RosBridge:
                 self._node,
                 NavigateToPose,
                 "/navigate_to_pose",
+            )
+            self._compute_path_action_type = ComputePathToPose
+            self._compute_path_action_client = ActionClient(
+                self._node,
+                ComputePathToPose,
+                "/compute_path_to_pose",
             )
             self._client = self._node.create_client(
                 RobotCommand, "/hazard_guard/command"
@@ -568,6 +676,22 @@ class RosBridge:
         while not self._stop_event.is_set():
             self._executor.spin_once(timeout_sec=0.2)
             self._update_spatial_pose()
+
+    def capability_status(self) -> dict[str, bool]:
+        """Report ROS capabilities without sending a command."""
+
+        navigate_client = self._navigate_action_client
+        path_client = self._compute_path_action_client
+        return {
+            "navigate_to_pose": bool(
+                self.active
+                and navigate_client is not None
+                and navigate_client.server_is_ready()
+            ),
+            "compute_path_to_pose": bool(
+                self.active and path_client is not None and path_client.server_is_ready()
+            ),
+        }
 
     def _on_telemetry(self, message: Any) -> None:
         stamp_seconds = message.stamp.sec + message.stamp.nanosec / 1_000_000_000
@@ -619,6 +743,7 @@ class RosBridge:
                     source="ros:/map",
                     metadata={
                         "frame_id": message.header.frame_id or "map",
+                        "map_id": self.spatial.snapshot()["map"]["map_id"],
                         "resolution": float(message.info.resolution),
                         "origin_x": float(message.info.origin.position.x),
                         "origin_y": float(message.info.origin.position.y),
@@ -696,35 +821,81 @@ class RosBridge:
                     "image/jpeg",
                     width=width,
                     height=height,
-                    source="gazebo:/hazard_guard_rgb_camera/image_raw",
+                    source="gazebo:/camera/image_raw",
                 )
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            thermal = cv2.applyColorMap(gray, cv2.COLORMAP_INFERNO)
+            if not self._thermal_stream_seen:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                thermal = cv2.applyColorMap(gray, cv2.COLORMAP_INFERNO)
+                cv2.putText(
+                    thermal,
+                    "SYNTHETIC THERMAL",
+                    (14, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                ok, encoded = cv2.imencode(
+                    ".jpg", thermal, [cv2.IMWRITE_JPEG_QUALITY, 82]
+                )
+                if ok:
+                    self.media.update(
+                        "thermal",
+                        encoded.tobytes(),
+                        "image/jpeg",
+                        width=width,
+                        height=height,
+                        source="derived:rgb-colormap",
+                    )
+        except Exception as exc:
+            self.error = f"Camera conversion failed: {exc}"
+
+    def _on_thermal_image(self, message: Any) -> None:
+        try:
+            import cv2
+            import numpy as np
+
+            raw = self._cv_bridge.imgmsg_to_cv2(
+                message, desired_encoding="passthrough"
+            )
+            if raw.ndim == 3:
+                raw = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+            normalized = cv2.normalize(
+                raw.astype(np.float32),
+                None,
+                0,
+                255,
+                cv2.NORM_MINMAX,
+            ).astype(np.uint8)
+            thermal = cv2.applyColorMap(normalized, cv2.COLORMAP_INFERNO)
             cv2.putText(
                 thermal,
-                "SYNTHETIC THERMAL",
+                "GAZEBO THERMAL - SIMULATED",
                 (14, 28),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
+                0.55,
                 (255, 255, 255),
                 2,
                 cv2.LINE_AA,
             )
+            height, width = thermal.shape[:2]
             ok, encoded = cv2.imencode(
                 ".jpg", thermal, [cv2.IMWRITE_JPEG_QUALITY, 82]
             )
             if ok:
+                self._thermal_stream_seen = True
                 self.media.update(
                     "thermal",
                     encoded.tobytes(),
                     "image/jpeg",
                     width=width,
                     height=height,
-                    source="derived:rgb-colormap",
+                    source="gazebo:/thermal_camera/image_raw",
                 )
         except Exception as exc:
-            self.error = f"Camera conversion failed: {exc}"
+            self.error = f"Thermal camera conversion failed: {exc}"
 
     def command(self, command: str, enabled: bool) -> dict[str, Any]:
         if not self.active or not self._client.wait_for_service(timeout_sec=0.5):
@@ -775,6 +946,8 @@ class RosBridge:
             "distance_remaining": None,
             "navigation_time_sec": None,
         }
+        self._navigation_result_status = None
+        self._navigation_result_event.clear()
         if (
             not self.active
             or self._navigate_action_client is None
@@ -795,7 +968,8 @@ class RosBridge:
 
         message = self._navigate_action_type.Goal()
         message.pose.header.frame_id = frame_id
-        message.pose.header.stamp = self._node.get_clock().now().to_msg()
+        # A zero timestamp asks TF for the latest transform. This works in both
+        # Gazebo simulated time and a real robot's wall/ROS time.
         message.pose.pose.position.x = float(x)
         message.pose.pose.position.y = float(y)
         message.pose.pose.orientation.z = math.sin(float(yaw) / 2.0)
@@ -914,6 +1088,7 @@ class RosBridge:
                     "message": message,
                 }
             )
+            self._navigation_result_status = next_status
         except Exception as exc:
             self.navigation.update(
                 {
@@ -922,8 +1097,10 @@ class RosBridge:
                     "message": f"Nav2 결과 처리 오류: {exc}",
                 }
             )
+            self._navigation_result_status = "failed"
         finally:
             self._navigation_goal_handle = None
+            self._navigation_result_event.set()
 
     def cancel_navigation(self) -> dict[str, Any]:
         goal_handle = self._navigation_goal_handle
@@ -961,7 +1138,443 @@ class RosBridge:
                 }
             )
 
+    def _current_map_pose(self) -> tuple[float, float] | None:
+        pose = self.spatial.snapshot().get("pose") or {}
+        if not pose.get("available"):
+            return None
+        try:
+            return float(pose["x"]), float(pose["y"])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _euclidean_distance(
+        start: tuple[float, float],
+        goal: tuple[float, float],
+    ) -> float:
+        return math.hypot(goal[0] - start[0], goal[1] - start[1])
+
+    def _compute_path_distance(
+        self,
+        start: tuple[float, float],
+        goal: tuple[float, float],
+        frame_id: str,
+        *,
+        timeout_sec: float = 4.0,
+    ) -> tuple[float | None, str | None]:
+        client = self._compute_path_action_client
+        action_type = self._compute_path_action_type
+        if (
+            not self.active
+            or client is None
+            or action_type is None
+            or not client.wait_for_server(timeout_sec=3.0)
+        ):
+            return None, "Nav2 경로 계획 서버에 연결할 수 없습니다."
+
+        goal_message = action_type.Goal()
+        goal_message.start.header.frame_id = frame_id
+        goal_message.start.pose.position.x = float(start[0])
+        goal_message.start.pose.position.y = float(start[1])
+        goal_message.start.pose.orientation.w = 1.0
+        goal_message.goal.header.frame_id = frame_id
+        goal_message.goal.pose.position.x = float(goal[0])
+        goal_message.goal.pose.position.y = float(goal[1])
+        goal_message.goal.pose.orientation.w = 1.0
+        goal_message.use_start = True
+        goal_message.planner_id = "GridBased"
+
+        send_future = client.send_goal_async(goal_message)
+        sent = threading.Event()
+        send_future.add_done_callback(lambda _: sent.set())
+        if not sent.wait(timeout=timeout_sec):
+            return None, "Nav2 경로 요청 수락 시간이 초과됐습니다."
+        try:
+            goal_handle = send_future.result()
+        except Exception as exc:
+            return None, f"Nav2 경로 요청 오류: {exc}"
+        if not goal_handle.accepted:
+            return None, "Nav2가 경로 계산 요청을 거부했습니다."
+
+        result_future = goal_handle.get_result_async()
+        completed = threading.Event()
+        result_future.add_done_callback(lambda _: completed.set())
+        if not completed.wait(timeout=timeout_sec):
+            goal_handle.cancel_goal_async()
+            return None, "Nav2 경로 계산 시간이 초과됐습니다."
+        try:
+            wrapped_result = result_future.result()
+            path = wrapped_result.result.path
+            poses = path.poses
+        except Exception as exc:
+            return None, f"Nav2 경로 결과 오류: {exc}"
+        if len(poses) < 2:
+            if self._euclidean_distance(start, goal) < 0.08:
+                return 0.0, None
+            return None, "목적지까지 유효한 경로가 없습니다."
+
+        distance = 0.0
+        previous = poses[0].pose.position
+        for pose_stamped in poses[1:]:
+            position = pose_stamped.pose.position
+            distance += math.hypot(
+                float(position.x) - float(previous.x),
+                float(position.y) - float(previous.y),
+            )
+            previous = position
+        return round(distance, 4), None
+
+    def recommend_route(self, route: dict[str, Any]) -> dict[str, Any]:
+        waypoints = [item for item in route["waypoints"] if item.get("enabled", True)]
+        current = self._current_map_pose()
+        if current is None:
+            return {
+                "accepted": False,
+                "mock": not self.active,
+                "status": "failed",
+                "message": "지도상의 현재 로봇 위치를 확인할 수 없습니다.",
+                "ordered_ids": [],
+                "total_distance_m": 0.0,
+            }
+
+        use_nav2 = bool(
+            self.active
+            and self._compute_path_action_client is not None
+            and self._compute_path_action_client.wait_for_server(timeout_sec=2.0)
+        )
+        remaining = list(waypoints)
+        ordered: list[dict[str, Any]] = []
+        total_distance = 0.0
+        unreachable: list[str] = []
+
+        while remaining:
+            candidates: list[tuple[float, dict[str, Any]]] = []
+            for waypoint in remaining:
+                target = (float(waypoint["x"]), float(waypoint["y"]))
+                if use_nav2:
+                    distance, _ = self._compute_path_distance(
+                        current,
+                        target,
+                        route["frame_id"],
+                    )
+                    if distance is None:
+                        unreachable.append(waypoint["id"])
+                        continue
+                else:
+                    distance = self._euclidean_distance(current, target)
+                candidates.append((float(distance), waypoint))
+
+            if not candidates:
+                return {
+                    "accepted": False,
+                    "mock": not use_nav2,
+                    "status": "failed",
+                    "message": "남은 웨이포인트까지 유효한 경로를 찾을 수 없습니다.",
+                    "ordered_ids": [item["id"] for item in ordered],
+                    "unreachable_ids": sorted(set(unreachable)),
+                    "total_distance_m": round(total_distance, 3),
+                }
+
+            distance, selected = min(candidates, key=lambda item: item[0])
+            ordered.append(selected)
+            total_distance += distance
+            current = (float(selected["x"]), float(selected["y"]))
+            remaining = [item for item in remaining if item["id"] != selected["id"]]
+            unreachable.clear()
+
+        if route.get("return_to_start") and ordered:
+            start_pose = self._current_map_pose()
+            if start_pose is not None:
+                if use_nav2:
+                    return_distance, _ = self._compute_path_distance(
+                        current,
+                        start_pose,
+                        route["frame_id"],
+                    )
+                    if return_distance is not None:
+                        total_distance += return_distance
+                else:
+                    total_distance += self._euclidean_distance(current, start_pose)
+
+        return {
+            "accepted": True,
+            "mock": not use_nav2,
+            "status": "recommended",
+            "message": (
+                "Nav2 실제 경로 길이로 순서를 추천했습니다."
+                if use_nav2
+                else "ROS 미연결 상태에서 직선거리로 순서를 추천했습니다."
+            ),
+            "ordered_ids": [item["id"] for item in ordered],
+            "total_distance_m": round(total_distance, 3),
+        }
+
+    def start_route(self, route: dict[str, Any]) -> dict[str, Any]:
+        with self._mission_lock:
+            current = self.mission.snapshot()
+            if current["status"] in {
+                "preparing",
+                "running",
+                "sending",
+                "executing",
+                "canceling",
+            }:
+                return {
+                    **current,
+                    "accepted": False,
+                    "message": "이미 실행 중인 순찰 임무가 있습니다.",
+                }
+            if not self.active:
+                return self.mission.update(
+                    {
+                        "status": "mock",
+                        "accepted": False,
+                        "mock": True,
+                        "message": "ROS 2와 Nav2가 연결되지 않아 순찰을 시작하지 않았습니다.",
+                    }
+                )
+
+            snapshot = self.mission.begin(route, mock=False)
+            self._mission_cancel_event.clear()
+            self._mission_thread = threading.Thread(
+                target=self._run_route,
+                args=(copy.deepcopy(route),),
+                name="hazard-guard-route-mission",
+                daemon=True,
+            )
+            self._mission_thread.start()
+            return snapshot
+
+    def _run_route(self, route: dict[str, Any]) -> None:
+        waypoints = [item for item in route["waypoints"] if item.get("enabled", True)]
+        start = self._current_map_pose()
+        if start is None:
+            self.mission.update(
+                {
+                    "status": "failed",
+                    "accepted": False,
+                    "message": "지도상의 현재 로봇 위치가 없어 순찰을 시작할 수 없습니다.",
+                }
+            )
+            return
+
+        try:
+            # Validate the whole route before moving. An unreachable narrow passage
+            # becomes a mission error and never terminates Gazebo or FastAPI.
+            segment_start = start
+            total_distance = 0.0
+            for index, waypoint in enumerate(waypoints):
+                if self._mission_cancel_event.is_set():
+                    self.mission.update(
+                        {
+                            "status": "canceled",
+                            "accepted": False,
+                            "message": "경로 확인 중 순찰이 취소됐습니다.",
+                        }
+                    )
+                    return
+                self.mission.update(
+                    {
+                        "status": "preparing",
+                        "current_index": index,
+                        "message": f"{waypoint['name']}까지 이동 가능한 경로를 확인하고 있습니다.",
+                    }
+                )
+                self.mission.update_waypoint(index, "validating", "Nav2 경로 확인 중")
+                target = (float(waypoint["x"]), float(waypoint["y"]))
+                distance, error = self._compute_path_distance(
+                    segment_start,
+                    target,
+                    route["frame_id"],
+                )
+                if distance is None:
+                    self.mission.update_waypoint(
+                        index,
+                        "failed",
+                        error or "경로를 생성할 수 없습니다.",
+                    )
+                    self.mission.update(
+                        {
+                            "status": "failed",
+                            "accepted": False,
+                            "current_index": index,
+                            "message": (
+                                f"{waypoint['name']}까지 경로를 만들 수 없습니다. "
+                                "통로 폭, 장애물과 Nav2 footprint를 확인하세요. "
+                                "시뮬레이터는 계속 실행됩니다."
+                            ),
+                        }
+                    )
+                    return
+                total_distance += distance
+                segment_start = target
+                self.mission.update_waypoint(index, "pending", "경로 확인 완료")
+
+            self.mission.update(
+                {
+                    "status": "running",
+                    "current_index": 0,
+                    "total_distance_m": round(total_distance, 3),
+                    "message": "전체 경로 확인이 완료되어 순찰을 시작합니다.",
+                }
+            )
+
+            for index, waypoint in enumerate(waypoints):
+                if self._mission_cancel_event.is_set():
+                    self.mission.update_waypoint(index, "canceled", "사용자 취소")
+                    self.mission.update(
+                        {
+                            "status": "canceled",
+                            "accepted": False,
+                            "message": "사용자가 순찰을 취소했습니다.",
+                        }
+                    )
+                    return
+
+                self.mission.update_waypoint(index, "active", "이동 중")
+                self.mission.update(
+                    {
+                        "status": "executing",
+                        "current_index": index,
+                        "message": f"{waypoint['name']}로 이동 중입니다.",
+                    }
+                )
+                response = self.navigate_to(
+                    waypoint["x"],
+                    waypoint["y"],
+                    waypoint.get("yaw", 0.0),
+                    route["frame_id"],
+                )
+                if not response.get("accepted"):
+                    self.mission.update_waypoint(
+                        index,
+                        "failed",
+                        response.get("message", "Nav2 목표 거부"),
+                    )
+                    self.mission.update(
+                        {
+                            "status": "failed",
+                            "accepted": False,
+                            "message": f"{waypoint['name']} 목적지를 Nav2가 수락하지 않았습니다.",
+                        }
+                    )
+                    return
+
+                deadline = time.monotonic() + 180.0
+                while not self._navigation_result_event.wait(timeout=0.25):
+                    if self._mission_cancel_event.is_set():
+                        self.cancel_navigation()
+                    if time.monotonic() >= deadline:
+                        self.cancel_navigation()
+                        self._navigation_result_status = "failed"
+                        break
+
+                outcome = self._navigation_result_status
+                if self._mission_cancel_event.is_set() or outcome == "canceled":
+                    self.mission.update_waypoint(index, "canceled", "사용자 취소")
+                    self.mission.update(
+                        {
+                            "status": "canceled",
+                            "accepted": False,
+                            "message": "사용자가 순찰을 취소했습니다.",
+                        }
+                    )
+                    return
+                if outcome != "succeeded":
+                    navigation_message = self.navigation.snapshot().get("message")
+                    self.mission.update_waypoint(
+                        index,
+                        "failed",
+                        navigation_message or "Nav2 이동 실패",
+                    )
+                    self.mission.update(
+                        {
+                            "status": "failed",
+                            "accepted": False,
+                            "message": (
+                                f"{waypoint['name']} 이동에 실패했습니다. "
+                                "시뮬레이터는 종료하지 않고 다음 명령을 기다립니다."
+                            ),
+                        }
+                    )
+                    return
+
+                dwell = float(waypoint.get("dwell_seconds", 0.0))
+                if dwell > 0:
+                    self.mission.update_waypoint(
+                        index,
+                        "dwelling",
+                        f"{dwell:g}초 점검 대기",
+                    )
+                    dwell_deadline = time.monotonic() + dwell
+                    while (
+                        time.monotonic() < dwell_deadline
+                        and not self._mission_cancel_event.wait(timeout=0.2)
+                    ):
+                        pass
+                    if self._mission_cancel_event.is_set():
+                        self.mission.update_waypoint(index, "canceled", "사용자 취소")
+                        self.mission.update(
+                            {
+                                "status": "canceled",
+                                "accepted": False,
+                                "message": "점검 대기 중 순찰을 취소했습니다.",
+                            }
+                        )
+                        return
+
+                self.mission.update_waypoint(index, "completed", "도착 완료")
+                self.mission.update(
+                    {
+                        "completed_waypoints": index + 1,
+                        "message": f"{waypoint['name']} 점검을 완료했습니다.",
+                    }
+                )
+
+            self.mission.update(
+                {
+                    "status": "completed",
+                    "accepted": True,
+                    "current_index": None,
+                    "completed_waypoints": len(waypoints),
+                    "message": "모든 웨이포인트 순찰을 완료했습니다.",
+                }
+            )
+        except Exception as exc:
+            self.mission.update(
+                {
+                    "status": "failed",
+                    "accepted": False,
+                    "message": f"순찰 처리 오류: {exc}. 시뮬레이터는 계속 실행됩니다.",
+                }
+            )
+
+    def cancel_route(self) -> dict[str, Any]:
+        current = self.mission.snapshot()
+        if current["status"] not in {
+            "preparing",
+            "running",
+            "sending",
+            "executing",
+            "canceling",
+        }:
+            return {
+                **current,
+                "message": "취소할 활성 순찰 임무가 없습니다.",
+            }
+        self._mission_cancel_event.set()
+        self.mission.update(
+            {
+                "status": "canceling",
+                "message": "순찰 중단을 요청했습니다.",
+            }
+        )
+        if self._navigation_goal_handle is not None:
+            self.cancel_navigation()
+        return self.mission.snapshot()
+
     def stop(self) -> None:
+        self._mission_cancel_event.set()
         self._stop_event.set()
         if self._executor is not None:
             self._executor.wake()
@@ -979,10 +1592,12 @@ class RosBridge:
 telemetry_store = TelemetryStore()
 media_store = MediaStore()
 navigation_store = NavigationStore()
+route_mission_store = RouteMissionStore()
 spatial_store = SpatialStore()
 ros_bridge = RosBridge(
     telemetry_store,
     media_store,
     navigation_store,
+    route_mission_store,
     spatial_store,
 )

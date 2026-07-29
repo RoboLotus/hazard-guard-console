@@ -40,6 +40,38 @@ class NavigationGoal(BaseModel):
     frame_id: str = Field("map", pattern=r"^[A-Za-z][A-Za-z0-9_/]*$")
 
 
+class RouteWaypoint(BaseModel):
+    id: str = Field(
+        ...,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+    name: str = Field(..., min_length=1, max_length=40)
+    x: float = Field(..., ge=-1000, le=1000)
+    y: float = Field(..., ge=-1000, le=1000)
+    yaw: float = Field(0, ge=-3.141593, le=3.141593)
+    dwell_seconds: float = Field(0, ge=0, le=300)
+    enabled: bool = True
+
+
+class NavigationRoute(BaseModel):
+    name: str = Field("기본 순찰 경로", min_length=1, max_length=80)
+    frame_id: str = Field("map", pattern=r"^[A-Za-z][A-Za-z0-9_/]*$")
+    return_to_start: bool = False
+    waypoints: list[RouteWaypoint] = Field(..., min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_route(self):
+        active = [waypoint for waypoint in self.waypoints if waypoint.enabled]
+        if not active:
+            raise ValueError("route must contain at least one enabled waypoint")
+        ids = [waypoint.id for waypoint in self.waypoints]
+        if len(ids) != len(set(ids)):
+            raise ValueError("waypoint ids must be unique")
+        return self
+
+
 class ThermalDetection(BaseModel):
     detection_id: str = Field(
         "thermal-detection",

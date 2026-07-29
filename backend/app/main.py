@@ -8,6 +8,7 @@ from .bridge import (
     media_store,
     navigation_store,
     ros_bridge,
+    route_mission_store,
     spatial_store,
     telemetry_store,
 )
@@ -15,6 +16,7 @@ from .models import (
     CommandRequest,
     MockCommand,
     NavigationGoal,
+    NavigationRoute,
     RobotTelemetry,
     ThermalDetection,
     ThresholdSettings,
@@ -50,6 +52,7 @@ def health():
         "status": "ok",
         "mode": "ros-mock" if ros_bridge.active else "mock",
         "ros_bridge": ros_bridge.active,
+        "capabilities": ros_bridge.capability_status(),
     }
 
 
@@ -121,6 +124,26 @@ def navigation_goal(goal: NavigationGoal):
 @app.delete("/api/v1/navigation/goal")
 def cancel_navigation_goal():
     return ros_bridge.cancel_navigation()
+
+
+@app.get("/api/v1/navigation/route/status")
+def navigation_route_status():
+    return route_mission_store.snapshot()
+
+
+@app.post("/api/v1/navigation/route/recommend")
+def recommend_navigation_route(route: NavigationRoute):
+    return ros_bridge.recommend_route(route.model_dump())
+
+
+@app.post("/api/v1/navigation/route")
+def start_navigation_route(route: NavigationRoute):
+    return ros_bridge.start_route(route.model_dump())
+
+
+@app.delete("/api/v1/navigation/route")
+def cancel_navigation_route():
+    return ros_bridge.cancel_route()
 
 
 @app.websocket("/ws/telemetry")
