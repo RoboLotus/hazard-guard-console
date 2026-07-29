@@ -2,6 +2,7 @@ export const fallbackSpatialState = {
   source: "mock",
   mock: true,
   map: {
+    map_id: "mock:facility-v1",
     frame_id: "map",
     width: 240,
     height: 180,
@@ -64,6 +65,7 @@ export function resolveMapSpec(mediaStatus, spatialState) {
   const metadata = mapInfo?.metadata;
   const fallback = spatialState?.map || fallbackSpatialState.map;
   return {
+    map_id: metadata?.map_id || fallback.map_id || "legacy",
     frame_id: metadata?.frame_id || fallback.frame_id || "map",
     width: mapInfo?.width || fallback.width,
     height: mapInfo?.height || fallback.height,
@@ -102,6 +104,37 @@ export function buildFovPolygon(pose, sensor, mapSpec, segments = 24) {
     if (point) points.push(`${point.x.toFixed(2)},${point.y.toFixed(2)}`);
   }
   return points.join(" ");
+}
+
+export const DISPENSER_FOOTPRINT = [
+  { x: -0.41, y: -0.155 },
+  { x: -0.41, y: 0.155 },
+  { x: 0.19, y: 0.155 },
+  { x: 0.19, y: -0.155 },
+];
+
+export function buildFootprintPolygon(
+  pose,
+  mapSpec,
+  footprint = DISPENSER_FOOTPRINT,
+) {
+  if (!pose?.available || !mapSpec) return "";
+  const cosine = Math.cos(pose.yaw || 0);
+  const sine = Math.sin(pose.yaw || 0);
+  return footprint
+    .map((point) => {
+      const worldX = pose.x + point.x * cosine - point.y * sine;
+      const worldY = pose.y + point.x * sine + point.y * cosine;
+      return mapToGrid(worldX, worldY, mapSpec);
+    })
+    .filter(Boolean)
+    .map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`)
+    .join(" ");
+}
+
+export function waypointToGrid(waypoint, mapSpec) {
+  if (!waypoint || !mapSpec) return null;
+  return mapToGrid(waypoint.x, waypoint.y, mapSpec);
 }
 
 export function temperatureColor(temperature) {

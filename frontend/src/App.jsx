@@ -42,6 +42,7 @@ import rgbFeed from "./assets/industrial-rgb.png";
 import thermalFeed from "./assets/industrial-thermal.png";
 import slamMap from "./assets/slam-map.png";
 import {
+  buildFootprintPolygon,
   buildFovPolygon,
   detectionOpacity,
   fallbackSpatialState,
@@ -50,6 +51,17 @@ import {
   temperatureColor,
   temperatureLevel,
 } from "./spatial.js";
+import WaypointMissionPanel from "./WaypointMissionPanel.jsx";
+import {
+  activeWaypoints,
+  clearWaypointRoute,
+  createWaypoint,
+  loadWaypointRoute,
+  moveWaypoint,
+  routeMapSignature,
+  saveWaypointRoute,
+  shiftWaypoint,
+} from "./waypoints.js";
 
 const initialThresholds = {
   warningTemperature: 60,
@@ -197,7 +209,15 @@ function Sidebar({ active, onNavigate, pendingEvents }) {
   );
 }
 
-function SpatialMapOverlay({ spatialState, mapSpec, layers, detail }) {
+function SpatialMapOverlay({
+  spatialState,
+  mapSpec,
+  layers,
+  detail,
+  waypoints = [],
+  selectedWaypointId = null,
+  onWaypointSelect,
+}) {
   const pose = spatialState?.pose;
   const trail = (spatialState?.trail || [])
     .map((point) => mapToGrid(point.x, point.y, mapSpec))
@@ -205,8 +225,12 @@ function SpatialMapOverlay({ spatialState, mapSpec, layers, detail }) {
   const sensors = spatialState?.sensors || [];
   const detections = spatialState?.heatmap?.detections || [];
   const posePoint = pose?.available ? mapToGrid(pose.x, pose.y, mapSpec) : null;
-  const robotRadius = Math.max(2.8, 0.18 / mapSpec.resolution);
+  const robotLength = Math.max(3.2, Math.min(5, 0.22 / mapSpec.resolution));
+  const robotWidth = robotLength * 0.72;
   const robotAngle = pose?.available ? (-pose.yaw * 180) / Math.PI : 0;
+  const waypointPoints = waypoints
+    .map((waypoint) => ({ waypoint, point: mapToGrid(waypoint.x, waypoint.y, mapSpec) }))
+    .filter((item) => item.point);
 
   return (
     <svg
@@ -229,6 +253,13 @@ function SpatialMapOverlay({ spatialState, mapSpec, layers, detail }) {
         <polyline
           className="robot-trail"
           points={trail.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")}
+        />
+      )}
+
+      {waypointPoints.length > 1 && (
+        <polyline
+          className="waypoint-route-line"
+          points={waypointPoints.map(({ point }) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")}
         />
       )}
 
@@ -287,19 +318,80 @@ function SpatialMapOverlay({ spatialState, mapSpec, layers, detail }) {
       })}
 
       {posePoint && (
+        <>
+          {layers.footprint && (
+            <polygon
+              className="robot-footprint"
+              points={buildFootprintPolygon(pose, mapSpec)}
+            />
+          )}
         <g
           className="live-robot"
           transform={`translate(${posePoint.x} ${posePoint.y}) rotate(${robotAngle})`}
           filter="url(#robot-shadow)"
         >
-          <circle r={robotRadius + 1.5} className="live-robot-halo" />
-          <circle r={robotRadius} className="live-robot-body" />
-          <path
-            d={`M ${robotRadius * 0.25} ${-robotRadius * 0.55} L ${robotRadius * 1.55} 0 L ${robotRadius * 0.25} ${robotRadius * 0.55} Z`}
-            className="live-robot-heading"
+          <rect
+            x={-robotLength * 0.55}
+            y={-robotWidth * 0.62}
+            width={robotLength * 1.18}
+            height={robotWidth * 1.24}
+            rx={robotWidth * 0.28}
+            className="live-robot-halo"
           />
+          <rect
+            x={-robotLength * 0.42}
+            y={-robotWidth * 0.43}
+            width={robotLength * 0.86}
+            height={robotWidth * 0.86}
+            rx={robotWidth * 0.12}
+            className="live-robot-deck"
+          />
+          <rect x={-robotLength * 0.28} y={-robotWidth * 0.31} width={robotLength * 0.52} height={robotWidth * 0.62} rx={robotWidth * 0.06} className="live-robot-frame" />
+          {[
+            [-0.27, -0.58],
+            [-0.27, 0.58],
+            [0.27, -0.58],
+            [0.27, 0.58],
+          ].map(([x, y], index) => (
+            <rect
+              key={index}
+              x={robotLength * x - robotLength * 0.13}
+              y={robotWidth * y - robotWidth * 0.12}
+              width={robotLength * 0.26}
+              height={robotWidth * 0.24}
+              rx={robotWidth * 0.08}
+              className="live-robot-wheel"
+            />
+          ))}
+          <circle cx={-robotLength * 0.04} cy="0" r={robotWidth * 0.13} className="live-robot-lidar" />
+          <rect x={robotLength * 0.27} y={-robotWidth * 0.17} width={robotLength * 0.17} height={robotWidth * 0.34} rx={robotWidth * 0.05} className="live-robot-camera" />
+          <path d={`M ${robotLength * 0.48} ${-robotWidth * 0.28} L ${robotLength * 0.78} 0 L ${robotLength * 0.48} ${robotWidth * 0.28} Z`} className="live-robot-front" />
         </g>
+        </>
       )}
+
+      {waypointPoints.map(({ waypoint, point }, index) => (
+        <g
+          key={waypoint.id}
+          className={`waypoint-marker-map ${selectedWaypointId === waypoint.id ? "selected" : ""}`}
+          transform={`translate(${point.x} ${point.y})`}
+          role="button"
+          aria-label={`${index + 1}번 웨이포인트 ${waypoint.name}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => onWaypointSelect?.(waypoint.id)}
+        >
+          <line
+            className="waypoint-heading-line"
+            x1="2"
+            y1="0"
+            x2="5"
+            y2="0"
+            transform={`rotate(${(-waypoint.yaw * 180) / Math.PI})`}
+          />
+          <circle r="2.4" />
+          <text x="0" y=".15">{index + 1}</text>
+        </g>
+      ))}
     </svg>
   );
 }
@@ -314,6 +406,9 @@ function MapPanel({
   goalMode = false,
   goalCandidate,
   onGoalCandidate,
+  waypoints = [],
+  selectedWaypointId = null,
+  onWaypointSelect,
 }) {
   const mapLive = Boolean(mediaStatus?.map?.available);
   const mapSpec = resolveMapSpec(mediaStatus, spatialState);
@@ -483,6 +578,9 @@ function MapPanel({
               mapSpec={mapSpec}
               layers={layers}
               detail={detail}
+              waypoints={waypoints}
+              selectedWaypointId={selectedWaypointId}
+              onWaypointSelect={onWaypointSelect}
             />
           </div>
           {goalCandidate && (
@@ -517,6 +615,7 @@ function MapPanel({
 function CameraPanel({ thermal = false, maxTemperature = 84.6, mediaStatus, onOpen, className = "" }) {
   const stream = thermal ? mediaStatus?.thermal : mediaStatus?.rgb;
   const live = Boolean(stream?.available);
+  const gazeboThermal = thermal && stream?.source === "gazebo:/thermal_camera/image_raw";
   const endpoint = thermal ? "/api/v1/media/thermal" : "/api/v1/media/rgb";
   return (
     <section className={`panel camera-panel ${className}`}>
@@ -536,7 +635,7 @@ function CameraPanel({ thermal = false, maxTemperature = 84.6, mediaStatus, onOp
           fallback={thermal ? thermalFeed : rgbFeed}
           enabled={live}
           interval={thermal ? 400 : 300}
-          alt={thermal ? "RGB 영상에서 합성한 시뮬레이션 열화상" : "Gazebo 전방 RGB 카메라 영상"}
+          alt={thermal ? (gazeboThermal ? "Gazebo 열화상 카메라 시뮬레이션 영상" : "RGB 영상에서 합성한 시뮬레이션 열화상") : "Gazebo 전방 RGB 카메라 영상"}
         />
         <div className="camera-meta top-left">CAM-{thermal ? "TH01" : "RGB01"}</div>
         {thermal ? (
@@ -737,19 +836,33 @@ function DetailHeading({ eyebrow, title, description, children }) {
 function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
   const [goalMode, setGoalMode] = useState(false);
   const [goalCandidate, setGoalCandidate] = useState(null);
-  const [activeGoal, setActiveGoal] = useState(null);
+  const savedRoute = useRef(loadWaypointRoute());
+  const [waypoints, setWaypoints] = useState(() => savedRoute.current?.waypoints || []);
+  const [savedMapSignature, setSavedMapSignature] = useState(
+    () => savedRoute.current?.mapSignature || null,
+  );
+  const [selectedWaypointId, setSelectedWaypointId] = useState(null);
+  const [repositionWaypointId, setRepositionWaypointId] = useState(null);
+  const [missionStatus, setMissionStatus] = useState(null);
   const [navigationStatus, setNavigationStatus] = useState(null);
-  const [goalSubmitting, setGoalSubmitting] = useState(false);
+  const [routeBusy, setRouteBusy] = useState(false);
   const [layers, setLayers] = useState({
     depth: true,
     thermal: true,
     heatmap: true,
     trail: true,
+    footprint: true,
   });
   const mapLive = Boolean(mediaStatus?.map?.available);
+  const mapSpec = resolveMapSpec(mediaStatus, spatialState);
+  const currentMapSignature = routeMapSignature(mapSpec);
+  const mapMismatch = Boolean(
+    mapLive
+    && savedMapSignature
+    && savedMapSignature !== currentMapSignature,
+  );
   const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
   const heatDetections = spatialState?.heatmap?.detections || [];
-  const navActive = ["sending", "accepted", "executing", "canceling"].includes(navigationStatus?.status);
   const navStatusLabels = {
     idle: "대기",
     mock: "Nav2 미연결",
@@ -778,48 +891,180 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
     return () => { disposed = true; window.clearInterval(interval); };
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+    const refreshMission = async () => {
+      try {
+        const response = await fetch("/api/v1/navigation/route/status", { cache: "no-store" });
+        if (!disposed && response.ok) setMissionStatus(await response.json());
+      } catch {
+        if (!disposed) setMissionStatus(null);
+      }
+    };
+    void refreshMission();
+    const interval = window.setInterval(refreshMission, 750);
+    return () => { disposed = true; window.clearInterval(interval); };
+  }, []);
+
   const selectGoal = (candidate) => {
+    if (repositionWaypointId) {
+      setWaypoints((current) => current.map((waypoint) => (
+        waypoint.id === repositionWaypointId
+          ? { ...waypoint, x: candidate.mapX, y: candidate.mapY }
+          : waypoint
+      )));
+      setSelectedWaypointId(repositionWaypointId);
+      setRepositionWaypointId(null);
+      setGoalMode(false);
+      setGoalCandidate(null);
+      setSavedMapSignature(null);
+      notify("웨이포인트 위치를 변경했습니다. 경로를 다시 저장하세요.");
+      return;
+    }
     setGoalCandidate(candidate);
-    notify("목적지 후보를 선택했습니다. 오른쪽 패널에서 확인하세요.", "info");
+    notify("웨이포인트 위치를 선택했습니다. 이름과 방향을 확인하세요.", "info");
   };
-  const confirmGoal = async () => {
+
+  const addWaypoint = (values) => {
     if (!goalCandidate || goalCandidate.mapX === null || goalCandidate.mapY === null) return;
-    setGoalSubmitting(true);
+    const waypoint = createWaypoint(goalCandidate, waypoints.length, values);
+    setWaypoints((current) => [...current, waypoint]);
+    setSelectedWaypointId(waypoint.id);
+    setGoalCandidate(null);
+    setSavedMapSignature(null);
+    notify(`${waypoint.name} 웨이포인트를 추가했습니다.`);
+  };
+
+  const updateWaypoint = (id, patch) => {
+    setWaypoints((current) => current.map((waypoint) => (
+      waypoint.id === id ? { ...waypoint, ...patch } : waypoint
+    )));
+    setSavedMapSignature(null);
+  };
+
+  const deleteWaypoint = (id) => {
+    setWaypoints((current) => current.filter((waypoint) => waypoint.id !== id));
+    if (selectedWaypointId === id) setSelectedWaypointId(null);
+    setSavedMapSignature(null);
+  };
+
+  const reorderWaypoints = (sourceId, targetId) => {
+    setWaypoints((current) => moveWaypoint(current, sourceId, targetId));
+    setSavedMapSignature(null);
+  };
+
+  const shiftWaypointOrder = (id, direction) => {
+    setWaypoints((current) => shiftWaypoint(current, id, direction));
+    setSavedMapSignature(null);
+  };
+
+  const beginReposition = (id) => {
+    setSelectedWaypointId(id);
+    setRepositionWaypointId(id);
+    setGoalCandidate(null);
+    setGoalMode(true);
+    notify("지도에서 웨이포인트의 새 위치를 클릭하세요.", "info");
+  };
+
+  const toggleWaypointMode = () => {
+    const next = !goalMode;
+    setGoalMode(next);
+    setGoalCandidate(null);
+    if (!next) setRepositionWaypointId(null);
+  };
+
+  const persistRoute = () => {
+    saveWaypointRoute(waypoints, mapSpec);
+    setSavedMapSignature(currentMapSignature);
+    notify("현재 지도 버전과 함께 순찰 경로를 브라우저에 저장했습니다.");
+  };
+
+  const clearRoute = () => {
+    setWaypoints([]);
+    setSelectedWaypointId(null);
+    setGoalCandidate(null);
+    setGoalMode(false);
+    setRepositionWaypointId(null);
+    setSavedMapSignature(null);
+    clearWaypointRoute();
+    notify("모든 웨이포인트를 삭제했습니다.", "info");
+  };
+
+  const recommendRoute = async () => {
+    const enabled = activeWaypoints(waypoints);
+    if (enabled.length < 2) return;
+    setRouteBusy(true);
     try {
-      const response = await fetch("/api/v1/navigation/goal", {
+      const response = await fetch("/api/v1/navigation/route/recommend", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          x: goalCandidate.mapX,
-          y: goalCandidate.mapY,
-          yaw: 0,
-          frame_id: goalCandidate.frameId,
+          name: "기본 순찰 경로",
+          frame_id: mapSpec.frame_id || "map",
+          return_to_start: false,
+          waypoints: enabled,
         }),
       });
       const result = await response.json();
-      setNavigationStatus(result);
-      if (!response.ok || !result.accepted) {
-        notify(result.message || "Nav2가 목적지를 수락하지 않았습니다.", "warning");
+      if (!response.ok || !result.accepted || !Array.isArray(result.ordered_ids)) {
+        notify(result.detail || result.message || "순찰 순서를 계산하지 못했습니다.", "warning");
         return;
       }
-      setActiveGoal(goalCandidate);
-      setGoalMode(false);
-      setGoalCandidate(null);
-      notify("Nav2가 목적지를 수락했습니다. 지도와 상태 패널에서 이동을 확인하세요.");
+      const byId = new Map(waypoints.map((waypoint) => [waypoint.id, waypoint]));
+      const ordered = result.ordered_ids.map((id) => byId.get(id)).filter(Boolean);
+      const disabled = waypoints.filter((waypoint) => waypoint.enabled === false);
+      setWaypoints([...ordered, ...disabled]);
+      setSavedMapSignature(null);
+      notify(
+        result.mock
+          ? "ROS 경로 서버가 없어 직선거리 기준으로 순서를 추천했습니다."
+          : `Nav2 경로 비용 기준으로 순서를 추천했습니다. 예상 이동거리 ${result.total_distance_m.toFixed(2)}m`,
+        result.mock ? "warning" : "info",
+      );
     } catch {
-      notify("목적지 전송에 실패했습니다. 시뮬레이션 API 연결을 확인하세요.", "warning");
+      notify("순찰 순서 추천 API에 연결하지 못했습니다.", "warning");
     } finally {
-      setGoalSubmitting(false);
+      setRouteBusy(false);
     }
   };
-  const cancelGoal = async () => {
+
+  const startRoute = async () => {
+    const enabled = activeWaypoints(waypoints);
+    if (!enabled.length) return;
+    setRouteBusy(true);
     try {
-      const response = await fetch("/api/v1/navigation/goal", { method: "DELETE" });
+      const response = await fetch("/api/v1/navigation/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "기본 순찰 경로",
+          frame_id: mapSpec.frame_id || "map",
+          return_to_start: false,
+          waypoints: enabled,
+        }),
+      });
       const result = await response.json();
-      setNavigationStatus(result);
-      notify(result.message, result.status === "canceling" ? "info" : "warning");
+      setMissionStatus(result);
+      if (!response.ok || !result.accepted) {
+        notify(result.detail || result.message || "순찰 임무를 시작하지 못했습니다.", "warning");
+        return;
+      }
+      notify("경로 안전성 확인 후 순찰을 시작합니다.");
     } catch {
-      notify("목적지 취소 요청에 실패했습니다.", "warning");
+      notify("순찰 임무 API에 연결하지 못했습니다.", "warning");
+    } finally {
+      setRouteBusy(false);
+    }
+  };
+
+  const cancelRoute = async () => {
+    try {
+      const response = await fetch("/api/v1/navigation/route", { method: "DELETE" });
+      const result = await response.json();
+      setMissionStatus(result);
+      notify(result.message, response.ok ? "info" : "warning");
+    } catch {
+      notify("순찰 중단 요청에 실패했습니다.", "warning");
     }
   };
   const saveMap = async () => {
@@ -846,47 +1091,39 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
           spatialState={spatialState}
           layers={layers}
           goalMode={goalMode}
-          goalCandidate={goalCandidate || activeGoal}
+          goalCandidate={goalCandidate}
+          waypoints={waypoints}
+          selectedWaypointId={selectedWaypointId}
+          onWaypointSelect={setSelectedWaypointId}
           onGoalCandidate={selectGoal}
           onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")}
         />
         <aside className="map-side-panel">
-          <section className="detail-card">
-            <div className="detail-card-title"><NavigationArrow size={20} weight="fill" /><div><strong>이동 목적지</strong><span>2단계 확인 방식</span></div></div>
-            <p className="helper-copy">목적지 선택을 켠 뒤 지도를 클릭하면 후보가 표시됩니다. 확인 전에는 로봇에 명령이 전송되지 않습니다.</p>
-            <button
-              type="button"
-              className={`button ${goalMode ? "secondary" : "primary"} wide-button`}
-              onClick={() => { setGoalMode((current) => !current); setGoalCandidate(null); }}
-            >
-              {goalMode ? <X size={18} /> : <Crosshair size={18} />}
-              {goalMode ? "목적지 선택 취소" : "지도에서 목적지 선택"}
-            </button>
-            {goalCandidate && (
-              <div className="goal-confirm">
-                <span>선택 좌표 · ROS map 좌표계</span>
-                <strong>
-                  {goalCandidate.mapX === null
-                    ? "실시간 지도 좌표 없음"
-                    : `X ${goalCandidate.mapX.toFixed(2)} m · Y ${goalCandidate.mapY.toFixed(2)} m`}
-                </strong>
-                <small>{goalCandidate.mapX === null ? "시뮬레이션의 실시간 SLAM 지도를 연결해야 목적지를 전송할 수 있습니다." : "로봇의 최종 방향은 현재 0°로 전송됩니다."}</small>
-                <div>
-                  <button type="button" className="button ghost" onClick={() => setGoalCandidate(null)}>다시 선택</button>
-                  <button type="button" className="button primary" disabled={goalSubmitting || goalCandidate.mapX === null || navActive} onClick={confirmGoal}><Check size={17} weight="bold" />{goalSubmitting ? "전송 중" : "목적지 요청"}</button>
-                </div>
-              </div>
-            )}
-            {activeGoal && !goalCandidate && (
-              <div className="active-goal">
-                <span className={`navigation-state ${navigationStatus?.status || "accepted"}`}>{navStatusLabels[navigationStatus?.status] || "Nav2 연결"}</span>
-                <strong>{navigationStatus?.message || "Nav2 목적지가 활성화되었습니다."}</strong>
-                <p>X {activeGoal.mapX.toFixed(2)} m · Y {activeGoal.mapY.toFixed(2)} m</p>
-                {Number.isFinite(navigationStatus?.distance_remaining) && <p>남은 거리 {navigationStatus.distance_remaining.toFixed(2)} m</p>}
-                {navActive ? <button type="button" className="text-button danger-text" onClick={cancelGoal}>목적지 취소</button> : <button type="button" className="text-button" onClick={() => setActiveGoal(null)}>완료 표시 닫기</button>}
-              </div>
-            )}
-          </section>
+          <WaypointMissionPanel
+            waypoints={waypoints}
+            candidate={goalCandidate}
+            goalMode={goalMode}
+            repositioning={Boolean(repositionWaypointId)}
+            selectedId={selectedWaypointId}
+            mapLive={mapLive}
+            mapMismatch={mapMismatch}
+            missionStatus={missionStatus}
+            busy={routeBusy}
+            onSelect={setSelectedWaypointId}
+            onToggleAdd={toggleWaypointMode}
+            onAdd={addWaypoint}
+            onCancelCandidate={() => setGoalCandidate(null)}
+            onUpdate={updateWaypoint}
+            onDelete={deleteWaypoint}
+            onMove={reorderWaypoints}
+            onShift={shiftWaypointOrder}
+            onReposition={beginReposition}
+            onStart={startRoute}
+            onCancelMission={cancelRoute}
+            onRecommend={recommendRoute}
+            onSave={persistRoute}
+            onClear={clearRoute}
+          />
           <section className="detail-card">
             <div className="detail-card-title"><Robot size={20} weight="fill" /><div><strong>로봇 주행 상태</strong><span>ROS 2 텔레메트리</span></div></div>
             <dl className="status-list">
@@ -906,6 +1143,7 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
                 ["depth", "Depth 시야", Camera],
                 ["thermal", "Thermal 시야", VideoCamera],
                 ["trail", "이동 궤적", Path],
+                ["footprint", "실제 충돌 외곽", Robot],
               ].map(([id, label, Icon]) => (
                 <button key={id} type="button" className={layers[id] ? "active" : ""} aria-pressed={layers[id]} onClick={() => toggleLayer(id)}>
                   <Icon size={16} weight={layers[id] ? "fill" : "regular"} />
@@ -1026,6 +1264,7 @@ function VideoPage({ mediaStatus, telemetry, events, notify }) {
   const viewerRef = useRef(null);
   const rgbLive = Boolean(mediaStatus?.rgb?.available);
   const thermalLive = Boolean(mediaStatus?.thermal?.available);
+  const gazeboThermal = mediaStatus?.thermal?.source === "gazebo:/thermal_camera/image_raw";
 
   const saveSnapshot = async (thermal = false) => {
     const live = thermal ? thermalLive : rgbLive;
@@ -1078,7 +1317,7 @@ function VideoPage({ mediaStatus, telemetry, events, notify }) {
                 <LiveImage endpoint="/api/v1/media/thermal" fallback={thermalFeed} enabled={thermalLive} interval={400} alt="열화상 실시간 영상" />
                 <div className="thermal-reading detail-reading"><span>MAX</span><strong>{(telemetry?.max_temperature_c ?? 84.6).toFixed(1)}°C</strong></div>
                 <div className="thermal-scale" aria-label="열화상 색상 범위"><span>90°</span><i /><span>20°</span></div>
-                {thermalLive && <span className="simulation-watermark">RGB 기반 합성 열화상</span>}
+                {thermalLive && <span className="simulation-watermark">{gazeboThermal ? "GAZEBO THERMAL · SIMULATED" : "RGB 기반 합성 열화상"}</span>}
               </div>
               <button type="button" className="snapshot-button" onClick={() => saveSnapshot(true)}><ImageSquare size={17} />열화상 스냅샷</button>
             </div>

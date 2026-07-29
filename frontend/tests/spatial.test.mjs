@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildFovPolygon,
+  buildFootprintPolygon,
   detectionOpacity,
   mapToGrid,
   temperatureColor,
@@ -31,6 +32,16 @@ test("builds a camera sector from pose, FOV and range", () => {
   const points = polygon.split(" ");
   assert.equal(points.length, 8);
   assert.equal(points[0], "100.00,50.00");
+});
+
+test("projects the dispenser-aware robot footprint at the current heading", () => {
+  const polygon = buildFootprintPolygon(
+    { available: true, x: 0, y: 0, yaw: 0 },
+    mapSpec,
+  ).split(" ");
+  assert.equal(polygon.length, 4);
+  assert.equal(polygon[0], "91.80,53.10");
+  assert.equal(polygon[2], "103.80,46.90");
 });
 
 test("uses stable heat colors for warning and critical temperatures", () => {
