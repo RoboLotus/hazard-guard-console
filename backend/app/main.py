@@ -12,12 +12,14 @@ from .bridge import (
     spatial_store,
     telemetry_store,
 )
+from .mode_manager import system_mode_manager
 from .models import (
     CommandRequest,
     MockCommand,
     NavigationGoal,
     NavigationRoute,
     RobotTelemetry,
+    SystemModeRequest,
     ThermalDetection,
     ThresholdSettings,
 )
@@ -29,6 +31,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        system_mode_manager.stop()
         ros_bridge.stop()
 
 
@@ -46,6 +49,30 @@ app.add_middleware(
 thresholds = ThresholdSettings()
 
 
+def require_patrol_mode() -> None:
+    """Reject motion requests while the managed ROS stack is not in patrol mode."""
+
+    status = system_mode_manager.snapshot()
+    if not status.get("control_enabled"):
+        return
+    if status.get("mode") != "patrol":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "맵 생성 모드에서는 순찰 명령을 실행할 수 없습니다. "
+                "지도 탭에서 순찰 / AMCL·Nav2 모드로 전환하세요."
+            ),
+        )
+    if status.get("state") not in {"running", "external"}:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "순찰 모드가 아직 준비되지 않았습니다. "
+                "AMCL·Nav2 실행 상태가 준비된 뒤 다시 시도하세요."
+            ),
+        )
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -59,6 +86,36 @@ def health():
 @app.get("/api/v1/robot/status", response_model=RobotTelemetry)
 def robot_status():
     return telemetry_store.snapshot()
+
+
+@app.get("/api/v1/system/mode")
+def system_mode():
+    return system_mode_manager.snapshot()
+
+
+@app.put("/api/v1/system/mode")
+def update_system_mode(request: SystemModeRequest):
+    ros_bridge.cancel_route()
+    ros_bridge.cancel_navigation()
+    result = system_mode_manager.switch_mode(request.mode)
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result
+
+
+@app.delete("/api/v1/system/mode")
+def stop_system_mode():
+    ros_bridge.cancel_route()
+    ros_bridge.cancel_navigation()
+    return system_mode_manager.stop()
+
+
+@app.post("/api/v1/system/map/save")
+def save_system_map():
+    result = system_mode_manager.save_map()
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result
 
 
 @app.get("/api/v1/media/status")
@@ -118,6 +175,7 @@ def navigation_status():
 
 @app.post("/api/v1/navigation/goal")
 def navigation_goal(goal: NavigationGoal):
+    require_patrol_mode()
     return ros_bridge.navigate_to(goal.x, goal.y, goal.yaw, goal.frame_id)
 
 
@@ -138,6 +196,7 @@ def recommend_navigation_route(route: NavigationRoute):
 
 @app.post("/api/v1/navigation/route")
 def start_navigation_route(route: NavigationRoute):
+    require_patrol_mode()
     return ros_bridge.start_route(route.model_dump())
 
 

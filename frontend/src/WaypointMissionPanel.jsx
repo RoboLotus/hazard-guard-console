@@ -51,6 +51,9 @@ export default function WaypointMissionPanel({
   selectedId,
   mapLive,
   mapMismatch,
+  patrolModeReady,
+  modeControlEnabled,
+  modeTransitioning,
   missionStatus,
   busy,
   onSelect,
@@ -63,6 +66,7 @@ export default function WaypointMissionPanel({
   onShift,
   onReposition,
   onStart,
+  onRequestPatrolMode,
   onCancelMission,
   onRecommend,
   onSave,
@@ -112,6 +116,15 @@ export default function WaypointMissionPanel({
       {mapMismatch && (
         <div className="route-notice danger">
           저장한 경로와 현재 지도 버전이 다릅니다. 좌표를 확인한 후 다시 저장하세요.
+        </div>
+      )}
+      {!patrolModeReady && (
+        <div className="route-notice warning">
+          <strong>순찰 모드 전환 필요</strong>
+          <span>
+            맵 생성 모드에서는 로봇 이동 명령을 내릴 수 없습니다.
+            AMCL·Nav2 순찰 모드로 전환한 뒤 임무를 시작하세요.
+          </span>
         </div>
       )}
       {missionStatus?.status === "failed" && (
@@ -362,6 +375,16 @@ export default function WaypointMissionPanel({
         {missionActive ? (
           <button type="button" className="button danger-button wide-button" onClick={onCancelMission}>
             <Stop size={18} weight="fill" />순찰 중단
+          </button>
+        ) : !patrolModeReady ? (
+          <button
+            type="button"
+            className="button secondary wide-button"
+            disabled={busy || modeTransitioning || !modeControlEnabled}
+            onClick={onRequestPatrolMode}
+          >
+            <NavigationArrow size={18} weight="fill" />
+            {modeTransitioning ? "순찰 모드 준비 중" : "순찰 모드로 전환"}
           </button>
         ) : (
           <button

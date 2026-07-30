@@ -177,6 +177,85 @@ function CurrentTime() {
   );
 }
 
+const systemModeLabels = {
+  mapping: "맵 생성 모드",
+  patrol: "순찰 모드",
+  idle: "모드 미선택",
+};
+
+const systemStateLabels = {
+  disabled: "터미널 제어",
+  stopped: "정지",
+  starting: "시작 중",
+  running: "실행 중",
+  stopping: "종료 중",
+  external: "외부 실행",
+  failed: "오류",
+};
+
+function SystemModeControl({ systemMode, busy, onChange }) {
+  const mode = systemMode?.mode || "idle";
+  const state = systemMode?.state || "disabled";
+  const controlEnabled = Boolean(systemMode?.control_enabled);
+  const changing = busy || ["starting", "stopping"].includes(state);
+  const unavailable = !controlEnabled || changing;
+  const stateTone = state === "running"
+    ? "success"
+    : state === "failed"
+      ? "danger"
+      : "neutral";
+
+  return (
+    <section className={`detail-card system-mode-control ${state}`} aria-label="로봇 운용 모드">
+      <header className="system-mode-heading">
+        <div className="detail-card-title">
+          <MapTrifold size={20} weight="fill" />
+          <div>
+            <strong>지도 운용 모드</strong>
+            <span>SLAM과 AMCL·Nav2 실행 환경 전환</span>
+          </div>
+        </div>
+        <StatusPill tone={stateTone}>{systemStateLabels[state] || state}</StatusPill>
+      </header>
+      <p className="system-mode-description">
+        {mode === "mapping"
+          ? "공간을 수동 주행하며 새로운 지도를 작성합니다."
+          : mode === "patrol"
+            ? "저장된 지도에서 위치를 추정하고 웨이포인트를 순찰합니다."
+            : "작업 목적에 맞는 모드를 선택하세요."}
+      </p>
+      <div className="system-mode-buttons">
+        <button
+          type="button"
+          className={mode === "mapping" ? "active" : ""}
+          disabled={unavailable}
+          aria-pressed={mode === "mapping"}
+          onClick={() => onChange("mapping")}
+        >
+          <MapTrifold size={18} weight={mode === "mapping" ? "fill" : "regular"} />
+          <span>맵 생성<small>SLAM</small></span>
+        </button>
+        <button
+          type="button"
+          className={mode === "patrol" ? "active" : ""}
+          disabled={unavailable}
+          aria-pressed={mode === "patrol"}
+          onClick={() => onChange("patrol")}
+        >
+          <NavigationArrow size={18} weight={mode === "patrol" ? "fill" : "regular"} />
+          <span>순찰<small>AMCL · Nav2</small></span>
+        </button>
+      </div>
+      <footer>
+        <span>{systemModeLabels[mode] || "상태 확인 중"}</span>
+        <small className={systemMode?.map_available ? "available" : ""}>
+          {systemMode?.map_available ? "순찰 지도 준비됨" : "저장 지도 없음"}
+        </small>
+      </footer>
+    </section>
+  );
+}
+
 function Sidebar({ active, onNavigate, pendingEvents }) {
   return (
     <aside className="sidebar" aria-label="주 메뉴">
@@ -833,7 +912,16 @@ function DetailHeading({ eyebrow, title, description, children }) {
   );
 }
 
-function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
+function MapPage({
+  mediaStatus,
+  telemetry,
+  spatialState,
+  systemMode,
+  modeBusy,
+  onModeChange,
+  onSaveSystemMap,
+  notify,
+}) {
   const [goalMode, setGoalMode] = useState(false);
   const [goalCandidate, setGoalCandidate] = useState(null);
   const savedRoute = useRef(loadWaypointRoute());
@@ -861,6 +949,11 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
     && savedMapSignature
     && savedMapSignature !== currentMapSignature,
   );
+  const patrolModeReady = (
+    systemMode?.mode === "patrol"
+    && ["running", "external"].includes(systemMode?.state)
+  );
+  const modeTransitioning = ["starting", "stopping"].includes(systemMode?.state);
   const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
   const heatDetections = spatialState?.heatmap?.detections || [];
   const navStatusLabels = {
@@ -1031,6 +1124,13 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
   const startRoute = async () => {
     const enabled = activeWaypoints(waypoints);
     if (!enabled.length) return;
+    if (!patrolModeReady) {
+      notify(
+        "맵 생성 모드에서는 순찰을 시작할 수 없습니다. 먼저 순찰 / AMCL·Nav2 모드로 전환하세요.",
+        "warning",
+      );
+      return;
+    }
     setRouteBusy(true);
     try {
       const response = await fetch("/api/v1/navigation/route", {
@@ -1067,7 +1167,7 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
       notify("순찰 중단 요청에 실패했습니다.", "warning");
     }
   };
-  const saveMap = async () => {
+  const saveMapImage = async () => {
     try {
       await downloadAsset(mapLive ? "/api/v1/media/map" : slamMap, `hazard-guard-map-${new Date().toISOString().slice(0, 10)}.png`);
       notify("현재 지도를 PNG 파일로 저장했습니다.");
@@ -1099,6 +1199,11 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
           onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")}
         />
         <aside className="map-side-panel">
+          <SystemModeControl
+            systemMode={systemMode}
+            busy={modeBusy}
+            onChange={onModeChange}
+          />
           <WaypointMissionPanel
             waypoints={waypoints}
             candidate={goalCandidate}
@@ -1107,6 +1212,9 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
             selectedId={selectedWaypointId}
             mapLive={mapLive}
             mapMismatch={mapMismatch}
+            patrolModeReady={patrolModeReady}
+            modeControlEnabled={Boolean(systemMode?.control_enabled)}
+            modeTransitioning={modeTransitioning}
             missionStatus={missionStatus}
             busy={routeBusy}
             onSelect={setSelectedWaypointId}
@@ -1119,6 +1227,7 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
             onShift={shiftWaypointOrder}
             onReposition={beginReposition}
             onStart={startRoute}
+            onRequestPatrolMode={() => onModeChange("patrol")}
             onCancelMission={cancelRoute}
             onRecommend={recommendRoute}
             onSave={persistRoute}
@@ -1163,8 +1272,23 @@ function MapPage({ mediaStatus, telemetry, spatialState, notify }) {
             </div>
           </section>
           <section className="detail-card compact-card">
-            <div className="detail-card-title"><FloppyDisk size={20} /><div><strong>지도 파일</strong><span>현재 화면 저장</span></div></div>
-            <button type="button" className="button ghost wide-button" onClick={saveMap}><DownloadSimple size={18} />PNG로 저장</button>
+            <div className="detail-card-title"><FloppyDisk size={20} /><div><strong>지도 파일</strong><span>순찰용 지도와 현재 화면 저장</span></div></div>
+            <div className="map-file-actions">
+              <button
+                type="button"
+                className="button primary wide-button"
+                onClick={onSaveSystemMap}
+                disabled={systemMode?.mode !== "mapping" || !systemMode?.control_enabled}
+              >
+                <FloppyDisk size={18} />ROS 지도 저장
+              </button>
+              <button type="button" className="button ghost wide-button" onClick={saveMapImage}><DownloadSimple size={18} />PNG로 저장</button>
+            </div>
+            <p className={`map-storage-status ${systemMode?.map_available ? "available" : ""}`}>
+              {systemMode?.map_available
+                ? "AMCL 순찰에 사용할 지도 파일이 준비되었습니다."
+                : "맵 생성 모드에서 지도를 작성한 뒤 ROS 지도를 저장하세요."}
+            </p>
           </section>
         </aside>
       </div>
@@ -1519,6 +1643,13 @@ export function App() {
   const [telemetry, setTelemetry] = useState(null);
   const [mediaStatus, setMediaStatus] = useState(null);
   const [spatialState, setSpatialState] = useState(fallbackSpatialState);
+  const [systemMode, setSystemMode] = useState({
+    mode: "idle",
+    state: "disabled",
+    control_enabled: false,
+    map_available: false,
+  });
+  const [modeBusy, setModeBusy] = useState(false);
 
   const notify = (message, tone = "success") => {
     setToast({ message, tone, id: Date.now() });
@@ -1539,6 +1670,26 @@ export function App() {
     };
     void checkHealth();
     const interval = window.setInterval(checkHealth, 5000);
+    return () => { disposed = true; window.clearInterval(interval); };
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    const checkSystemMode = async () => {
+      try {
+        const response = await fetch("/api/v1/system/mode", { cache: "no-store" });
+        if (!disposed && response.ok) setSystemMode(await response.json());
+      } catch {
+        if (!disposed) {
+          setSystemMode((current) => ({
+            ...current,
+            state: "disabled",
+            control_enabled: false,
+          }));
+        }
+      }
+    };
+    void checkSystemMode();
+    const interval = window.setInterval(checkSystemMode, 1500);
     return () => { disposed = true; window.clearInterval(interval); };
   }, []);
   useEffect(() => {
@@ -1632,13 +1783,64 @@ export function App() {
     if (!response.ok) throw new Error(`Command failed: ${response.status}`);
     return response.json();
   };
+  const changeSystemMode = async (nextMode) => {
+    if (
+      systemMode.mode === nextMode
+      && ["starting", "running", "external"].includes(systemMode.state)
+    ) {
+      notify(`이미 ${systemModeLabels[nextMode]}가 실행 중입니다.`, "info");
+      return;
+    }
+    const confirmed = window.confirm(
+      nextMode === "mapping"
+        ? "현재 순찰과 Nav2를 중단하고 SLAM 맵 생성 모드로 전환할까요?"
+        : "현재 SLAM 지도를 저장한 뒤 AMCL·Nav2 순찰 모드로 전환할까요?",
+    );
+    if (!confirmed) return;
+    setModeBusy(true);
+    try {
+      const response = await fetch("/api/v1/system/mode", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: nextMode }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "운용 모드를 전환하지 못했습니다.");
+      }
+      setSystemMode(result);
+      notify(result.message || `${systemModeLabels[nextMode]} 전환을 시작했습니다.`);
+    } catch (error) {
+      notify(error.message || "운용 모드 전환 API에 연결하지 못했습니다.", "warning");
+    } finally {
+      setModeBusy(false);
+    }
+  };
+  const saveSystemMap = async () => {
+    setModeBusy(true);
+    try {
+      const response = await fetch("/api/v1/system/map/save", { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "ROS 지도를 저장하지 못했습니다.");
+      setSystemMode(result);
+      notify(result.message);
+    } catch (error) {
+      notify(error.message || "ROS 지도 저장 API에 연결하지 못했습니다.", "warning");
+    } finally {
+      setModeBusy(false);
+    }
+  };
 
   return (
     <div className="app-shell">
-      <Sidebar active={active} onNavigate={navigate} pendingEvents={events.filter((event) => event.status === "new").length} />
+      <Sidebar
+        active={active}
+        onNavigate={navigate}
+        pendingEvents={events.filter((event) => event.status === "new").length}
+      />
       <main className="main-content">
         {active === "overview" && <Overview events={events} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} />}
-        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} notify={notify} />}
+        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onSaveSystemMap={saveSystemMap} notify={notify} />}
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
         {active === "report" && <ReportsPage events={events} notify={notify} />}

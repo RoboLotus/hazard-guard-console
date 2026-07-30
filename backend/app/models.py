@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -31,6 +33,10 @@ class MockCommand(BaseModel):
 
 class CommandRequest(BaseModel):
     enabled: bool = False
+
+
+class SystemModeRequest(BaseModel):
+    mode: Literal["mapping", "patrol"]
 
 
 class NavigationGoal(BaseModel):

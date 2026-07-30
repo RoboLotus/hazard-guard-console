@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app import bridge
+from app import main as main_module
 from app.bridge import MediaStore
 from app.main import app
 
@@ -52,6 +53,49 @@ def test_robot_status_exposes_dashboard_telemetry_contract():
     assert payload["robot_id"] == "rosmaster-m1-mock"
     assert isinstance(payload["battery_percent"], float)
     assert payload["lidar_status"] == "normal"
+
+
+def test_system_mode_status_exposes_webui_control_contract():
+    response = client.get("/api/v1/system/mode")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] in {"idle", "mapping", "patrol"}
+    assert "control_enabled" in payload
+    assert "map_available" in payload
+    assert "managed" in payload
+
+
+def test_system_mode_switch_routes_validated_mode_to_manager(monkeypatch):
+    expected = {
+        "mode": "mapping",
+        "state": "starting",
+        "accepted": True,
+        "managed": True,
+        "control_enabled": True,
+        "pid": 123,
+        "map_path": "runtime/maps/facility.yaml",
+        "map_available": False,
+        "message": "SLAM 지도 생성 모드를 시작하고 있습니다.",
+        "started_at": "2026-07-30T00:00:00+00:00",
+        "updated_at": "2026-07-30T00:00:00+00:00",
+        "exit_code": None,
+    }
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "switch_mode",
+        lambda mode: {**expected, "mode": mode},
+    )
+
+    response = client.put("/api/v1/system/mode", json={"mode": "mapping"})
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "mapping"
+    assert response.json()["state"] == "starting"
+
+
+def test_system_mode_rejects_unknown_mode():
+    response = client.put("/api/v1/system/mode", json={"mode": "teleop"})
+    assert response.status_code == 422
 
 
 def test_media_status_is_explicit_when_ros_streams_are_unavailable():
@@ -198,6 +242,60 @@ def test_route_start_never_claims_motion_without_ros():
     assert payload["accepted"] is False
     assert payload["status"] == "mock"
     assert payload["mock"] is True
+
+
+def test_route_start_rejects_mapping_mode_before_ros_motion(monkeypatch):
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda: {
+            "control_enabled": True,
+            "mode": "mapping",
+            "state": "running",
+        },
+    )
+
+    response = client.post(
+        "/api/v1/navigation/route",
+        json={
+            "name": "Blocked mapping route",
+            "frame_id": "map",
+            "waypoints": [
+                {
+                    "id": "mapping-1",
+                    "name": "점검구역",
+                    "x": 0,
+                    "y": 0,
+                    "yaw": 0,
+                    "dwell_seconds": 0,
+                    "enabled": True,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    assert "맵 생성 모드" in response.json()["detail"]
+
+
+def test_navigation_goal_waits_for_patrol_mode_to_be_ready(monkeypatch):
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda: {
+            "control_enabled": True,
+            "mode": "patrol",
+            "state": "starting",
+        },
+    )
+
+    response = client.post(
+        "/api/v1/navigation/goal",
+        json={"x": 1.0, "y": 1.0, "yaw": 0.0, "frame_id": "map"},
+    )
+
+    assert response.status_code == 409
+    assert "아직 준비되지 않았습니다" in response.json()["detail"]
 
 
 def test_route_rejects_duplicate_waypoint_ids():
