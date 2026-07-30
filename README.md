@@ -14,19 +14,35 @@ WebUI/
 
 ## 빠른 실행
 
-Windows PowerShell:
+실제 ROS 2와 연결하지 않고 UI와 FastAPI mock 데이터를 확인하는 방법입니다.
+Node.js 20 이상과 Python 3.10 이상을 권장합니다.
+
+첫 번째 Windows PowerShell에서 백엔드를 실행합니다.
 
 ```powershell
-cd D:\Develop\hazard-guard\WebUI
-.\.harness\start-dev.ps1
+cd D:\Develop\hazard-guard\WebUI\backend
+py -3.10 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
-브라우저에서 `http://127.0.0.1:5173/`을 엽니다.
+가상환경과 의존성이 이미 준비되어 있다면 생성·설치 명령은 생략해도 됩니다.
+
+두 번째 Windows PowerShell에서 프런트엔드를 실행합니다.
+
+```powershell
+cd D:\Develop\hazard-guard\WebUI\frontend
+npm ci
+npm run dev
+```
+
+브라우저에서 `http://127.0.0.1:5173/`을 엽니다. Vite 개발 서버는 `/api`와
+`/ws` 요청을 `http://127.0.0.1:8000`으로 전달합니다.
 
 Gazebo와 ROS 2를 연결한 전체 시뮬레이션은 로컬 Docker 컨테이너에서 FastAPI를
-실행한 뒤 WebUI 왼쪽의 `맵 생성` 또는 `순찰`을 선택합니다. 이때 WebUI가
-Gazebo·SLAM Toolbox·AMCL·Nav2 launch를 직접 관리하므로 별도 터미널에서 같은
-launch를 동시에 실행하지 않습니다.
+실행한 뒤 WebUI의 `지도` 탭에 있는 `지도 운용 모드`에서 `맵 생성` 또는
+`순찰`을 선택합니다. 이때 WebUI가 Gazebo·SLAM Toolbox·AMCL·Nav2 launch를
+직접 관리하므로 별도 터미널에서 같은 launch를 동시에 실행하지 않습니다.
 
 ```bash
 cd /mnt/d/Develop/hazard-guard/local-docker
@@ -51,10 +67,11 @@ docker compose -f compose.robot.yaml exec robot bash -lc \
 
 ```powershell
 cd D:\Develop\hazard-guard\WebUI\frontend
-npm run dev:simulation
+npm ci
+npm run dev
 ```
 
-브라우저에서 `http://127.0.0.1:5174/`을 엽니다.
+브라우저에서 `http://127.0.0.1:5173/`을 엽니다.
 
 ## 맵 생성·순찰 모드
 
@@ -67,6 +84,12 @@ npm run dev:simulation
 `Robot/runtime/maps/facility.yaml`과 `facility.pgm`으로 먼저 저장합니다. 지도가
 없으면 순찰 모드는 시작하지 않고 원인을 화면에 표시합니다. 지도 상세 화면의
 `ROS 지도 저장` 버튼으로도 명시적으로 저장할 수 있습니다.
+
+맵 생성 모드에서는 단일 목적지 이동과 웨이포인트 순찰 명령이 차단됩니다.
+웨이포인트 영역의 `순찰 모드로 전환` 버튼을 누르거나 지도 운용 모드에서
+`순찰 / AMCL·Nav2`를 선택하십시오. 모드 상태가 `실행 중`으로 바뀐 뒤
+`이 순서로 순찰 시작`을 다시 눌러야 합니다. 모드 전환만으로 로봇이 자동
+출발하지는 않습니다.
 
 터미널에서 시작한 기존 SLAM 또는 Nav2가 감지되면 WebUI는 해당 프로세스를
 강제로 종료하지 않습니다. 기존 launch를 터미널에서 종료한 후 WebUI 모드
