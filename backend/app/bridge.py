@@ -169,6 +169,7 @@ class RouteMissionStore:
         index: int,
         status: str,
         message: str,
+        details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if 0 <= index < len(self._data["waypoints"]):
@@ -177,6 +178,7 @@ class RouteMissionStore:
                         "status": status,
                         "message": message,
                         "updated_at": utc_now(),
+                        **(details or {}),
                     }
                 )
             self._data["updated_at"] = utc_now()
@@ -340,6 +342,10 @@ class SpatialStore:
             }
             self._pose = pose
             self._append_trail_locked(pose)
+
+    def clear_trail(self) -> None:
+        with self._lock:
+            self._trail.clear()
 
     def _append_trail_locked(self, pose: dict[str, Any]) -> None:
         point = {
@@ -566,6 +572,15 @@ class RosBridge:
         self._mission_cancel_event = threading.Event()
         self._mission_lock = threading.RLock()
         self._last_pose_update = 0.0
+        self._waypoint_position_tolerance_m = float(
+            os.getenv("HAZARD_GUARD_WAYPOINT_POSITION_TOLERANCE_M", "0.08")
+        )
+        self._waypoint_yaw_tolerance_rad = float(
+            os.getenv("HAZARD_GUARD_WAYPOINT_YAW_TOLERANCE_RAD", "0.05")
+        )
+        self._waypoint_alignment_retries = max(
+            0, int(os.getenv("HAZARD_GUARD_WAYPOINT_ALIGNMENT_RETRIES", "2"))
+        )
 
     def start(self) -> None:
         if os.getenv("HAZARD_GUARD_ROS_ENABLED", "0") != "1":
@@ -1139,25 +1154,49 @@ class RosBridge:
             )
 
     def _current_map_pose(self) -> tuple[float, float] | None:
+        pose = self._current_map_pose_with_yaw()
+        return (pose[0], pose[1]) if pose is not None else None
+
+    def _current_map_pose_with_yaw(self) -> tuple[float, float, float] | None:
         pose = self.spatial.snapshot().get("pose") or {}
         if not pose.get("available"):
             return None
         try:
-            return float(pose["x"]), float(pose["y"])
+            return float(pose["x"]), float(pose["y"]), float(pose["yaw"])
         except (KeyError, TypeError, ValueError):
             return None
 
     @staticmethod
     def _euclidean_distance(
-        start: tuple[float, float],
-        goal: tuple[float, float],
+        start: tuple[float, ...],
+        goal: tuple[float, ...],
     ) -> float:
         return math.hypot(goal[0] - start[0], goal[1] - start[1])
 
+    @staticmethod
+    def _normalize_angle(angle: float) -> float:
+        return math.atan2(math.sin(angle), math.cos(angle))
+
+    @classmethod
+    def _pose_errors(
+        cls,
+        actual: tuple[float, float, float],
+        goal: tuple[float, float, float],
+    ) -> tuple[float, float]:
+        return (
+            cls._euclidean_distance(actual, goal),
+            abs(cls._normalize_angle(goal[2] - actual[2])),
+        )
+
+    @staticmethod
+    def _set_pose_yaw(pose: Any, yaw: float) -> None:
+        pose.orientation.z = math.sin(float(yaw) / 2.0)
+        pose.orientation.w = math.cos(float(yaw) / 2.0)
+
     def _compute_path_distance(
         self,
-        start: tuple[float, float],
-        goal: tuple[float, float],
+        start: tuple[float, float, float],
+        goal: tuple[float, float, float],
         frame_id: str,
         *,
         timeout_sec: float = 4.0,
@@ -1176,11 +1215,11 @@ class RosBridge:
         goal_message.start.header.frame_id = frame_id
         goal_message.start.pose.position.x = float(start[0])
         goal_message.start.pose.position.y = float(start[1])
-        goal_message.start.pose.orientation.w = 1.0
+        self._set_pose_yaw(goal_message.start.pose, start[2])
         goal_message.goal.header.frame_id = frame_id
         goal_message.goal.pose.position.x = float(goal[0])
         goal_message.goal.pose.position.y = float(goal[1])
-        goal_message.goal.pose.orientation.w = 1.0
+        self._set_pose_yaw(goal_message.goal.pose, goal[2])
         goal_message.use_start = True
         goal_message.planner_id = "GridBased"
 
@@ -1226,7 +1265,7 @@ class RosBridge:
 
     def recommend_route(self, route: dict[str, Any]) -> dict[str, Any]:
         waypoints = [item for item in route["waypoints"] if item.get("enabled", True)]
-        current = self._current_map_pose()
+        current = self._current_map_pose_with_yaw()
         if current is None:
             return {
                 "accepted": False,
@@ -1250,7 +1289,11 @@ class RosBridge:
         while remaining:
             candidates: list[tuple[float, dict[str, Any]]] = []
             for waypoint in remaining:
-                target = (float(waypoint["x"]), float(waypoint["y"]))
+                target = (
+                    float(waypoint["x"]),
+                    float(waypoint["y"]),
+                    float(waypoint.get("yaw", 0.0)),
+                )
                 if use_nav2:
                     distance, _ = self._compute_path_distance(
                         current,
@@ -1278,12 +1321,16 @@ class RosBridge:
             distance, selected = min(candidates, key=lambda item: item[0])
             ordered.append(selected)
             total_distance += distance
-            current = (float(selected["x"]), float(selected["y"]))
+            current = (
+                float(selected["x"]),
+                float(selected["y"]),
+                float(selected.get("yaw", 0.0)),
+            )
             remaining = [item for item in remaining if item["id"] != selected["id"]]
             unreachable.clear()
 
         if route.get("return_to_start") and ordered:
-            start_pose = self._current_map_pose()
+            start_pose = self._current_map_pose_with_yaw()
             if start_pose is not None:
                 if use_nav2:
                     return_distance, _ = self._compute_path_distance(
@@ -1308,6 +1355,85 @@ class RosBridge:
             "ordered_ids": [item["id"] for item in ordered],
             "total_distance_m": round(total_distance, 3),
         }
+
+    def _wait_for_navigation_result(self, timeout_sec: float = 180.0) -> str:
+        deadline = time.monotonic() + timeout_sec
+        while not self._navigation_result_event.wait(timeout=0.25):
+            if self._mission_cancel_event.is_set():
+                self.cancel_navigation()
+            if time.monotonic() >= deadline:
+                self.cancel_navigation()
+                self._navigation_result_status = "failed"
+                break
+        return self._navigation_result_status or "failed"
+
+    def _verify_and_refine_waypoint_alignment(
+        self,
+        index: int,
+        waypoint: dict[str, Any],
+        frame_id: str,
+    ) -> tuple[bool, str | None]:
+        goal = (
+            float(waypoint["x"]),
+            float(waypoint["y"]),
+            float(waypoint.get("yaw", 0.0)),
+        )
+        for attempt in range(self._waypoint_alignment_retries + 1):
+            if self._mission_cancel_event.wait(timeout=0.35):
+                return False, "사용자 취소"
+
+            actual = self._current_map_pose_with_yaw()
+            if actual is None:
+                return False, "최종 로봇 위치와 방향을 확인할 수 없습니다."
+            position_error, yaw_error = self._pose_errors(actual, goal)
+            details = {
+                "position_error_m": round(position_error, 3),
+                "yaw_error_deg": round(math.degrees(yaw_error), 2),
+                "actual_yaw_deg": round(math.degrees(actual[2]), 2),
+            }
+            if (
+                position_error <= self._waypoint_position_tolerance_m
+                and yaw_error <= self._waypoint_yaw_tolerance_rad
+            ):
+                self.mission.update_waypoint(
+                    index,
+                    "aligned",
+                    (
+                        f"정렬 완료 · 위치 오차 {position_error:.2f}m "
+                        f"· 방향 오차 {math.degrees(yaw_error):.1f}°"
+                    ),
+                    details,
+                )
+                return True, None
+
+            if attempt >= self._waypoint_alignment_retries:
+                return (
+                    False,
+                    (
+                        f"최종 정렬 오차가 허용 범위를 벗어났습니다. "
+                        f"위치 {position_error:.2f}m, 방향 {math.degrees(yaw_error):.1f}°"
+                    ),
+                )
+
+            self.mission.update_waypoint(
+                index,
+                "aligning",
+                (
+                    f"카메라 방향 정렬 중 ({attempt + 1}/"
+                    f"{self._waypoint_alignment_retries})"
+                ),
+                details,
+            )
+            response = self.navigate_to(goal[0], goal[1], goal[2], frame_id)
+            if not response.get("accepted"):
+                return False, response.get("message", "정렬 목표를 전송하지 못했습니다.")
+            outcome = self._wait_for_navigation_result(timeout_sec=45.0)
+            if outcome == "canceled":
+                return False, "사용자 취소"
+            if outcome != "succeeded":
+                return False, self.navigation.snapshot().get(
+                    "message", "최종 방향 정렬에 실패했습니다."
+                )
 
     def start_route(self, route: dict[str, Any]) -> dict[str, Any]:
         with self._mission_lock:
@@ -1334,6 +1460,7 @@ class RosBridge:
                     }
                 )
 
+            self.spatial.clear_trail()
             snapshot = self.mission.begin(route, mock=False)
             self._mission_cancel_event.clear()
             self._mission_thread = threading.Thread(
@@ -1347,7 +1474,7 @@ class RosBridge:
 
     def _run_route(self, route: dict[str, Any]) -> None:
         waypoints = [item for item in route["waypoints"] if item.get("enabled", True)]
-        start = self._current_map_pose()
+        start = self._current_map_pose_with_yaw()
         if start is None:
             self.mission.update(
                 {
@@ -1381,7 +1508,11 @@ class RosBridge:
                     }
                 )
                 self.mission.update_waypoint(index, "validating", "Nav2 경로 확인 중")
-                target = (float(waypoint["x"]), float(waypoint["y"]))
+                target = (
+                    float(waypoint["x"]),
+                    float(waypoint["y"]),
+                    float(waypoint.get("yaw", 0.0)),
+                )
                 distance, error = self._compute_path_distance(
                     segment_start,
                     target,
@@ -1460,16 +1591,7 @@ class RosBridge:
                     )
                     return
 
-                deadline = time.monotonic() + 180.0
-                while not self._navigation_result_event.wait(timeout=0.25):
-                    if self._mission_cancel_event.is_set():
-                        self.cancel_navigation()
-                    if time.monotonic() >= deadline:
-                        self.cancel_navigation()
-                        self._navigation_result_status = "failed"
-                        break
-
-                outcome = self._navigation_result_status
+                outcome = self._wait_for_navigation_result()
                 if self._mission_cancel_event.is_set() or outcome == "canceled":
                     self.mission.update_waypoint(index, "canceled", "사용자 취소")
                     self.mission.update(
@@ -1497,6 +1619,40 @@ class RosBridge:
                             ),
                         }
                     )
+                    return
+
+                aligned, alignment_error = self._verify_and_refine_waypoint_alignment(
+                    index,
+                    waypoint,
+                    route["frame_id"],
+                )
+                if not aligned:
+                    if self._mission_cancel_event.is_set() or alignment_error == "사용자 취소":
+                        self.mission.update_waypoint(index, "canceled", "사용자 취소")
+                        self.mission.update(
+                            {
+                                "status": "canceled",
+                                "accepted": False,
+                                "message": "사용자가 순찰을 취소했습니다.",
+                            }
+                        )
+                    else:
+                        self.mission.update_waypoint(
+                            index,
+                            "failed",
+                            alignment_error or "최종 자세 정렬 실패",
+                        )
+                        self.mission.update(
+                            {
+                                "status": "failed",
+                                "accepted": False,
+                                "current_index": index,
+                                "message": (
+                                    f"{waypoint['name']}에서 카메라 방향을 "
+                                    f"정렬하지 못했습니다. {alignment_error or ''}"
+                                ).strip(),
+                            }
+                        )
                     return
 
                 dwell = float(waypoint.get("dwell_seconds", 0.0))

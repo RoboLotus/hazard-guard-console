@@ -56,5 +56,44 @@ def test_mode_launch_arguments_are_shell_free_and_mode_specific(monkeypatch, tmp
         "hazard_guard_simulation",
         "localization.launch.py",
     ]
+    assert "start_simulation:=false" in mapping
+    assert "start_simulation:=false" in patrol
     assert any(argument.startswith("map:=") for argument in patrol)
     assert all(";" not in argument for argument in mapping + patrol)
+
+
+def test_simulation_launch_arguments_are_separate_from_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+
+    command = manager._simulation_launch_arguments()
+
+    assert command[:4] == [
+        "ros2",
+        "launch",
+        "hazard_guard_simulation",
+        "simulation.launch.py",
+    ]
+    assert "simulation_mode:=kinematic" in command
+    assert all(";" not in argument for argument in command)
+
+
+def test_existing_simulator_is_reused_without_starting_duplicate(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(manager, "_detect_external_simulation", lambda: True)
+    monkeypatch.setattr(
+        manager,
+        "_cleanup_orphaned_simulators",
+        lambda: (_ for _ in ()).throw(AssertionError("must not clean")),
+    )
+
+    assert manager._ensure_simulation() is True
+    snapshot = manager.snapshot(detect_external=False)
+    assert snapshot["simulation_state"] == "external"
+    assert snapshot["simulation_managed"] is False

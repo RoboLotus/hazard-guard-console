@@ -27,6 +27,8 @@ const waypointStateLabels = {
   pending: "대기",
   validating: "경로 확인",
   active: "이동 중",
+  aligning: "방향 정렬",
+  aligned: "정렬 완료",
   dwelling: "점검 대기",
   completed: "완료",
   failed: "실패",
@@ -51,9 +53,11 @@ export default function WaypointMissionPanel({
   selectedId,
   mapLive,
   mapMismatch,
+  patrolModeSelected,
   patrolModeReady,
   modeControlEnabled,
   modeTransitioning,
+  readinessMessage,
   missionStatus,
   busy,
   onSelect,
@@ -120,10 +124,11 @@ export default function WaypointMissionPanel({
       )}
       {!patrolModeReady && (
         <div className="route-notice warning">
-          <strong>순찰 모드 전환 필요</strong>
+          <strong>{patrolModeSelected ? "AMCL·Nav2 준비 중" : "순찰 모드 전환 필요"}</strong>
           <span>
-            맵 생성 모드에서는 로봇 이동 명령을 내릴 수 없습니다.
-            AMCL·Nav2 순찰 모드로 전환한 뒤 임무를 시작하세요.
+            {patrolModeSelected
+              ? (readinessMessage || "위치 추정과 주행 서버가 준비될 때까지 기다리세요.")
+              : "맵 생성 모드에서는 로봇 이동 명령을 내릴 수 없습니다. AMCL·Nav2 순찰 모드로 전환한 뒤 임무를 시작하세요."}
           </span>
         </div>
       )}
@@ -310,6 +315,12 @@ export default function WaypointMissionPanel({
                       </div>
                     </label>
                   </div>
+                  {Number.isFinite(itemStatus?.yaw_error_deg) && (
+                    <div className="waypoint-arrival-error">
+                      최근 도착 오차 · 위치 {Number(itemStatus.position_error_m).toFixed(2)}m
+                      · 방향 {Number(itemStatus.yaw_error_deg).toFixed(1)}°
+                    </div>
+                  )}
                   <div className="waypoint-editor-actions">
                     <button
                       type="button"
@@ -380,11 +391,13 @@ export default function WaypointMissionPanel({
           <button
             type="button"
             className="button secondary wide-button"
-            disabled={busy || modeTransitioning || !modeControlEnabled}
+            disabled={busy || modeTransitioning || patrolModeSelected || !modeControlEnabled}
             onClick={onRequestPatrolMode}
           >
             <NavigationArrow size={18} weight="fill" />
-            {modeTransitioning ? "순찰 모드 준비 중" : "순찰 모드로 전환"}
+            {patrolModeSelected || modeTransitioning
+              ? "순찰 모드 준비 중"
+              : "순찰 모드로 전환"}
           </button>
         ) : (
           <button

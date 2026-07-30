@@ -63,6 +63,12 @@ def test_system_mode_status_exposes_webui_control_contract():
     assert "control_enabled" in payload
     assert "map_available" in payload
     assert "managed" in payload
+    assert "navigation_ready" in payload
+    assert set(payload["readiness"]) == {
+        "navigate_to_pose",
+        "compute_path_to_pose",
+        "localized_pose",
+    }
 
 
 def test_system_mode_switch_routes_validated_mode_to_manager(monkeypatch):
@@ -295,7 +301,35 @@ def test_navigation_goal_waits_for_patrol_mode_to_be_ready(monkeypatch):
     )
 
     assert response.status_code == 409
-    assert "아직 준비되지 않았습니다" in response.json()["detail"]
+    assert "시작하고 있습니다" in response.json()["detail"]
+
+
+def test_navigation_goal_waits_for_nav2_and_localization_readiness(monkeypatch):
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda: {
+            "control_enabled": True,
+            "mode": "patrol",
+            "state": "running",
+        },
+    )
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "capability_status",
+        lambda: {
+            "navigate_to_pose": False,
+            "compute_path_to_pose": False,
+        },
+    )
+
+    response = client.post(
+        "/api/v1/navigation/goal",
+        json={"x": 1.0, "y": 1.0, "yaw": 0.0, "frame_id": "map"},
+    )
+
+    assert response.status_code == 409
+    assert "준비를 기다리고 있습니다" in response.json()["detail"]
 
 
 def test_route_rejects_duplicate_waypoint_ids():

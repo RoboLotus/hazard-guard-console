@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,10 +50,56 @@ app.add_middleware(
 thresholds = ThresholdSettings()
 
 
+def system_mode_status() -> dict:
+    status = system_mode_manager.snapshot()
+    capabilities = ros_bridge.capability_status()
+    pose = spatial_store.snapshot().get("pose") or {}
+    pose_fresh = False
+    if pose.get("available") and not pose.get("mock"):
+        try:
+            updated_at = datetime.fromisoformat(str(pose["updated_at"]))
+            pose_fresh = (
+                datetime.now(timezone.utc) - updated_at.astimezone(timezone.utc)
+            ).total_seconds() <= 2.0
+        except (KeyError, TypeError, ValueError):
+            pose_fresh = False
+
+    patrol_process_ready = (
+        status.get("mode") == "patrol"
+        and status.get("state") in {"running", "external"}
+    )
+    readiness = {
+        "navigate_to_pose": bool(capabilities.get("navigate_to_pose")),
+        "compute_path_to_pose": bool(capabilities.get("compute_path_to_pose")),
+        "localized_pose": pose_fresh,
+    }
+    navigation_ready = patrol_process_ready and all(readiness.values())
+    if navigation_ready:
+        readiness_message = "AMCL 위치 추정과 Nav2 주행 서버가 준비되었습니다."
+    elif status.get("mode") != "patrol":
+        readiness_message = "순찰 모드가 선택되지 않았습니다."
+    elif status.get("state") not in {"running", "external"}:
+        readiness_message = "순찰 모드 프로세스를 시작하고 있습니다."
+    else:
+        missing = {
+            "navigate_to_pose": "Nav2 목적지 서버",
+            "compute_path_to_pose": "Nav2 경로 계획 서버",
+            "localized_pose": "AMCL 위치 추정",
+        }
+        waiting_for = [label for key, label in missing.items() if not readiness[key]]
+        readiness_message = f"{', '.join(waiting_for)} 준비를 기다리고 있습니다."
+    return {
+        **status,
+        "navigation_ready": navigation_ready,
+        "readiness": readiness,
+        "readiness_message": readiness_message,
+    }
+
+
 def require_patrol_mode() -> None:
     """Reject motion requests while the managed ROS stack is not in patrol mode."""
 
-    status = system_mode_manager.snapshot()
+    status = system_mode_status()
     if not status.get("control_enabled"):
         return
     if status.get("mode") != "patrol":
@@ -63,13 +110,10 @@ def require_patrol_mode() -> None:
                 "지도 탭에서 순찰 / AMCL·Nav2 모드로 전환하세요."
             ),
         )
-    if status.get("state") not in {"running", "external"}:
+    if not status.get("navigation_ready"):
         raise HTTPException(
             status_code=409,
-            detail=(
-                "순찰 모드가 아직 준비되지 않았습니다. "
-                "AMCL·Nav2 실행 상태가 준비된 뒤 다시 시도하세요."
-            ),
+            detail=status["readiness_message"],
         )
 
 
@@ -90,7 +134,7 @@ def robot_status():
 
 @app.get("/api/v1/system/mode")
 def system_mode():
-    return system_mode_manager.snapshot()
+    return system_mode_status()
 
 
 @app.put("/api/v1/system/mode")

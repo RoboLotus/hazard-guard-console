@@ -26,7 +26,9 @@ class SystemModeManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._process: subprocess.Popen[Any] | None = None
+        self._simulation_process: subprocess.Popen[Any] | None = None
         self._generation = 0
+        self._simulation_generation = 0
         self._ignore_external_until = 0.0
         self._enabled = os.getenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "0") == "1"
         self._workspace = Path(
@@ -50,6 +52,12 @@ class SystemModeManager:
             "HAZARD_GUARD_SIMULATION_MODE", "kinematic"
         )
         self._log_path = self._workspace / "runtime" / "logs" / "system-mode.log"
+        self._simulation_log_path = (
+            self._workspace / "runtime" / "logs" / "simulation.log"
+        )
+        self._simulation_world_marker = os.getenv(
+            "HAZARD_GUARD_SIMULATION_WORLD_MARKER", "facility_map.sdf"
+        )
         self._data: dict[str, Any] = {
             "mode": "idle",
             "state": "disabled" if not self._enabled else "stopped",
@@ -59,6 +67,10 @@ class SystemModeManager:
             "pid": None,
             "map_path": str(self._map_path),
             "log_path": str(self._log_path),
+            "simulation_log_path": str(self._simulation_log_path),
+            "simulation_state": "stopped",
+            "simulation_managed": False,
+            "simulation_pid": None,
             "map_available": self._map_files_available(),
             "message": (
                 "WebUI 모드 제어가 비활성화되어 있습니다."
@@ -176,6 +188,7 @@ class SystemModeManager:
         common = [
             f"gui:={'true' if self._gui else 'false'}",
             f"simulation_mode:={self._simulation_mode}",
+            "start_simulation:=false",
         ]
         if mode == "mapping":
             return [
@@ -193,6 +206,256 @@ class SystemModeManager:
             *common,
             f"map:={self._map_path}",
         ]
+
+    def _simulation_launch_arguments(self) -> list[str]:
+        return [
+            "ros2",
+            "launch",
+            "hazard_guard_simulation",
+            "simulation.launch.py",
+            f"gui:={'true' if self._gui else 'false'}",
+            f"simulation_mode:={self._simulation_mode}",
+        ]
+
+    def _detect_external_simulation(self) -> bool:
+        if not self._enabled:
+            return False
+        try:
+            result = subprocess.run(
+                ["ros2", "node", "list"],
+                cwd=self._workspace,
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        nodes = set(result.stdout.splitlines())
+        return any(node.endswith("/hazard_guard_gz_bridge") for node in nodes)
+
+    def _find_simulator_process_ids(self) -> list[int]:
+        if os.name != "posix":
+            return []
+        try:
+            result = subprocess.run(
+                ["ps", "-eo", "pid=,args="],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        process_ids: list[int] = []
+        for line in result.stdout.splitlines():
+            pid_text, separator, command = line.strip().partition(" ")
+            if not separator or not pid_text.isdigit():
+                continue
+            if (
+                "ign gazebo" in command
+                and self._simulation_world_marker in command
+            ):
+                process_ids.append(int(pid_text))
+        return process_ids
+
+    @staticmethod
+    def _pid_exists(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @staticmethod
+    def _process_group_exists(process_group_id: int) -> bool:
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @staticmethod
+    def _wait_until(
+        predicate: Any,
+        *,
+        timeout: float,
+        interval: float = 0.1,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not predicate():
+                return True
+            time.sleep(interval)
+        return not predicate()
+
+    def _terminate_process_group(
+        self,
+        process: subprocess.Popen[Any],
+        *,
+        process_group_id: int,
+    ) -> None:
+        if os.name != "posix":
+            if process.poll() is None:
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
+            return
+
+        def process_group_exists() -> bool:
+            # Reap an exited launch parent while waiting. Otherwise its zombie
+            # process can make killpg(..., 0) report a live group indefinitely.
+            process.poll()
+            return self._process_group_exists(process_group_id)
+
+        for stop_signal, timeout in (
+            (signal.SIGINT, 8.0),
+            (signal.SIGTERM, 3.0),
+            (signal.SIGKILL, 2.0),
+        ):
+            if not process_group_exists():
+                break
+            try:
+                os.killpg(process_group_id, stop_signal)
+            except ProcessLookupError:
+                break
+            self._wait_until(
+                process_group_exists,
+                timeout=timeout,
+            )
+        if process.poll() is None:
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _cleanup_orphaned_simulators(self) -> None:
+        process_ids = self._find_simulator_process_ids()
+        if not process_ids:
+            return
+        for stop_signal, timeout in (
+            (signal.SIGINT, 4.0),
+            (signal.SIGTERM, 2.0),
+            (signal.SIGKILL, 1.0),
+        ):
+            alive = [pid for pid in process_ids if self._pid_exists(pid)]
+            if not alive:
+                return
+            for pid in alive:
+                try:
+                    os.kill(pid, stop_signal)
+                except ProcessLookupError:
+                    pass
+            self._wait_until(
+                lambda: any(self._pid_exists(pid) for pid in process_ids),
+                timeout=timeout,
+            )
+
+    def _monitor_simulation(
+        self,
+        process: subprocess.Popen[Any],
+        generation: int,
+    ) -> None:
+        exit_code = process.wait()
+        with self._lock:
+            if (
+                self._simulation_generation != generation
+                or self._simulation_process is not process
+            ):
+                return
+        self._terminate_process_group(
+            process,
+            process_group_id=process.pid,
+        )
+        with self._lock:
+            if (
+                self._simulation_generation != generation
+                or self._simulation_process is not process
+            ):
+                return
+            self._simulation_process = None
+            self._update_locked(
+                simulation_state="stopped" if exit_code == 0 else "failed",
+                simulation_managed=False,
+                simulation_pid=None,
+            )
+
+    def _ensure_simulation(self) -> bool:
+        with self._lock:
+            process = self._simulation_process
+            if process is not None and process.poll() is None:
+                self._update_locked(
+                    simulation_state="running",
+                    simulation_managed=True,
+                    simulation_pid=process.pid,
+                )
+                return True
+
+        if self._detect_external_simulation():
+            with self._lock:
+                self._update_locked(
+                    simulation_state="external",
+                    simulation_managed=False,
+                    simulation_pid=None,
+                )
+            return True
+
+        self._cleanup_orphaned_simulators()
+        command = self._simulation_launch_arguments()
+        self._simulation_log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = self._simulation_log_path.open("w", encoding="utf-8")
+        popen_options: dict[str, Any] = {
+            "cwd": self._workspace,
+            "start_new_session": os.name == "posix",
+            "stdout": log_file,
+            "stderr": subprocess.STDOUT,
+        }
+        if os.name == "nt":
+            popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            process = subprocess.Popen(command, **popen_options)
+        except OSError:
+            log_file.close()
+            with self._lock:
+                self._update_locked(
+                    simulation_state="failed",
+                    simulation_managed=False,
+                    simulation_pid=None,
+                )
+            return False
+        log_file.close()
+        with self._lock:
+            self._simulation_generation += 1
+            generation = self._simulation_generation
+            self._simulation_process = process
+            self._update_locked(
+                simulation_state="starting",
+                simulation_managed=True,
+                simulation_pid=process.pid,
+            )
+        threading.Thread(
+            target=self._monitor_simulation,
+            args=(process, generation),
+            name="hazard-guard-simulation-monitor",
+            daemon=True,
+        ).start()
+        time.sleep(1)
+        if process.poll() is not None:
+            return False
+        with self._lock:
+            self._update_locked(simulation_state="running")
+        return True
 
     def _last_log_line(self) -> str | None:
         try:
@@ -225,6 +488,13 @@ class SystemModeManager:
                     ),
                 )
         exit_code = process.wait()
+        with self._lock:
+            if self._generation != generation or self._process is not process:
+                return
+        self._terminate_process_group(
+            process,
+            process_group_id=process.pid,
+        )
         with self._lock:
             if self._generation != generation or self._process is not process:
                 return
@@ -301,20 +571,10 @@ class SystemModeManager:
                 return
             self._generation += 1
             self._update_locked(state="stopping", message="현재 ROS 모드를 종료하고 있습니다.")
-        if process.poll() is None:
-            try:
-                if os.name == "posix":
-                    os.killpg(process.pid, signal.SIGINT)
-                else:
-                    process.send_signal(signal.CTRL_BREAK_EVENT)
-                process.wait(timeout=10)
-            except (OSError, subprocess.TimeoutExpired):
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
+        self._terminate_process_group(
+            process,
+            process_group_id=process.pid,
+        )
         with self._lock:
             if self._process is process:
                 self._process = None
@@ -346,9 +606,11 @@ class SystemModeManager:
             and current_mode == mode
             and current_state in {"starting", "running"}
         ):
+            simulation_ready = self._ensure_simulation()
             with self._lock:
                 return self._update_locked(
-                    accepted=True,
+                    accepted=simulation_ready,
+                    state=current_state if simulation_ready else "failed",
                     message="이미 선택한 운용 모드가 실행 중입니다.",
                 )
 
@@ -389,6 +651,20 @@ class SystemModeManager:
                     message=(
                         "순찰 모드에 사용할 저장 지도가 없습니다. "
                         "먼저 맵 생성 모드에서 지도를 작성하고 저장하세요."
+                    ),
+                )
+
+        if not self._ensure_simulation():
+            with self._lock:
+                return self._update_locked(
+                    mode="idle",
+                    state="failed",
+                    accepted=False,
+                    managed=False,
+                    pid=None,
+                    message=(
+                        "Gazebo 시뮬레이터를 시작하지 못했습니다. "
+                        f"{self._simulation_log_path} 로그를 확인하세요."
                     ),
                 )
 
@@ -444,8 +720,28 @@ class SystemModeManager:
         ).start()
         return result
 
+    def _stop_managed_simulation(self) -> None:
+        with self._lock:
+            process = self._simulation_process
+            if process is None:
+                return
+            self._simulation_generation += 1
+        self._terminate_process_group(
+            process,
+            process_group_id=process.pid,
+        )
+        with self._lock:
+            if self._simulation_process is process:
+                self._simulation_process = None
+            self._update_locked(
+                simulation_state="stopped",
+                simulation_managed=False,
+                simulation_pid=None,
+            )
+
     def stop(self) -> dict[str, Any]:
         self._stop_managed_process()
+        self._stop_managed_simulation()
         with self._lock:
             return self._update_locked(
                 mode="idle",

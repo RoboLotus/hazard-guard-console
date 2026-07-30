@@ -103,7 +103,9 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .waypoint-marker-map text { fill: #1769e0; font: 800 3.6px "Pretendard Variable", Pretendard, sans-serif; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .waypoint-marker-map.selected text { fill: #fff; }
 .waypoint-marker-map .waypoint-heading-line { stroke: #1769e0; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.waypoint-marker-map .waypoint-heading-arrow { fill: #1769e0; }
 .waypoint-marker-map.selected .waypoint-heading-line { stroke: #0c4e9c; }
+.waypoint-marker-map.selected .waypoint-heading-arrow { fill: #0c4e9c; }
 .map-live-badge { position: absolute; z-index: 2; top: 11px; left: 11px; padding: 5px 8px; display: flex; align-items: center; gap: 5px; color: #386077; background: rgba(255,255,255,0.92); border: 1px solid rgba(209, 219, 228, 0.9); border-radius: 6px; box-shadow: 0 2px 7px rgba(23, 42, 60, 0.08); font-size: 8px; font-weight: 700; }
 .map-live-badge span { width: 5px; height: 5px; background: var(--success); border-radius: 50%; }
 .map-live-badge.mock { color: #7b8796; }
@@ -117,6 +119,11 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .goal-marker { position: absolute; z-index: 3; width: 34px; height: 34px; display: grid; place-items: center; color: #fff; background: var(--blue); border: 4px solid rgba(255,255,255,.96); border-radius: 50% 50% 50% 7px; box-shadow: 0 5px 14px rgba(23,105,224,.35); transform: translate(-50%, -50%) rotate(-45deg); }
 .goal-marker svg { transform: rotate(45deg); }
 .goal-mode-hint { position: absolute; z-index: 4; left: 50%; bottom: 12px; padding: 7px 11px; color: #fff; background: rgba(20,49,85,.9); border-radius: 7px; font-size: 9px; font-weight: 700; transform: translateX(-50%); pointer-events: none; }
+.map-axis-guide { position: absolute; z-index: 3; left: 11px; bottom: 11px; width: 62px; height: 52px; padding: 7px; display: flex; flex-direction: column; justify-content: space-between; color: #506176; background: rgba(255,255,255,.92); border: 1px solid rgba(209,219,228,.9); border-radius: 7px; box-shadow: 0 2px 7px rgba(23,42,60,.08); font-size: 7px; line-height: 1.2; pointer-events: none; }
+.map-axis-guide span { white-space: nowrap; }
+.map-axis-guide strong { color: #1d5f9f; font-weight: 800; }
+.map-axis-guide .axis-y { align-self: flex-start; }
+.map-axis-guide .axis-x { align-self: flex-end; }
 .map-zoom { position: absolute; z-index: 2; right: 11px; bottom: 11px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #d8e0e7; border-radius: 7px; box-shadow: 0 2px 7px rgba(23,42,60,.1); cursor: default; }
 .map-zoom button { width: 28px; height: 27px; color: #58677a; background: rgba(255,255,255,.95); border: 0; font-size: 16px; cursor: pointer; }
 .map-zoom button:hover:not(:disabled) { color: var(--blue); background: var(--blue-soft); }
@@ -289,9 +296,12 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .waypoint-summary small { color: #8995a4; font-size: 7px; font-variant-numeric: tabular-nums; }
 .waypoint-run-state { padding: 4px 6px; color: #657488; background: #eef2f6; border-radius: 9px; font-size: 6px; font-weight: 800; white-space: nowrap; }
 .waypoint-run-state.active, .waypoint-run-state.validating { color: #115fc8; background: #eaf2ff; }
+.waypoint-run-state.aligning { color: #9a5a0d; background: #fff4d9; }
+.waypoint-run-state.aligned { color: #13784f; background: #e9f8f2; }
 .waypoint-run-state.completed { color: #13784f; background: #e9f8f2; }
 .waypoint-run-state.failed { color: #a92f39; background: #fff0f1; }
 .waypoint-editor { padding: 9px; display: flex; flex-direction: column; gap: 7px; background: #f7f9fc; border-top: 1px solid #e7ecf1; }
+.waypoint-arrival-error { padding: 6px 7px; color: #49647e; background: #edf5fc; border-radius: 6px; font-size: 7px; font-weight: 700; }
 .waypoint-editor-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
 .waypoint-editor-actions button { height: 29px; display: grid; place-items: center; color: #5f7187; background: #fff; border: 1px solid #dce3ea; border-radius: 6px; cursor: pointer; }
 .waypoint-editor-actions button:hover:not(:disabled) { color: #1769e0; border-color: #aac8e9; }

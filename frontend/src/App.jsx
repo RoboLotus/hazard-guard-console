@@ -197,13 +197,22 @@ function SystemModeControl({ systemMode, busy, onChange }) {
   const mode = systemMode?.mode || "idle";
   const state = systemMode?.state || "disabled";
   const controlEnabled = Boolean(systemMode?.control_enabled);
+  const navigationReady = Boolean(systemMode?.navigation_ready);
+  const navigationPreparing = (
+    mode === "patrol"
+    && ["running", "external"].includes(state)
+    && !navigationReady
+  );
   const changing = busy || ["starting", "stopping"].includes(state);
   const unavailable = !controlEnabled || changing;
-  const stateTone = state === "running"
+  const stateTone = (state === "running" && !navigationPreparing)
     ? "success"
     : state === "failed"
       ? "danger"
       : "neutral";
+  const stateLabel = navigationPreparing
+    ? "Nav2 준비 중"
+    : systemStateLabels[state] || state;
 
   return (
     <section className={`detail-card system-mode-control ${state}`} aria-label="로봇 운용 모드">
@@ -215,7 +224,7 @@ function SystemModeControl({ systemMode, busy, onChange }) {
             <span>SLAM과 AMCL·Nav2 실행 환경 전환</span>
           </div>
         </div>
-        <StatusPill tone={stateTone}>{systemStateLabels[state] || state}</StatusPill>
+        <StatusPill tone={stateTone}>{stateLabel}</StatusPill>
       </header>
       <p className="system-mode-description">
         {mode === "mapping"
@@ -247,7 +256,11 @@ function SystemModeControl({ systemMode, busy, onChange }) {
         </button>
       </div>
       <footer>
-        <span>{systemModeLabels[mode] || "상태 확인 중"}</span>
+        <span>
+          {navigationPreparing
+            ? (systemMode?.readiness_message || "AMCL·Nav2 준비를 기다리고 있습니다.")
+            : systemModeLabels[mode] || "상태 확인 중"}
+        </span>
         <small className={systemMode?.map_available ? "available" : ""}>
           {systemMode?.map_available ? "순찰 지도 준비됨" : "저장 지도 없음"}
         </small>
@@ -459,14 +472,16 @@ function SpatialMapOverlay({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => onWaypointSelect?.(waypoint.id)}
         >
-          <line
-            className="waypoint-heading-line"
-            x1="2"
-            y1="0"
-            x2="5"
-            y2="0"
-            transform={`rotate(${(-waypoint.yaw * 180) / Math.PI})`}
-          />
+          <g transform={`rotate(${(-waypoint.yaw * 180) / Math.PI})`}>
+            <line
+              className="waypoint-heading-line"
+              x1="2"
+              y1="0"
+              x2="8"
+              y2="0"
+            />
+            <path className="waypoint-heading-arrow" d="M 8 0 L 6.4 -1.1 L 6.4 1.1 Z" />
+          </g>
           <circle r="2.4" />
           <text x="0" y=".15">{index + 1}</text>
         </g>
@@ -675,6 +690,12 @@ function MapPanel({
         <div className={`map-live-badge ${mapLive ? "" : "mock"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : "디지털 트윈 목업"}</div>
         {spatialState?.heatmap?.simulated && layers.heatmap && <div className="heatmap-simulation-badge">SIMULATED HEAT</div>}
         {goalMode && <div className="goal-mode-hint">지도를 클릭해 목적지 후보를 선택하세요</div>}
+        {detail && (
+          <div className="map-axis-guide" aria-label="ROS 지도 각도 기준">
+            <span className="axis-y">↑ <strong>+Y</strong> 90°</span>
+            <span className="axis-x"><strong>+X</strong> 0° →</span>
+          </div>
+        )}
         <div className="map-zoom" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" aria-label="지도 확대" title="지도 확대" disabled={mapView.zoom >= 4} onClick={() => changeZoom(0.25)}>+</button>
           <button type="button" aria-label="지도 축소" title="지도 축소" disabled={mapView.zoom <= 0.5} onClick={() => changeZoom(-0.25)}>−</button>
@@ -949,10 +970,8 @@ function MapPage({
     && savedMapSignature
     && savedMapSignature !== currentMapSignature,
   );
-  const patrolModeReady = (
-    systemMode?.mode === "patrol"
-    && ["running", "external"].includes(systemMode?.state)
-  );
+  const patrolModeSelected = systemMode?.mode === "patrol";
+  const patrolModeReady = Boolean(systemMode?.navigation_ready);
   const modeTransitioning = ["starting", "stopping"].includes(systemMode?.state);
   const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
   const heatDetections = spatialState?.heatmap?.detections || [];
@@ -1126,7 +1145,9 @@ function MapPage({
     if (!enabled.length) return;
     if (!patrolModeReady) {
       notify(
-        "맵 생성 모드에서는 순찰을 시작할 수 없습니다. 먼저 순찰 / AMCL·Nav2 모드로 전환하세요.",
+        patrolModeSelected
+          ? (systemMode?.readiness_message || "AMCL·Nav2 준비가 끝난 뒤 다시 시도하세요.")
+          : "맵 생성 모드에서는 순찰을 시작할 수 없습니다. 먼저 순찰 / AMCL·Nav2 모드로 전환하세요.",
         "warning",
       );
       return;
@@ -1212,9 +1233,11 @@ function MapPage({
             selectedId={selectedWaypointId}
             mapLive={mapLive}
             mapMismatch={mapMismatch}
+            patrolModeSelected={patrolModeSelected}
             patrolModeReady={patrolModeReady}
             modeControlEnabled={Boolean(systemMode?.control_enabled)}
             modeTransitioning={modeTransitioning}
+            readinessMessage={systemMode?.readiness_message}
             missionStatus={missionStatus}
             busy={routeBusy}
             onSelect={setSelectedWaypointId}
