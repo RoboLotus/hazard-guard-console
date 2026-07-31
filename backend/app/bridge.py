@@ -193,6 +193,7 @@ class SpatialStore:
         {
             "id": "depth",
             "label": "Depth",
+            "display_name": "Depth",
             "model": "Nuwa-HP60C",
             "horizontal_fov_deg": 73.8,
             "range_min_m": 0.2,
@@ -203,6 +204,7 @@ class SpatialStore:
         {
             "id": "thermal",
             "label": "Thermal",
+            "display_name": "TMC160B",
             "model": "ThermoEye TMC160B",
             "resolution": "160×120",
             "frame_rate_hz": 8.7,
@@ -579,19 +581,8 @@ class RosBridge:
         self._navigation_goal_handle = None
         self._navigation_result_event = threading.Event()
         self._navigation_result_status: str | None = None
-        self._mission_thread: threading.Thread | None = None
-        self._mission_cancel_event = threading.Event()
         self._mission_lock = threading.RLock()
         self._last_pose_update = 0.0
-        self._waypoint_position_tolerance_m = float(
-            os.getenv("HAZARD_GUARD_WAYPOINT_POSITION_TOLERANCE_M", "0.08")
-        )
-        self._waypoint_yaw_tolerance_rad = float(
-            os.getenv("HAZARD_GUARD_WAYPOINT_YAW_TOLERANCE_RAD", "0.05")
-        )
-        self._waypoint_alignment_retries = max(
-            0, int(os.getenv("HAZARD_GUARD_WAYPOINT_ALIGNMENT_RETRIES", "2"))
-        )
 
     def start(self) -> None:
         if os.getenv("HAZARD_GUARD_ROS_ENABLED", "0") != "1":
@@ -1519,85 +1510,6 @@ class RosBridge:
             "total_distance_m": round(total_distance, 3),
         }
 
-    def _wait_for_navigation_result(self, timeout_sec: float = 180.0) -> str:
-        deadline = time.monotonic() + timeout_sec
-        while not self._navigation_result_event.wait(timeout=0.25):
-            if self._mission_cancel_event.is_set():
-                self.cancel_navigation()
-            if time.monotonic() >= deadline:
-                self.cancel_navigation()
-                self._navigation_result_status = "failed"
-                break
-        return self._navigation_result_status or "failed"
-
-    def _verify_and_refine_waypoint_alignment(
-        self,
-        index: int,
-        waypoint: dict[str, Any],
-        frame_id: str,
-    ) -> tuple[bool, str | None]:
-        goal = (
-            float(waypoint["x"]),
-            float(waypoint["y"]),
-            float(waypoint.get("yaw", 0.0)),
-        )
-        for attempt in range(self._waypoint_alignment_retries + 1):
-            if self._mission_cancel_event.wait(timeout=0.35):
-                return False, "사용자 취소"
-
-            actual = self._current_map_pose_with_yaw()
-            if actual is None:
-                return False, "최종 로봇 위치와 방향을 확인할 수 없습니다."
-            position_error, yaw_error = self._pose_errors(actual, goal)
-            details = {
-                "position_error_m": round(position_error, 3),
-                "yaw_error_deg": round(math.degrees(yaw_error), 2),
-                "actual_yaw_deg": round(math.degrees(actual[2]), 2),
-            }
-            if (
-                position_error <= self._waypoint_position_tolerance_m
-                and yaw_error <= self._waypoint_yaw_tolerance_rad
-            ):
-                self.mission.update_waypoint(
-                    index,
-                    "aligned",
-                    (
-                        f"정렬 완료 · 위치 오차 {position_error:.2f}m "
-                        f"· 방향 오차 {math.degrees(yaw_error):.1f}°"
-                    ),
-                    details,
-                )
-                return True, None
-
-            if attempt >= self._waypoint_alignment_retries:
-                return (
-                    False,
-                    (
-                        f"최종 정렬 오차가 허용 범위를 벗어났습니다. "
-                        f"위치 {position_error:.2f}m, 방향 {math.degrees(yaw_error):.1f}°"
-                    ),
-                )
-
-            self.mission.update_waypoint(
-                index,
-                "aligning",
-                (
-                    f"카메라 방향 정렬 중 ({attempt + 1}/"
-                    f"{self._waypoint_alignment_retries})"
-                ),
-                details,
-            )
-            response = self.navigate_to(goal[0], goal[1], goal[2], frame_id)
-            if not response.get("accepted"):
-                return False, response.get("message", "정렬 목표를 전송하지 못했습니다.")
-            outcome = self._wait_for_navigation_result(timeout_sec=45.0)
-            if outcome == "canceled":
-                return False, "사용자 취소"
-            if outcome != "succeeded":
-                return False, self.navigation.snapshot().get(
-                    "message", "최종 방향 정렬에 실패했습니다."
-                )
-
     def start_route(self, route: dict[str, Any]) -> dict[str, Any]:
         with self._mission_lock:
             current = self.mission.snapshot()
@@ -1668,239 +1580,6 @@ class RosBridge:
             )
             send_future.add_done_callback(self._on_mission_goal_response)
             return snapshot
-
-    def _run_route(self, route: dict[str, Any]) -> None:
-        waypoints = [item for item in route["waypoints"] if item.get("enabled", True)]
-        start = self._current_map_pose_with_yaw()
-        if start is None:
-            self.mission.update(
-                {
-                    "status": "failed",
-                    "accepted": False,
-                    "message": "지도상의 현재 로봇 위치가 없어 순찰을 시작할 수 없습니다.",
-                }
-            )
-            return
-
-        try:
-            # Validate the whole route before moving. An unreachable narrow passage
-            # becomes a mission error and never terminates Gazebo or FastAPI.
-            segment_start = start
-            total_distance = 0.0
-            for index, waypoint in enumerate(waypoints):
-                if self._mission_cancel_event.is_set():
-                    self.mission.update(
-                        {
-                            "status": "canceled",
-                            "accepted": False,
-                            "message": "경로 확인 중 순찰이 취소됐습니다.",
-                        }
-                    )
-                    return
-                self.mission.update(
-                    {
-                        "status": "preparing",
-                        "current_index": index,
-                        "message": f"{waypoint['name']}까지 이동 가능한 경로를 확인하고 있습니다.",
-                    }
-                )
-                self.mission.update_waypoint(index, "validating", "Nav2 경로 확인 중")
-                target = (
-                    float(waypoint["x"]),
-                    float(waypoint["y"]),
-                    float(waypoint.get("yaw", 0.0)),
-                )
-                distance, error = self._compute_path_distance(
-                    segment_start,
-                    target,
-                    route["frame_id"],
-                )
-                if distance is None:
-                    self.mission.update_waypoint(
-                        index,
-                        "failed",
-                        error or "경로를 생성할 수 없습니다.",
-                    )
-                    self.mission.update(
-                        {
-                            "status": "failed",
-                            "accepted": False,
-                            "current_index": index,
-                            "message": (
-                                f"{waypoint['name']}까지 경로를 만들 수 없습니다. "
-                                "통로 폭, 장애물과 Nav2 footprint를 확인하세요. "
-                                "시뮬레이터는 계속 실행됩니다."
-                            ),
-                        }
-                    )
-                    return
-                total_distance += distance
-                segment_start = target
-                self.mission.update_waypoint(index, "pending", "경로 확인 완료")
-
-            self.mission.update(
-                {
-                    "status": "running",
-                    "current_index": 0,
-                    "total_distance_m": round(total_distance, 3),
-                    "message": "전체 경로 확인이 완료되어 순찰을 시작합니다.",
-                }
-            )
-
-            for index, waypoint in enumerate(waypoints):
-                if self._mission_cancel_event.is_set():
-                    self.mission.update_waypoint(index, "canceled", "사용자 취소")
-                    self.mission.update(
-                        {
-                            "status": "canceled",
-                            "accepted": False,
-                            "message": "사용자가 순찰을 취소했습니다.",
-                        }
-                    )
-                    return
-
-                self.mission.update_waypoint(index, "active", "이동 중")
-                self.mission.update(
-                    {
-                        "status": "executing",
-                        "current_index": index,
-                        "message": f"{waypoint['name']}로 이동 중입니다.",
-                    }
-                )
-                response = self.navigate_to(
-                    waypoint["x"],
-                    waypoint["y"],
-                    waypoint.get("yaw", 0.0),
-                    route["frame_id"],
-                )
-                if not response.get("accepted"):
-                    self.mission.update_waypoint(
-                        index,
-                        "failed",
-                        response.get("message", "Nav2 목표 거부"),
-                    )
-                    self.mission.update(
-                        {
-                            "status": "failed",
-                            "accepted": False,
-                            "message": f"{waypoint['name']} 목적지를 Nav2가 수락하지 않았습니다.",
-                        }
-                    )
-                    return
-
-                outcome = self._wait_for_navigation_result()
-                if self._mission_cancel_event.is_set() or outcome == "canceled":
-                    self.mission.update_waypoint(index, "canceled", "사용자 취소")
-                    self.mission.update(
-                        {
-                            "status": "canceled",
-                            "accepted": False,
-                            "message": "사용자가 순찰을 취소했습니다.",
-                        }
-                    )
-                    return
-                if outcome != "succeeded":
-                    navigation_message = self.navigation.snapshot().get("message")
-                    self.mission.update_waypoint(
-                        index,
-                        "failed",
-                        navigation_message or "Nav2 이동 실패",
-                    )
-                    self.mission.update(
-                        {
-                            "status": "failed",
-                            "accepted": False,
-                            "message": (
-                                f"{waypoint['name']} 이동에 실패했습니다. "
-                                "시뮬레이터는 종료하지 않고 다음 명령을 기다립니다."
-                            ),
-                        }
-                    )
-                    return
-
-                aligned, alignment_error = self._verify_and_refine_waypoint_alignment(
-                    index,
-                    waypoint,
-                    route["frame_id"],
-                )
-                if not aligned:
-                    if self._mission_cancel_event.is_set() or alignment_error == "사용자 취소":
-                        self.mission.update_waypoint(index, "canceled", "사용자 취소")
-                        self.mission.update(
-                            {
-                                "status": "canceled",
-                                "accepted": False,
-                                "message": "사용자가 순찰을 취소했습니다.",
-                            }
-                        )
-                    else:
-                        self.mission.update_waypoint(
-                            index,
-                            "failed",
-                            alignment_error or "최종 자세 정렬 실패",
-                        )
-                        self.mission.update(
-                            {
-                                "status": "failed",
-                                "accepted": False,
-                                "current_index": index,
-                                "message": (
-                                    f"{waypoint['name']}에서 카메라 방향을 "
-                                    f"정렬하지 못했습니다. {alignment_error or ''}"
-                                ).strip(),
-                            }
-                        )
-                    return
-
-                dwell = float(waypoint.get("dwell_seconds", 0.0))
-                if dwell > 0:
-                    self.mission.update_waypoint(
-                        index,
-                        "dwelling",
-                        f"{dwell:g}초 점검 대기",
-                    )
-                    dwell_deadline = time.monotonic() + dwell
-                    while (
-                        time.monotonic() < dwell_deadline
-                        and not self._mission_cancel_event.wait(timeout=0.2)
-                    ):
-                        pass
-                    if self._mission_cancel_event.is_set():
-                        self.mission.update_waypoint(index, "canceled", "사용자 취소")
-                        self.mission.update(
-                            {
-                                "status": "canceled",
-                                "accepted": False,
-                                "message": "점검 대기 중 순찰을 취소했습니다.",
-                            }
-                        )
-                        return
-
-                self.mission.update_waypoint(index, "completed", "도착 완료")
-                self.mission.update(
-                    {
-                        "completed_waypoints": index + 1,
-                        "message": f"{waypoint['name']} 점검을 완료했습니다.",
-                    }
-                )
-
-            self.mission.update(
-                {
-                    "status": "completed",
-                    "accepted": True,
-                    "current_index": None,
-                    "completed_waypoints": len(waypoints),
-                    "message": "모든 웨이포인트 순찰을 완료했습니다.",
-                }
-            )
-        except Exception as exc:
-            self.mission.update(
-                {
-                    "status": "failed",
-                    "accepted": False,
-                    "message": f"순찰 처리 오류: {exc}. 시뮬레이터는 계속 실행됩니다.",
-                }
-            )
 
     def cancel_route(self) -> dict[str, Any]:
         current = self.mission.snapshot()

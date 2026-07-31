@@ -29,6 +29,7 @@ export const fallbackSpatialState = {
     {
       id: "depth",
       label: "Depth",
+      display_name: "Depth",
       model: "Nuwa-HP60C",
       horizontal_fov_deg: 73.8,
       range_min_m: 0.2,
@@ -39,6 +40,7 @@ export const fallbackSpatialState = {
     {
       id: "thermal",
       label: "Thermal",
+      display_name: "TMC160B",
       model: "ThermoEye TMC160B",
       resolution: "160×120",
       frame_rate_hz: 8.7,
@@ -63,6 +65,14 @@ export const fallbackSpatialState = {
     ],
   },
 };
+
+export function sensorLegend(spatialState, sensorId) {
+  const sensor = spatialState?.sensors?.find((item) => item.id === sensorId);
+  if (!sensor) return null;
+  const name = sensor.display_name || sensor.label || sensor.model || sensor.id;
+  const fov = Number(sensor.horizontal_fov_deg);
+  return Number.isFinite(fov) ? `${name} ${fov}°` : name;
+}
 
 export function resolveMapSpec(mediaStatus, spatialState) {
   const mapInfo = mediaStatus?.map;

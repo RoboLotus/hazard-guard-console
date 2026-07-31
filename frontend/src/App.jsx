@@ -48,6 +48,7 @@ import {
   fallbackSpatialState,
   mapToGrid,
   resolveMapSpec,
+  sensorLegend,
   temperatureColor,
   temperatureLevel,
 } from "./spatial.js";
@@ -506,6 +507,8 @@ function MapPanel({
 }) {
   const mapLive = Boolean(mediaStatus?.map?.available);
   const mapSpec = resolveMapSpec(mediaStatus, spatialState);
+  const depthLegend = sensorLegend(spatialState, "depth");
+  const thermalLegend = sensorLegend(spatialState, "thermal");
   const stageRef = useRef(null);
   const dragRef = useRef(null);
   const [mapView, setMapView] = useState({ zoom: 1, x: 0, y: 0 });
@@ -703,8 +706,8 @@ function MapPanel({
       </div>
       <footer className="map-footer">
         <span><i className="legend-route" />이동 궤적</span>
-        <span><i className="legend-depth" />Depth 73.8°</span>
-        <span><i className="legend-thermal" />TMC160B 57°</span>
+        {depthLegend && <span><i className="legend-depth" />{depthLegend}</span>}
+        {thermalLegend && <span><i className="legend-thermal" />{thermalLegend}</span>}
         <span><i className="legend-heat" />열원</span>
         <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : `목업 · ${Math.round(mapView.zoom * 100)}%`}</strong>
       </footer>

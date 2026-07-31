@@ -6,6 +6,7 @@ import {
   buildFootprintPolygon,
   detectionOpacity,
   mapToGrid,
+  sensorLegend,
   temperatureColor,
 } from "../src/spatial.js";
 
@@ -53,4 +54,20 @@ test("uses stable heat colors for warning and critical temperatures", () => {
 test("fades old or uncertain detections without making them invisible", () => {
   assert.equal(detectionOpacity({ age_sec: 0, confidence: 1 }), 1);
   assert.ok(detectionOpacity({ age_sec: 200, confidence: 0.1 }) >= 0.09);
+});
+
+test("builds map legends from live sensor metadata", () => {
+  const state = {
+    sensors: [
+      {
+        id: "thermal",
+        display_name: "TMC160B",
+        model: "ThermoEye TMC160B",
+        horizontal_fov_deg: 57,
+      },
+    ],
+  };
+
+  assert.equal(sensorLegend(state, "thermal"), "TMC160B 57°");
+  assert.equal(sensorLegend(state, "depth"), null);
 });
