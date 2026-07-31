@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .process_control import ProcessController
 
 
 def utc_now() -> str:
@@ -57,6 +58,10 @@ class SystemModeManager:
         )
         self._simulation_world_marker = os.getenv(
             "HAZARD_GUARD_SIMULATION_WORLD_MARKER", "facility_map.sdf"
+        )
+        self._process_controller = ProcessController(
+            self._workspace,
+            self._simulation_world_marker,
         )
         self._data: dict[str, Any] = {
             "mode": "idle",
@@ -115,18 +120,7 @@ class SystemModeManager:
             return None
         if time.monotonic() < self._ignore_external_until:
             return None
-        try:
-            result = subprocess.run(
-                ["ros2", "node", "list"],
-                cwd=self._workspace,
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        nodes = set(result.stdout.splitlines())
+        nodes = self._process_controller.ros_nodes()
         if any(node.endswith("/slam_toolbox") for node in nodes):
             return "mapping"
         if any(node.endswith("/amcl") for node in nodes) or any(
@@ -220,78 +214,8 @@ class SystemModeManager:
     def _detect_external_simulation(self) -> bool:
         if not self._enabled:
             return False
-        try:
-            result = subprocess.run(
-                ["ros2", "node", "list"],
-                cwd=self._workspace,
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return False
-        nodes = set(result.stdout.splitlines())
+        nodes = self._process_controller.ros_nodes()
         return any(node.endswith("/hazard_guard_gz_bridge") for node in nodes)
-
-    def _find_simulator_process_ids(self) -> list[int]:
-        if os.name != "posix":
-            return []
-        try:
-            result = subprocess.run(
-                ["ps", "-eo", "pid=,args="],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return []
-        process_ids: list[int] = []
-        for line in result.stdout.splitlines():
-            pid_text, separator, command = line.strip().partition(" ")
-            if not separator or not pid_text.isdigit():
-                continue
-            if (
-                "ign gazebo" in command
-                and self._simulation_world_marker in command
-            ):
-                process_ids.append(int(pid_text))
-        return process_ids
-
-    @staticmethod
-    def _pid_exists(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
-
-    @staticmethod
-    def _process_group_exists(process_group_id: int) -> bool:
-        try:
-            os.killpg(process_group_id, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
-
-    @staticmethod
-    def _wait_until(
-        predicate: Any,
-        *,
-        timeout: float,
-        interval: float = 0.1,
-    ) -> bool:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if not predicate():
-                return True
-            time.sleep(interval)
-        return not predicate()
 
     def _terminate_process_group(
         self,
@@ -299,68 +223,11 @@ class SystemModeManager:
         *,
         process_group_id: int,
     ) -> None:
-        if os.name != "posix":
-            if process.poll() is None:
-                process.send_signal(signal.CTRL_BREAK_EVENT)
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=2)
-            return
-
-        def process_group_exists() -> bool:
-            # Reap an exited launch parent while waiting. Otherwise its zombie
-            # process can make killpg(..., 0) report a live group indefinitely.
-            process.poll()
-            return self._process_group_exists(process_group_id)
-
-        for stop_signal, timeout in (
-            (signal.SIGINT, 8.0),
-            (signal.SIGTERM, 3.0),
-            (signal.SIGKILL, 2.0),
-        ):
-            if not process_group_exists():
-                break
-            try:
-                os.killpg(process_group_id, stop_signal)
-            except ProcessLookupError:
-                break
-            self._wait_until(
-                process_group_exists,
-                timeout=timeout,
-            )
-        if process.poll() is None:
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                pass
+        del process_group_id
+        self._process_controller.terminate_group(process)
 
     def _cleanup_orphaned_simulators(self) -> None:
-        process_ids = self._find_simulator_process_ids()
-        if not process_ids:
-            return
-        for stop_signal, timeout in (
-            (signal.SIGINT, 4.0),
-            (signal.SIGTERM, 2.0),
-            (signal.SIGKILL, 1.0),
-        ):
-            alive = [pid for pid in process_ids if self._pid_exists(pid)]
-            if not alive:
-                return
-            for pid in alive:
-                try:
-                    os.kill(pid, stop_signal)
-                except ProcessLookupError:
-                    pass
-            self._wait_until(
-                lambda: any(self._pid_exists(pid) for pid in process_ids),
-                timeout=timeout,
-            )
+        self._process_controller.cleanup_orphaned_simulators()
 
     def _monitor_simulation(
         self,
@@ -413,20 +280,12 @@ class SystemModeManager:
 
         self._cleanup_orphaned_simulators()
         command = self._simulation_launch_arguments()
-        self._simulation_log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = self._simulation_log_path.open("w", encoding="utf-8")
-        popen_options: dict[str, Any] = {
-            "cwd": self._workspace,
-            "start_new_session": os.name == "posix",
-            "stdout": log_file,
-            "stderr": subprocess.STDOUT,
-        }
-        if os.name == "nt":
-            popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         try:
-            process = subprocess.Popen(command, **popen_options)
+            process = self._process_controller.start_logged(
+                command,
+                self._simulation_log_path,
+            )
         except OSError:
-            log_file.close()
             with self._lock:
                 self._update_locked(
                     simulation_state="failed",
@@ -434,7 +293,6 @@ class SystemModeManager:
                     simulation_pid=None,
                 )
             return False
-        log_file.close()
         with self._lock:
             self._simulation_generation += 1
             generation = self._simulation_generation
@@ -458,20 +316,7 @@ class SystemModeManager:
         return True
 
     def _last_log_line(self) -> str | None:
-        try:
-            lines = [
-                line.strip()
-                for line in self._log_path.read_text(
-                    encoding="utf-8", errors="replace"
-                ).splitlines()
-                if line.strip()
-            ]
-        except OSError:
-            return None
-        for line in reversed(lines):
-            if "[ERROR]" in line or "Error" in line or "Exception" in line:
-                return line[-240:]
-        return lines[-1][-240:] if lines else None
+        return self._process_controller.last_log_line(self._log_path)
 
     def _monitor(self, process: subprocess.Popen[Any], mode: str, generation: int) -> None:
         time.sleep(2)
@@ -525,7 +370,7 @@ class SystemModeManager:
         self._map_path.parent.mkdir(parents=True, exist_ok=True)
         map_base = self._map_path.with_suffix("")
         try:
-            result = subprocess.run(
+            result = self._process_controller.run(
                 [
                     "ros2",
                     "run",
@@ -539,7 +384,6 @@ class SystemModeManager:
                     "-p",
                     "save_map_timeout:=10.0",
                 ],
-                cwd=self._workspace,
                 capture_output=True,
                 text=True,
                 timeout=20,
@@ -669,20 +513,12 @@ class SystemModeManager:
                 )
 
         command = self._launch_arguments(mode)
-        self._log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = self._log_path.open("w", encoding="utf-8")
-        popen_options: dict[str, Any] = {
-            "cwd": self._workspace,
-            "start_new_session": os.name == "posix",
-            "stdout": log_file,
-            "stderr": subprocess.STDOUT,
-        }
-        if os.name == "nt":
-            popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         try:
-            process = subprocess.Popen(command, **popen_options)
+            process = self._process_controller.start_logged(
+                command,
+                self._log_path,
+            )
         except OSError as exc:
-            log_file.close()
             with self._lock:
                 return self._update_locked(
                     mode="idle",
@@ -692,8 +528,6 @@ class SystemModeManager:
                     pid=None,
                     message=f"ROS launch를 시작하지 못했습니다: {exc}",
                 )
-        log_file.close()
-
         with self._lock:
             self._generation += 1
             generation = self._generation

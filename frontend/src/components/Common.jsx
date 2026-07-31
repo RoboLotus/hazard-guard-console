@@ -1,0 +1,207 @@
+import { useEffect, useState } from "react";
+import {
+  Clock,
+  MapTrifold,
+  NavigationArrow,
+} from "@phosphor-icons/react";
+
+export function StatusPill({ tone = "success", children }) {
+  return <span className={`status-pill ${tone}`}><span className="status-dot" />{children}</span>;
+}
+
+export function PanelHeader({ eyebrow, title, action }) {
+  return (
+    <header className="panel-header">
+      <div>
+        {eyebrow && <span className="eyebrow">{eyebrow}</span>}
+        <h2>{title}</h2>
+      </div>
+      {action}
+    </header>
+  );
+}
+
+export async function downloadAsset(source, filename) {
+  const response = await fetch(source);
+  if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+export function LiveImage({ endpoint, fallback, enabled, interval = 500, ...props }) {
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) {
+      setRevision(0);
+      return undefined;
+    }
+    const timer = window.setInterval(
+      () => setRevision((current) => current + 1),
+      interval,
+    );
+    return () => window.clearInterval(timer);
+  }, [enabled, interval]);
+
+  const source = enabled ? `${endpoint}?frame=${revision}` : fallback;
+  return (
+    <img
+      {...props}
+      src={source}
+      onError={({ currentTarget }) => {
+        currentTarget.onerror = null;
+        currentTarget.src = fallback;
+      }}
+    />
+  );
+}
+
+export function CurrentTime() {
+  const [time, setTime] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setTime(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="panel-clock" aria-label="현재 시간">
+      <Clock size={15} weight="bold" />
+      <time dateTime={time.toISOString()}>{time.toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
+    </div>
+  );
+}
+
+export const systemModeLabels = {
+  mapping: "맵 생성 모드",
+  patrol: "순찰 모드",
+  idle: "모드 미선택",
+};
+
+const systemStateLabels = {
+  disabled: "터미널 제어",
+  stopped: "정지",
+  starting: "시작 중",
+  running: "실행 중",
+  stopping: "종료 중",
+  external: "외부 실행",
+  failed: "오류",
+};
+
+export function SystemModeControl({ systemMode, busy, onChange }) {
+  const mode = systemMode?.mode || "idle";
+  const state = systemMode?.state || "disabled";
+  const controlEnabled = Boolean(systemMode?.control_enabled);
+  const navigationReady = Boolean(systemMode?.navigation_ready);
+  const navigationPreparing = (
+    mode === "patrol"
+    && ["running", "external"].includes(state)
+    && !navigationReady
+  );
+  const changing = busy || ["starting", "stopping"].includes(state);
+  const unavailable = !controlEnabled || changing;
+  const stateTone = (state === "running" && !navigationPreparing)
+    ? "success"
+    : state === "failed"
+      ? "danger"
+      : "neutral";
+  const stateLabel = navigationPreparing
+    ? "Nav2 준비 중"
+    : systemStateLabels[state] || state;
+
+  return (
+    <section className={`detail-card system-mode-control ${state}`} aria-label="로봇 운용 모드">
+      <header className="system-mode-heading">
+        <div className="detail-card-title">
+          <MapTrifold size={20} weight="fill" />
+          <div>
+            <strong>지도 운용 모드</strong>
+            <span>SLAM과 AMCL·Nav2 실행 환경 전환</span>
+          </div>
+        </div>
+        <StatusPill tone={stateTone}>{stateLabel}</StatusPill>
+      </header>
+      <p className="system-mode-description">
+        {mode === "mapping"
+          ? "공간을 수동 주행하며 새로운 지도를 작성합니다."
+          : mode === "patrol"
+            ? "저장된 지도에서 위치를 추정하고 웨이포인트를 순찰합니다."
+            : "작업 목적에 맞는 모드를 선택하세요."}
+      </p>
+      <div className="system-mode-buttons">
+        <button
+          type="button"
+          className={mode === "mapping" ? "active" : ""}
+          disabled={unavailable}
+          aria-pressed={mode === "mapping"}
+          onClick={() => onChange("mapping")}
+        >
+          <MapTrifold size={18} weight={mode === "mapping" ? "fill" : "regular"} />
+          <span>맵 생성<small>SLAM</small></span>
+        </button>
+        <button
+          type="button"
+          className={mode === "patrol" ? "active" : ""}
+          disabled={unavailable}
+          aria-pressed={mode === "patrol"}
+          onClick={() => onChange("patrol")}
+        >
+          <NavigationArrow size={18} weight={mode === "patrol" ? "fill" : "regular"} />
+          <span>순찰<small>AMCL · Nav2</small></span>
+        </button>
+      </div>
+      <footer>
+        <span>
+          {navigationPreparing
+            ? (systemMode?.readiness_message || "AMCL·Nav2 준비를 기다리고 있습니다.")
+            : systemModeLabels[mode] || "상태 확인 중"}
+        </span>
+        <small className={systemMode?.map_available ? "available" : ""}>
+          {systemMode?.map_available ? "순찰 지도 준비됨" : "저장 지도 없음"}
+        </small>
+      </footer>
+    </section>
+  );
+}
+export function DetailHeading({ eyebrow, title, description, children }) {
+  return (
+    <header className="detail-heading">
+      <div>
+        <span className="eyebrow">{eyebrow}</span>
+        <h1>{title}</h1>
+        <p>{description}</p>
+      </div>
+      <div className="detail-heading-actions">
+        <CurrentTime />
+        {children}
+      </div>
+    </header>
+  );
+}
+
+export function MetricCard({ label, value, unit, meta, tone = "" }) {
+  return (
+    <article className={`metric-card ${tone}`}>
+      <span>{label}</span>
+      <div><strong>{value}</strong>{unit && <small>{unit}</small>}</div>
+      <p>{meta}</p>
+    </article>
+  );
+}
+
+export function NumberField({ label, name, value, onChange, unit, hint, min = 0, max = 999 }) {
+  return (
+    <label className="form-field">
+      <span>{label}</span>
+      <div className="number-input"><input type="number" name={name} value={value} min={min} max={max} step="1" onChange={onChange} /><b>{unit}</b></div>
+      {hint && <small>{hint}</small>}
+    </label>
+  );
+}
