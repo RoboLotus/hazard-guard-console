@@ -19,6 +19,7 @@ def test_health_reports_mock_mode():
         "capabilities": {
             "navigate_to_pose": False,
             "compute_path_to_pose": False,
+            "mission_manager": False,
         },
     }
 
@@ -67,6 +68,7 @@ def test_system_mode_status_exposes_webui_control_contract():
     assert set(payload["readiness"]) == {
         "navigate_to_pose",
         "compute_path_to_pose",
+        "mission_manager",
         "localized_pose",
     }
 
@@ -320,6 +322,7 @@ def test_navigation_goal_waits_for_nav2_and_localization_readiness(monkeypatch):
         lambda: {
             "navigate_to_pose": False,
             "compute_path_to_pose": False,
+            "mission_manager": False,
         },
     )
 
@@ -371,7 +374,11 @@ def test_spatial_status_exposes_pose_sensor_specs_and_heatmap():
     sensors = {sensor["id"]: sensor for sensor in payload["sensors"]}
     assert sensors["depth"]["horizontal_fov_deg"] == 73.8
     assert sensors["depth"]["range_max_m"] == 4.0
-    assert sensors["thermal"]["horizontal_fov_deg"] == 56.0
+    assert sensors["thermal"]["model"] == "ThermoEye TMC160B"
+    assert sensors["thermal"]["resolution"] == "160×120"
+    assert sensors["thermal"]["horizontal_fov_deg"] == 57.0
+    assert sensors["thermal"]["frame_rate_hz"] == 8.7
+    assert sensors["thermal"]["range_note"].startswith("시뮬레이션")
     assert sensors["thermal"]["range_max_m"] == 5.0
 
 

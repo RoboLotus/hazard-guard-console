@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
 import threading
@@ -202,11 +203,15 @@ class SpatialStore:
         {
             "id": "thermal",
             "label": "Thermal",
-            "model": "TOPDON TC001",
-            "horizontal_fov_deg": 56.0,
-            "range_min_m": 0.1,
+            "model": "ThermoEye TMC160B",
+            "resolution": "160×120",
+            "frame_rate_hz": 8.7,
+            "horizontal_fov_deg": 57.0,
+            "range_min_m": 0.0,
             "range_max_m": 5.0,
-            "range_note": "제조사 권장 유효 온도 측정거리",
+            "range_note": "시뮬레이션 시야 표시 범위(제조사 측정거리 아님)",
+            "temperature_high_gain_c": [-10.0, 140.0],
+            "temperature_low_gain_c": [-10.0, 400.0],
             "color": "#e45832",
         },
     ]
@@ -564,6 +569,12 @@ class RosBridge:
         self._navigate_action_type = None
         self._compute_path_action_client = None
         self._compute_path_action_type = None
+        self._mission_action_client = None
+        self._mission_action_type = None
+        self._mission_waypoint_type = None
+        self._mission_cancel_client = None
+        self._mission_cancel_request_type = None
+        self._mission_goal_handle = None
         self._thermal_stream_seen = False
         self._navigation_goal_handle = None
         self._navigation_result_event = threading.Event()
@@ -590,10 +601,10 @@ class RosBridge:
             import rclpy
             from cv_bridge import CvBridge
             from hazard_guard_interfaces.msg import RobotTelemetry
+            from hazard_guard_interfaces.srv import RobotCommand
             from nav_msgs.msg import OccupancyGrid
             from nav2_msgs.action import ComputePathToPose, NavigateToPose
             from rclpy.action import ActionClient
-            from hazard_guard_interfaces.srv import RobotCommand
             from rclpy.context import Context
             from rclpy.executors import SingleThreadedExecutor
             from rclpy.node import Node
@@ -605,6 +616,8 @@ class RosBridge:
             )
             from rclpy.time import Time
             from sensor_msgs.msg import Image
+            from std_msgs.msg import String
+            from std_srvs.srv import Trigger
             from tf2_ros import Buffer, TransformListener
 
             self._context = Context()
@@ -671,6 +684,34 @@ class RosBridge:
                 ComputePathToPose,
                 "/compute_path_to_pose",
             )
+            try:
+                from hazard_guard_interfaces.action import RunPatrol
+                from hazard_guard_interfaces.msg import PatrolWaypoint
+
+                self._mission_action_type = RunPatrol
+                self._mission_waypoint_type = PatrolWaypoint
+                self._mission_action_client = ActionClient(
+                    self._node,
+                    RunPatrol,
+                    "/hazard_guard/run_patrol",
+                )
+            except ImportError:
+                # Keep map, telemetry and camera bridging available while an
+                # older Robot workspace is rebuilt with the mission interfaces.
+                self._mission_action_type = None
+                self._mission_waypoint_type = None
+                self._mission_action_client = None
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/mission/status",
+                self._on_mission_status,
+                map_qos,
+            )
+            self._mission_cancel_client = self._node.create_client(
+                Trigger,
+                "/hazard_guard/mission/cancel",
+            )
+            self._mission_cancel_request_type = Trigger.Request
             self._client = self._node.create_client(
                 RobotCommand, "/hazard_guard/command"
             )
@@ -697,6 +738,7 @@ class RosBridge:
 
         navigate_client = self._navigate_action_client
         path_client = self._compute_path_action_client
+        mission_client = self._mission_action_client
         return {
             "navigate_to_pose": bool(
                 self.active
@@ -706,7 +748,128 @@ class RosBridge:
             "compute_path_to_pose": bool(
                 self.active and path_client is not None and path_client.server_is_ready()
             ),
+            "mission_manager": bool(
+                self.active
+                and mission_client is not None
+                and mission_client.server_is_ready()
+            ),
         }
+
+    def _on_mission_status(self, message: Any) -> None:
+        """Mirror the ROS mission manager's latched state for WebUI polling."""
+
+        try:
+            payload = json.loads(message.data)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict):
+            return
+        allowed = {
+            "mission_id",
+            "name",
+            "status",
+            "accepted",
+            "mock",
+            "frame_id",
+            "current_index",
+            "total_waypoints",
+            "completed_waypoints",
+            "total_distance_m",
+            "message",
+            "waypoints",
+        }
+        self.mission.update(
+            {key: value for key, value in payload.items() if key in allowed}
+        )
+
+    def _on_mission_feedback(self, feedback_message: Any) -> None:
+        feedback = feedback_message.feedback
+        index = int(feedback.current_index)
+        self.mission.update(
+            {
+                "status": feedback.status,
+                "message": feedback.message,
+                "current_index": index if index >= 0 else None,
+                "total_waypoints": int(feedback.total_waypoints),
+                "completed_waypoints": int(feedback.completed_waypoints),
+                "total_distance_m": round(float(feedback.total_distance_m), 3),
+            }
+        )
+        if index >= 0:
+            details: dict[str, Any] = {}
+            if float(feedback.position_error_m) >= 0:
+                details["position_error_m"] = round(
+                    float(feedback.position_error_m), 3
+                )
+            if float(feedback.yaw_error_deg) >= 0:
+                details["yaw_error_deg"] = round(
+                    float(feedback.yaw_error_deg), 2
+                )
+            self.mission.update_waypoint(
+                index,
+                feedback.waypoint_status or feedback.status,
+                feedback.message,
+                details,
+            )
+
+    def _on_mission_goal_response(self, future: Any) -> None:
+        try:
+            goal_handle = future.result()
+        except Exception as exc:
+            self.mission.update(
+                {
+                    "status": "failed",
+                    "accepted": False,
+                    "message": f"ROS 임무 관리자 요청 오류: {exc}",
+                }
+            )
+            return
+        if not goal_handle.accepted:
+            self.mission.update(
+                {
+                    "status": "failed",
+                    "accepted": False,
+                    "message": "ROS 임무 관리자가 순찰 요청을 거부했습니다.",
+                }
+            )
+            return
+        self._mission_goal_handle = goal_handle
+        self.mission.update(
+            {
+                "status": "preparing",
+                "accepted": True,
+                "mock": False,
+                "message": "ROS 임무 관리자가 순찰 요청을 수락했습니다.",
+            }
+        )
+        goal_handle.get_result_async().add_done_callback(
+            self._on_mission_result
+        )
+
+    def _on_mission_result(self, future: Any) -> None:
+        try:
+            wrapped = future.result()
+            result = wrapped.result
+            self.mission.update(
+                {
+                    "status": result.status,
+                    "accepted": bool(result.success),
+                    "completed_waypoints": int(result.completed_waypoints),
+                    "total_distance_m": round(float(result.total_distance_m), 3),
+                    "current_index": None,
+                    "message": result.message,
+                }
+            )
+        except Exception as exc:
+            self.mission.update(
+                {
+                    "status": "failed",
+                    "accepted": False,
+                    "message": f"ROS 임무 결과 처리 오류: {exc}",
+                }
+            )
+        finally:
+            self._mission_goal_handle = None
 
     def _on_telemetry(self, message: Any) -> None:
         stamp_seconds = message.stamp.sec + message.stamp.nanosec / 1_000_000_000
@@ -1443,6 +1606,8 @@ class RosBridge:
                 "running",
                 "sending",
                 "executing",
+                "aligning",
+                "dwelling",
                 "canceling",
             }:
                 return {
@@ -1459,17 +1624,49 @@ class RosBridge:
                         "message": "ROS 2와 Nav2가 연결되지 않아 순찰을 시작하지 않았습니다.",
                     }
                 )
+            if (
+                self._mission_action_client is None
+                or self._mission_action_type is None
+                or self._mission_waypoint_type is None
+                or not self._mission_action_client.wait_for_server(timeout_sec=2.0)
+            ):
+                return self.mission.update(
+                    {
+                        "status": "failed",
+                        "accepted": False,
+                        "mock": False,
+                        "message": (
+                            "ROS 임무 관리자에 연결할 수 없습니다. "
+                            "순찰 모드와 hazard_guard_mission_manager 노드를 확인하세요."
+                        ),
+                    }
+                )
 
             self.spatial.clear_trail()
             snapshot = self.mission.begin(route, mock=False)
-            self._mission_cancel_event.clear()
-            self._mission_thread = threading.Thread(
-                target=self._run_route,
-                args=(copy.deepcopy(route),),
-                name="hazard-guard-route-mission",
-                daemon=True,
+            goal = self._mission_action_type.Goal()
+            goal.mission_id = str(snapshot["mission_id"])
+            goal.name = str(route["name"])
+            goal.frame_id = str(route["frame_id"])
+            goal.return_to_start = bool(route.get("return_to_start", False))
+            goal.waypoints = []
+            for item in route["waypoints"]:
+                if not item.get("enabled", True):
+                    continue
+                waypoint = self._mission_waypoint_type()
+                waypoint.id = str(item["id"])
+                waypoint.name = str(item["name"])
+                waypoint.x = float(item["x"])
+                waypoint.y = float(item["y"])
+                waypoint.yaw = float(item.get("yaw", 0.0))
+                waypoint.dwell_seconds = float(item.get("dwell_seconds", 0.0))
+                goal.waypoints.append(waypoint)
+
+            send_future = self._mission_action_client.send_goal_async(
+                goal,
+                feedback_callback=self._on_mission_feedback,
             )
-            self._mission_thread.start()
+            send_future.add_done_callback(self._on_mission_goal_response)
             return snapshot
 
     def _run_route(self, route: dict[str, Any]) -> None:
@@ -1712,25 +1909,44 @@ class RosBridge:
             "running",
             "sending",
             "executing",
+            "aligning",
+            "dwelling",
             "canceling",
         }:
             return {
                 **current,
                 "message": "취소할 활성 순찰 임무가 없습니다.",
             }
-        self._mission_cancel_event.set()
         self.mission.update(
             {
                 "status": "canceling",
                 "message": "순찰 중단을 요청했습니다.",
             }
         )
-        if self._navigation_goal_handle is not None:
-            self.cancel_navigation()
+        if self._mission_goal_handle is not None:
+            self._mission_goal_handle.cancel_goal_async()
+        elif (
+            self._mission_cancel_client is not None
+            and self._mission_cancel_request_type is not None
+            and self._mission_cancel_client.service_is_ready()
+        ):
+            request = self._mission_cancel_request_type()
+            self._mission_cancel_client.call_async(request)
+        else:
+            self.mission.update(
+                {
+                    "status": current["status"],
+                    "message": (
+                        "ROS 임무 관리자 취소 채널에 연결할 수 없습니다. "
+                        "노드 상태를 확인하세요."
+                    ),
+                }
+            )
         return self.mission.snapshot()
 
     def stop(self) -> None:
-        self._mission_cancel_event.set()
+        if self._mission_goal_handle is not None:
+            self._mission_goal_handle.cancel_goal_async()
         self._stop_event.set()
         if self._executor is not None:
             self._executor.wake()

@@ -20,6 +20,8 @@ const missionActiveStates = new Set([
   "running",
   "sending",
   "executing",
+  "aligning",
+  "dwelling",
   "canceling",
 ]);
 

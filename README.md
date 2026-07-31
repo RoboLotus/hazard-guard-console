@@ -1,6 +1,6 @@
 # HazardGuard Console
 
-산업 현장을 순찰하는 ROSMASTER-M1 기반 안전 로봇의 관제 WebUI 프로토타입입니다. React 대시보드와 FastAPI ROS bridge를 통해 로봇 상태, 2D SLAM 지도, RGB·열화상 영상, 위험 이벤트, Nav2 목적지와 열원 히트맵을 확인합니다.
+산업 현장을 순찰하는 ROSMASTER-M1 기반 안전 로봇의 관제 WebUI 프로토타입입니다. React 대시보드와 FastAPI ROS bridge를 통해 로봇 상태, 2D SLAM 지도, RGB·ThermoEye TMC160B 사양 기반 합성 열화상 영상, 위험 이벤트, Nav2 목적지와 열원 히트맵을 확인합니다.
 
 ## 구성
 
@@ -91,6 +91,12 @@ npm run dev
 `이 순서로 순찰 시작`을 다시 눌러야 합니다. 모드 전환만으로 로봇이 자동
 출발하지는 않습니다.
 
+다중 웨이포인트 임무는 FastAPI가 Nav2를 직접 반복 호출하지 않습니다.
+FastAPI는 `/hazard_guard/run_patrol` ROS 2 Action으로 임무를 제출하고,
+`hazard_guard_mission_manager`가 전체 구간 경로 확인, Nav2 순차 이동,
+목표 방향 정렬, 점검 대기와 취소를 담당합니다. 진행 상태는
+`/hazard_guard/mission/status`에서 다시 WebUI로 전달됩니다.
+
 터미널에서 시작한 기존 SLAM 또는 Nav2가 감지되면 WebUI는 해당 프로세스를
 강제로 종료하지 않습니다. 기존 launch를 터미널에서 종료한 후 WebUI 모드
 제어를 사용합니다.
@@ -100,4 +106,4 @@ GUI를 기본적으로 끈 headless 모드입니다. 브라우저의 2D 지도·
 계속 표시됩니다. Gazebo 3D 창까지 필요하면 WSL2 셸에서 launch의 `gui:=true`를
 사용하되, 이때는 WebUI 모드 제어와 동시에 실행하지 않습니다.
 
-> 현재 열화상과 열원은 시뮬레이션 데이터이며, 실제 화재 판정이나 안전 성능을 검증한 결과가 아닙니다.
+> 현재 열화상은 TMC160B의 160×120, 수평 57°, 8.7 Hz 형식을 반영한 시뮬레이션 데이터입니다. 지도 부채꼴의 5 m 길이는 시뮬레이션 표시 범위이며 제조사 측정거리 보장이 아닙니다. 실제 화재 판정이나 안전 성능을 검증한 결과도 아닙니다.

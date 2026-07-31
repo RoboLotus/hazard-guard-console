@@ -71,6 +71,7 @@ def system_mode_status() -> dict:
     readiness = {
         "navigate_to_pose": bool(capabilities.get("navigate_to_pose")),
         "compute_path_to_pose": bool(capabilities.get("compute_path_to_pose")),
+        "mission_manager": bool(capabilities.get("mission_manager")),
         "localized_pose": pose_fresh,
     }
     navigation_ready = patrol_process_ready and all(readiness.values())
@@ -84,6 +85,7 @@ def system_mode_status() -> dict:
         missing = {
             "navigate_to_pose": "Nav2 목적지 서버",
             "compute_path_to_pose": "Nav2 경로 계획 서버",
+            "mission_manager": "ROS 순찰 임무 관리자",
             "localized_pose": "AMCL 위치 추정",
         }
         waiting_for = [label for key, label in missing.items() if not readiness[key]]

@@ -704,7 +704,7 @@ function MapPanel({
       <footer className="map-footer">
         <span><i className="legend-route" />이동 궤적</span>
         <span><i className="legend-depth" />Depth 73.8°</span>
-        <span><i className="legend-thermal" />Thermal 56°</span>
+        <span><i className="legend-thermal" />TMC160B 57°</span>
         <span><i className="legend-heat" />열원</span>
         <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : `목업 · ${Math.round(mapView.zoom * 100)}%`}</strong>
       </footer>
@@ -1288,7 +1288,10 @@ function MapPage({
               {sensors.map((sensor) => (
                 <div key={sensor.id}>
                   <i className={`sensor-color sensor-color-${sensor.id}`} />
-                  <span><strong>{sensor.model}</strong><small>수평 {sensor.horizontal_fov_deg}° · {sensor.range_min_m}~{sensor.range_max_m}m</small></span>
+                  <span>
+                    <strong>{sensor.model}</strong>
+                    <small>{sensor.resolution ? `${sensor.resolution} · ` : ""}수평 {sensor.horizontal_fov_deg}° · {sensor.id === "thermal" ? "표시 " : ""}{sensor.range_min_m}~{sensor.range_max_m}m</small>
+                  </span>
                 </div>
               ))}
               <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
