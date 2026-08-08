@@ -14,6 +14,7 @@ import {
   Trash,
   X,
 } from "@phosphor-icons/react";
+import { CollapsibleCard } from "./components/Common.jsx";
 
 const missionActiveStates = new Set([
   "preparing",
@@ -105,14 +106,12 @@ export default function WaypointMissionPanel({
   };
 
   return (
-    <section className="detail-card waypoint-mission-card">
-      <div className="detail-card-title">
-        <ListNumbers size={20} />
-        <div>
-          <strong>순찰 웨이포인트</strong>
-          <span>{enabledCount}개 지점 · 사용자 순서</span>
-        </div>
-      </div>
+    <CollapsibleCard
+      icon={ListNumbers}
+      title="순찰 웨이포인트"
+      subtitle={`${enabledCount}개 지점 · 사용자 순서`}
+      className="waypoint-mission-card"
+    >
 
       {!mapLive && (
         <div className="route-notice warning">
@@ -417,6 +416,6 @@ export default function WaypointMissionPanel({
           </button>
         )}
       </div>
-    </section>
+    </CollapsibleCard>
   );
 }

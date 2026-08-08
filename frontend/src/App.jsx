@@ -5,6 +5,7 @@ import { systemModeLabels } from "./components/Common.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import { initialEvents, navigationLabels } from "./data/dashboardData.js";
 import EventsPage from "./pages/EventsPage.jsx";
+import HelpPage from "./pages/HelpPage.jsx";
 import MapPage from "./pages/MapPage.jsx";
 import Overview from "./pages/Overview.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
@@ -147,7 +148,7 @@ export function App() {
     } : event));
   };
   const navigate = (id) => {
-    if (["overview", "map", "events", "video", "report", "settings"].includes(id)) setActive(id);
+    if (["overview", "map", "events", "video", "report", "settings", "help"].includes(id)) setActive(id);
     else notify(`${navigationLabels[id] || "도움말"} 화면은 다음 단계에서 연결됩니다.`, "info");
   };
   const sendCommand = async (command, enabled = false) => {
@@ -159,17 +160,23 @@ export function App() {
     if (!response.ok) throw new Error(`Command failed: ${response.status}`);
     return response.json();
   };
-  const changeSystemMode = async (nextMode) => {
+  const changeSystemMode = async (
+    nextMode,
+    mappingProfile = systemMode.mapping_profile || "toolbox",
+  ) => {
     if (
       systemMode.mode === nextMode
       && ["starting", "running", "external"].includes(systemMode.state)
+      && (nextMode !== "mapping" || systemMode.mapping_profile === mappingProfile)
     ) {
       notify(`이미 ${systemModeLabels[nextMode]}가 실행 중입니다.`, "info");
       return;
     }
     const confirmed = window.confirm(
       nextMode === "mapping"
-        ? "현재 순찰과 Nav2를 중단하고 SLAM 맵 생성 모드로 전환할까요?"
+        ? mappingProfile === "toolbox_rtabmap"
+          ? "현재 운용 모드를 중단하고 2D + RGB-D 3D 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
+          : "현재 운용 모드를 중단하고 2D SLAM Toolbox 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
         : "현재 SLAM 지도를 저장한 뒤 AMCL·Nav2 순찰 모드로 전환할까요?",
     );
     if (!confirmed) return;
@@ -178,7 +185,10 @@ export function App() {
       const response = await fetch("/api/v1/system/mode", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: nextMode }),
+        body: JSON.stringify({
+          mode: nextMode,
+          mapping_profile: mappingProfile,
+        }),
       });
       const result = await response.json();
       if (!response.ok) {
@@ -200,8 +210,26 @@ export function App() {
       if (!response.ok) throw new Error(result.detail || "ROS 지도를 저장하지 못했습니다.");
       setSystemMode(result);
       notify(result.message);
+      return result;
     } catch (error) {
       notify(error.message || "ROS 지도 저장 API에 연결하지 못했습니다.", "warning");
+      return null;
+    } finally {
+      setModeBusy(false);
+    }
+  };
+  const saveAndStopSystemMap = async () => {
+    setModeBusy(true);
+    try {
+      const response = await fetch("/api/v1/system/map/save-and-stop", { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "지도 저장 후 종료하지 못했습니다.");
+      setSystemMode(result);
+      notify(result.message);
+      return result;
+    } catch (error) {
+      notify(error.message || "지도 저장·종료 API에 연결하지 못했습니다.", "warning");
+      return null;
     } finally {
       setModeBusy(false);
     }
@@ -216,11 +244,12 @@ export function App() {
       />
       <main className="main-content">
         {active === "overview" && <Overview events={events} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} />}
-        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onSaveSystemMap={saveSystemMap} notify={notify} />}
+        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} notify={notify} />}
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
         {active === "report" && <ReportsPage events={events} notify={notify} />}
         {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} />}
+        {active === "help" && <HelpPage onNavigate={navigate} />}
       </main>
       {toast && <div className={`toast ${toast.tone}`} role="status"><CheckCircle size={19} weight="fill" /><span>{toast.message}</span></div>}
     </div>
