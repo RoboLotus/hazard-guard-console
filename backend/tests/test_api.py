@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app import bridge
 from app import main as main_module
 from app.bridge import MediaStore
+from app.point_cloud import POINT_RECORD
 from app.main import app
 
 
@@ -73,6 +74,26 @@ def test_system_mode_status_exposes_webui_control_contract():
     }
 
 
+def test_system_mode_marks_stale_rtabmap_cloud_as_not_live(monkeypatch):
+    monkeypatch.setattr(
+        main_module.point_cloud_store,
+        "status",
+        lambda: {
+            "available": True,
+            "point_count": 42,
+            "color_available": True,
+            "source": "/hazard_guard/rtabmap/cloud_surface",
+            "age_sec": 2.1,
+        },
+    )
+
+    payload = client.get("/api/v1/system/mode").json()
+
+    assert payload["rtabmap"]["live"] is False
+    assert payload["rtabmap"]["point_count"] == 42
+    assert payload["rtabmap"]["age_sec"] == 2.1
+
+
 def test_system_mode_switch_routes_validated_mode_to_manager(monkeypatch):
     expected = {
         "mode": "mapping",
@@ -91,7 +112,11 @@ def test_system_mode_switch_routes_validated_mode_to_manager(monkeypatch):
     monkeypatch.setattr(
         main_module.system_mode_manager,
         "switch_mode",
-        lambda mode: {**expected, "mode": mode},
+        lambda mode, mapping_profile="toolbox": {
+            **expected,
+            "mode": mode,
+            "mapping_profile": mapping_profile,
+        },
     )
 
     response = client.put("/api/v1/system/mode", json={"mode": "mapping"})
@@ -104,6 +129,73 @@ def test_system_mode_switch_routes_validated_mode_to_manager(monkeypatch):
 def test_system_mode_rejects_unknown_mode():
     response = client.put("/api/v1/system/mode", json={"mode": "teleop"})
     assert response.status_code == 422
+
+
+def test_system_mode_rejects_unknown_mapping_profile():
+    response = client.put(
+        "/api/v1/system/mode",
+        json={"mode": "mapping", "mapping_profile": "unknown"},
+    )
+    assert response.status_code == 422
+
+
+def test_save_and_stop_endpoint_returns_manager_result(monkeypatch):
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "save_map_and_stop",
+        lambda: {
+            "accepted": True,
+            "mode": "idle",
+            "state": "stopped",
+            "message": "저장 후 종료",
+        },
+    )
+
+    response = client.post("/api/v1/system/map/save-and-stop")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "stopped"
+
+
+def test_map_session_metadata_can_be_updated(monkeypatch):
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "edit_map_session",
+        lambda world_id, session_id, **values: {
+            "accepted": True,
+            "message": "updated",
+            "session": {"id": session_id, "world_id": world_id, **values},
+        },
+    )
+
+    response = client.patch(
+        "/api/v1/system/maps/facility/session-1",
+        json={"name": "1차 지도", "archived": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session"]["name"] == "1차 지도"
+    assert response.json()["session"]["archived"] is True
+
+
+def test_saved_cloud_is_served_inline(monkeypatch, tmp_path):
+    cloud = tmp_path / "cloud.ply"
+    cloud.write_bytes(b"ply\n")
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "export_map_cloud",
+        lambda _world_id, _session_id: {
+            "accepted": True,
+            "path": cloud,
+            "message": "ready",
+        },
+    )
+
+    response = client.get("/api/v1/system/maps/facility/session-1/cloud.ply")
+
+    assert response.status_code == 200
+    assert response.content == b"ply\n"
+    assert response.headers["content-disposition"].startswith("inline")
 
 
 def test_media_status_is_explicit_when_ros_streams_are_unavailable():
@@ -421,7 +513,24 @@ def test_spatial_detection_validates_temperature_and_confidence():
 def test_spatial_websocket_sends_map_overlay_snapshot():
     with client.websocket_connect("/ws/spatial") as websocket:
         payload = websocket.receive_json()
+
         assert payload["source"] in {"mock", "ros"}
         assert "pose" in payload
         assert "sensors" in payload
         assert "heatmap" in payload
+
+
+def test_point_cloud_websocket_sends_binary_packet():
+    main_module.point_cloud_store.update(
+        POINT_RECORD.pack(1.0, 2.0, 0.5, 220, 80, 35, 255),
+        point_count=1,
+        color_available=True,
+        frame_id="map",
+        source="test:/cloud",
+    )
+
+    with client.websocket_connect("/ws/pointcloud") as websocket:
+        packet = websocket.receive_bytes()
+
+    assert packet[:4] == b"HGPC"
+    assert len(packet) == 24 + POINT_RECORD.size

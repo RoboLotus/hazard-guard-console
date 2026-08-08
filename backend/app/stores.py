@@ -48,6 +48,13 @@ class MediaStore:
             item = self._items.get(kind)
             return dict(item) if item is not None else None
 
+    def clear(self, kind: str | None = None) -> None:
+        with self._lock:
+            if kind is None:
+                self._items.clear()
+            else:
+                self._items.pop(kind, None)
+
     def status(self) -> dict[str, dict[str, Any]]:
         now = time.monotonic()
         with self._lock:
@@ -351,6 +358,29 @@ class SpatialStore:
     def clear_trail(self) -> None:
         with self._lock:
             self._trail.clear()
+
+    def reset_for_mapping(self, map_id: str) -> None:
+        """Discard overlays from the previous SLAM run while awaiting /map."""
+
+        with self._lock:
+            self._map_id = map_id
+            self._map = {
+                **self.MOCK_MAP,
+                "map_id": map_id,
+                "source": "pending:/map",
+            }
+            self._pose = {
+                "available": False,
+                "frame_id": "map",
+                "x": 0.0,
+                "y": 0.0,
+                "yaw": 0.0,
+                "mock": False,
+                "updated_at": utc_now(),
+            }
+            self._trail.clear()
+            self._detections.clear()
+            self._live_initialized = False
 
     def _append_trail_locked(self, pose: dict[str, Any]) -> None:
         point = {
