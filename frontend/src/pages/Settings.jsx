@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   CheckCircle,
@@ -7,6 +7,7 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import { NumberField } from "../components/Common.jsx";
+import SensorDiagnostics from "../components/SensorDiagnostics.jsx";
 import { initialThresholds } from "../data/dashboardData.js";
 
 export default function Settings({ notify, apiOnline }) {
@@ -15,8 +16,20 @@ export default function Settings({ notify, apiOnline }) {
     catch { return initialThresholds; }
   });
   const [errors, setErrors] = useState([]);
+  useEffect(() => {
+    if (!apiOnline) return;
+    const controller = new AbortController();
+    void fetch("/api/v1/settings/thresholds", { signal: controller.signal, cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((serverValues) => {
+        setValues({ ...initialThresholds, ...serverValues });
+        localStorage.setItem("hazardGuardThresholds", JSON.stringify(serverValues));
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [apiOnline]);
   const update = ({ target }) => setValues((current) => ({ ...current, [target.name]: Number(target.value) }));
-  const reset = () => { setValues(initialThresholds); setErrors([]); notify("권장 데모값으로 되돌렸습니다."); };
+  const reset = () => { setValues(initialThresholds); setErrors([]); notify("권장값으로 되돌렸습니다."); };
   const save = async (event) => {
     event.preventDefault();
     const nextErrors = [];
@@ -28,10 +41,19 @@ export default function Settings({ notify, apiOnline }) {
     localStorage.setItem("hazardGuardThresholds", JSON.stringify(values));
     if (apiOnline) {
       try {
-        await fetch("/api/v1/settings/thresholds", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
-      } catch { /* local save remains valid */ }
+        const response = await fetch("/api/v1/settings/thresholds", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
+        if (!response.ok) throw new Error(`threshold save failed: ${response.status}`);
+        const serverValues = await response.json();
+        setValues({ ...initialThresholds, ...serverValues });
+        localStorage.setItem("hazardGuardThresholds", JSON.stringify(serverValues));
+      } catch {
+        notify("서버 저장에 실패해 이 브라우저에 임시 저장했습니다.");
+        return;
+      }
+      notify("화재 판정 조건을 서버에 저장했습니다.");
+      return;
     }
-    notify("화재 판정 조건을 저장했습니다.");
+    notify("서버가 연결되지 않아 이 브라우저에 임시 저장했습니다.");
   };
   return (
     <div className="settings-page">
@@ -59,6 +81,7 @@ export default function Settings({ notify, apiOnline }) {
         {errors.length > 0 && <div className="form-errors" role="alert"><Warning size={19} weight="fill" /><div>{errors.map((error) => <p key={error}>{error}</p>)}</div></div>}
         <footer className="form-footer"><button type="button" className="button ghost" onClick={reset}>권장값으로 초기화</button><button type="submit" className="button primary"><Check size={17} weight="bold" />설정 저장</button></footer>
       </form>
+      <SensorDiagnostics apiOnline={apiOnline} />
     </div>
   );
 }
