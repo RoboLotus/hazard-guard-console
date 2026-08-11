@@ -59,6 +59,10 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .system-mode-control footer { margin-top: 9px; padding-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 6px; color: #7c8999; border-top: 1px solid #e4e9ef; font-size: 7px; font-weight: 700; }
 .system-mode-control footer small { color: #9a6670; font-size: 7px; text-align: right; }
 .system-mode-control footer small.available { color: var(--success); }
+.physical-operation-note { margin-top: 10px; padding: 9px 10px; display: flex; align-items: center; gap: 8px; color: #245d73; background: #edf8fa; border: 1px solid #c9e8ed; border-radius: 8px; }
+.physical-operation-note > svg { flex: 0 0 auto; }
+.physical-operation-note span { display: flex; flex-direction: column; gap: 2px; font-size: 7px; line-height: 1.4; }
+.physical-operation-note strong { color: #174c60; font-size: 8px; }
 .simulation-teleop { margin-top: 12px; padding: 10px; background: #f7f9fc; border: 1px solid #dfe6ee; border-radius: 10px; }
 .simulation-teleop header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .teleop-title { display: inline-flex; align-items: center; gap: 6px; color: #35475d; font-size: 10px; font-weight: 800; }
@@ -325,7 +329,7 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .status-list dd.healthy { color: var(--success); }
 .status-list.compact > div { padding: 8px 0; }
 
-.map-workspace { height: calc(100vh - 130px); min-height: 620px; display: grid; grid-template-columns: minmax(0, 1fr) 282px; gap: 14px; }
+.map-workspace { height: calc(100vh - 130px); min-height: 620px; display: grid; grid-template-columns: minmax(0, 7fr) minmax(340px, 3fr); gap: 14px; }
 .map-panel-detail { grid-template-rows: 56px minmax(0, 1fr) 40px; }
 .map-panel-detail .map-stage { min-height: 520px; }
 .map-panel-detail .map-footer { font-size: 9px; }
@@ -342,6 +346,17 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .point-cloud-color-dot { width: 9px !important; height: 9px !important; background: conic-gradient(#e95e55, #f0c34b, #54b97c, #4f8fe8, #b66bd8, #e95e55) !important; border-radius: 50%; }
 .map-side-panel { min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
 .map-side-panel .detail-card:first-child { flex: 0 0 auto; }
+.localization-retry-button { width: 100%; min-height: 32px; margin-top: 8px; padding: 7px 9px; color: #155fae; background: #edf5ff; border: 1px solid #bcd4f2; border-radius: 7px; font-size: 8px; font-weight: 800; cursor: pointer; }
+.localization-retry-button:hover:not(:disabled) { background: #e2f0ff; border-color: #8eb8e6; }
+.localization-retry-button:disabled { color: #8793a2; background: #f4f6f8; border-color: #dfe5ec; cursor: not-allowed; }
+.map-file-location { margin-top: 8px; padding: 8px; background: #f7f9fb; border: 1px solid #e2e8ee; border-radius: 7px; }
+.map-file-location > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.map-file-location strong { color: #53657a; font-size: 8px; }
+.map-file-location button { padding: 3px 6px; color: #155fae; background: #fff; border: 1px solid #cbd9e8; border-radius: 5px; font-size: 7px; font-weight: 750; cursor: pointer; }
+.map-file-location dl { margin: 7px 0 0; display: grid; gap: 4px; }
+.map-file-location dl > div { min-width: 0; display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 6px; }
+.map-file-location dt { color: #7d8b9b; font-size: 7px; font-weight: 750; }
+.map-file-location dd { margin: 0; overflow: hidden; color: #516276; font: 600 7px ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .map-waiting-overlay { position: absolute; inset: 0; z-index: 9; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #425a73; background: rgba(242,246,250,.97); text-align: center; }
 .map-waiting-overlay strong { font-size: 13px; }
 .map-waiting-overlay small { color: #7a8999; font-size: 8px; }
@@ -399,6 +414,20 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .waypoint-editor-actions button:disabled { opacity: .42; cursor: not-allowed; }
 .route-tools { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .route-tools .button { min-height: 34px; padding: 0 7px; font-size: 8px; }
+.patrol-schedule-editor { margin-top: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: #f7f9fc; border: 1px solid #e1e7ee; border-radius: 8px; }
+.patrol-schedule-editor > header { display: flex; align-items: center; gap: 7px; color: #31587f; }
+.patrol-schedule-editor > header > span { display: flex; flex-direction: column; gap: 1px; }
+.patrol-schedule-editor > header strong { color: #263b52; font-size: 9px; }
+.patrol-schedule-editor > header small { color: #8290a0; font-size: 7px; font-weight: 650; }
+.patrol-schedule-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.patrol-schedule-editor label { min-width: 0; display: flex; flex-direction: column; gap: 4px; color: #748398; font-size: 7px; font-weight: 700; }
+.patrol-schedule-editor input, .patrol-schedule-editor select { min-width: 0; width: 100%; height: 31px; padding: 0 8px; color: #27394e; background: #fff; border: 1px solid #d6e0ea; border-radius: 6px; font-family: inherit; font-size: 8px; font-weight: 650; }
+.patrol-schedule-editor input:disabled, .patrol-schedule-editor select:disabled { color: #8491a1; background: #eef2f6; }
+.patrol-schedule-wide { width: 100%; }
+.patrol-schedule-status { padding: 8px 9px; display: flex; flex-direction: column; gap: 3px; color: #3d5d7c; background: #eaf3fd; border: 1px solid #cbdff4; border-radius: 7px; font-size: 8px; line-height: 1.4; }
+.patrol-schedule-status strong { color: #1769b0; font-size: 9px; }
+.patrol-schedule-status small { color: #61758a; font-size: 7px; font-weight: 700; }
+.patrol-schedule-editor > p { margin: 0; color: #7a8898; font-size: 7px; line-height: 1.45; }
 .route-primary-actions { margin-top: 7px; display: flex; flex-direction: column; align-items: center; gap: 5px; }
 .danger-button { color: #fff; background: #d74751; border-color: #d74751; }
 .danger-button:hover { background: #c63742; }

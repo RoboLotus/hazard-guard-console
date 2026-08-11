@@ -13,6 +13,10 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _datetime_to_unix_ms(value: datetime | None) -> int:
+    return int(value.timestamp() * 1000) if value is not None else 0
+
+
 class MediaStore:
     """Thread-safe cache for ROS media converted to browser-ready images."""
 
@@ -127,6 +131,15 @@ class RouteMissionStore:
             "current_index": None,
             "total_waypoints": 0,
             "completed_waypoints": 0,
+            "repeat_mode": "once",
+            "repeat_count": 1,
+            "repeat_interval_sec": 0.0,
+            "current_cycle": 0,
+            "total_cycles": 1,
+            "completed_cycles": 0,
+            "start_at_unix_ms": 0,
+            "end_at_unix_ms": 0,
+            "next_run_at_unix_ms": 0,
             "total_distance_m": None,
             "message": "아직 시작된 순찰 임무가 없습니다.",
             "waypoints": [],
@@ -150,6 +163,19 @@ class RouteMissionStore:
                 "current_index": None,
                 "total_waypoints": len(active),
                 "completed_waypoints": 0,
+                "repeat_mode": route.get("repeat_mode", "once"),
+                "repeat_count": route.get("repeat_count", 1),
+                "repeat_interval_sec": route.get("repeat_interval_seconds", 0.0),
+                "current_cycle": 0,
+                "total_cycles": (
+                    route.get("repeat_count", 1)
+                    if route.get("repeat_mode") == "count"
+                    else 1 if route.get("repeat_mode", "once") == "once" else 0
+                ),
+                "completed_cycles": 0,
+                "start_at_unix_ms": _datetime_to_unix_ms(route.get("start_at")),
+                "end_at_unix_ms": _datetime_to_unix_ms(route.get("end_at")),
+                "next_run_at_unix_ms": _datetime_to_unix_ms(route.get("start_at")),
                 "total_distance_m": None,
                 "message": "웨이포인트 경로를 확인하고 있습니다.",
                 "waypoints": [
@@ -273,16 +299,32 @@ class SpatialStore:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._source = "mock"
-        self._map_id = os.getenv("HAZARD_GUARD_MAP_ID", "mock:facility-v1")
-        self._map = {**self.MOCK_MAP, "map_id": self._map_id}
+        default_mock_enabled = (
+            "0"
+            if os.getenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "simulation").lower()
+            == "physical"
+            else "1"
+        )
+        self._mock_enabled = os.getenv(
+            "HAZARD_GUARD_MOCK_DATA_ENABLED", default_mock_enabled
+        ).lower() in {"1", "true", "yes", "on"}
+        self._source = "mock" if self._mock_enabled else "waiting"
+        self._map_id = os.getenv(
+            "HAZARD_GUARD_MAP_ID",
+            "mock:facility-v1" if self._mock_enabled else "physical:pending",
+        )
+        self._map = {
+            **self.MOCK_MAP,
+            "map_id": self._map_id,
+            "source": "mock:slam-map" if self._mock_enabled else "pending:/map",
+        }
         self._pose = {
-            "available": True,
+            "available": self._mock_enabled,
             "frame_id": "map",
             "x": self.MOCK_ROUTE[0][0],
             "y": self.MOCK_ROUTE[0][1],
             "yaw": 0.0,
-            "mock": True,
+            "mock": self._mock_enabled,
             "updated_at": utc_now(),
         }
         self._trail: list[dict[str, Any]] = []
@@ -290,15 +332,16 @@ class SpatialStore:
         self._started_monotonic = time.monotonic()
         self._last_mock_update = 0.0
         self._live_initialized = False
-        for detection in self.MOCK_HEAT_SOURCES:
-            self._store_detection_locked(
-                {
-                    **detection,
-                    "frame_id": "map",
-                    "z": 0.0,
-                    "simulated": True,
-                }
-            )
+        if self._mock_enabled:
+            for detection in self.MOCK_HEAT_SOURCES:
+                self._store_detection_locked(
+                    {
+                        **detection,
+                        "frame_id": "map",
+                        "z": 0.0,
+                        "simulated": True,
+                    }
+                )
 
     def _activate_live_locked(self) -> None:
         if self._live_initialized:
@@ -381,6 +424,21 @@ class SpatialStore:
             self._trail.clear()
             self._detections.clear()
             self._live_initialized = False
+
+    def reset_for_localization(self) -> None:
+        """Invalidate a SLAM-era pose until AMCL publishes the patrol transform."""
+
+        with self._lock:
+            self._pose = {
+                "available": False,
+                "frame_id": "map",
+                "x": 0.0,
+                "y": 0.0,
+                "yaw": 0.0,
+                "mock": False,
+                "updated_at": utc_now(),
+            }
+            self._trail.clear()
 
     def _append_trail_locked(self, pose: dict[str, Any]) -> None:
         point = {

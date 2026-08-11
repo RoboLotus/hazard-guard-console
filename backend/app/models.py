@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -38,6 +39,12 @@ class CommandRequest(BaseModel):
 class SystemModeRequest(BaseModel):
     mode: Literal["mapping", "patrol"]
     mapping_profile: Literal["toolbox", "toolbox_rtabmap"] = "toolbox"
+
+
+class LocalizationPoseRequest(BaseModel):
+    x: float = Field(..., ge=-1000, le=1000)
+    y: float = Field(..., ge=-1000, le=1000)
+    yaw: float = Field(0, ge=-3.141593, le=3.141593)
 
 
 class WorldSelectionRequest(BaseModel):
@@ -99,6 +106,11 @@ class NavigationRoute(BaseModel):
     name: str = Field("기본 순찰 경로", min_length=1, max_length=80)
     frame_id: str = Field("map", pattern=r"^[A-Za-z][A-Za-z0-9_/]*$")
     return_to_start: bool = False
+    repeat_mode: Literal["once", "count", "until_time", "forever"] = "once"
+    repeat_count: int = Field(1, ge=1, le=1000)
+    repeat_interval_seconds: float = Field(0, ge=0, le=86400)
+    start_at: datetime | None = None
+    end_at: datetime | None = None
     waypoints: list[RouteWaypoint] = Field(..., min_length=1, max_length=50)
 
     @model_validator(mode="after")
@@ -109,6 +121,18 @@ class NavigationRoute(BaseModel):
         ids = [waypoint.id for waypoint in self.waypoints]
         if len(ids) != len(set(ids)):
             raise ValueError("waypoint ids must be unique")
+        if self.repeat_mode == "count" and self.repeat_count < 2:
+            raise ValueError("repeat_count must be at least 2 in count mode")
+        if self.start_at is not None and self.start_at.tzinfo is None:
+            raise ValueError("start_at must include a timezone offset")
+        if self.end_at is not None and self.end_at.tzinfo is None:
+            raise ValueError("end_at must include a timezone offset")
+        if self.repeat_mode == "until_time":
+            if self.end_at is None:
+                raise ValueError("end_at is required in until_time mode")
+            effective_start = self.start_at or datetime.now(timezone.utc)
+            if self.end_at <= effective_start:
+                raise ValueError("end_at must be later than start_at")
         return self
 
 

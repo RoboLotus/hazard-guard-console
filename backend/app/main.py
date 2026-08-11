@@ -19,6 +19,7 @@ from .bridge import (
 from .mode_manager import system_mode_manager
 from .models import (
     CommandRequest,
+    LocalizationPoseRequest,
     MockCommand,
     MapSelectionRequest,
     MapSessionUpdate,
@@ -142,6 +143,8 @@ def simulation_teleop_readiness() -> tuple[bool, str]:
     """Allow browser teleop only for a WebUI-managed mapping simulation."""
 
     status = system_mode_status()
+    if status.get("deployment_target") == "physical":
+        return False, "실물 로봇에서는 안전을 위해 WebUI 가상 조작기를 사용할 수 없습니다."
     if not status.get("control_enabled"):
         return False, "WebUI 시뮬레이션 제어가 비활성화되어 있습니다."
     if status.get("mode") != "mapping":
@@ -164,6 +167,9 @@ def health():
         "status": "ok",
         "mode": "ros-mock" if ros_bridge.active else "mock",
         "ros_bridge": ros_bridge.active,
+        "deployment_target": system_mode_manager.snapshot(
+            detect_external=False
+        ).get("deployment_target"),
         "capabilities": ros_bridge.capability_status(),
     }
 
@@ -182,6 +188,11 @@ def system_mode():
 def update_system_mode(request: SystemModeRequest):
     ros_bridge.cancel_route()
     ros_bridge.cancel_navigation()
+    ros_bridge.stop_motion()
+    if request.mode == "patrol":
+        current_pose = spatial_store.snapshot().get("pose") or {}
+        if current_pose.get("available") and not current_pose.get("mock"):
+            system_mode_manager.set_localization_pose(current_pose)
     result = system_mode_manager.switch_mode(
         request.mode,
         mapping_profile=request.mapping_profile,
@@ -194,6 +205,27 @@ def update_system_mode(request: SystemModeRequest):
         spatial_store.reset_for_mapping(
             f"{result.get('active_world_id', 'world')}:{session_id}"
         )
+    elif request.mode == "patrol":
+        spatial_store.reset_for_localization()
+    return result
+
+
+@app.post("/api/v1/system/localization/initialize")
+def initialize_localization(request: LocalizationPoseRequest):
+    status = system_mode_status()
+    if status.get("mode") != "patrol" or status.get("state") not in {
+        "running",
+        "external",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="순찰 모드가 실행 중일 때만 AMCL 초기 위치를 적용할 수 있습니다.",
+        )
+    system_mode_manager.set_localization_pose(request.model_dump())
+    spatial_store.reset_for_localization()
+    result = ros_bridge.publish_initial_pose(request.x, request.y, request.yaw)
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
     return result
 
 
@@ -201,6 +233,7 @@ def update_system_mode(request: SystemModeRequest):
 def stop_system_mode():
     ros_bridge.cancel_route()
     ros_bridge.cancel_navigation()
+    ros_bridge.stop_motion()
     return system_mode_manager.stop()
 
 

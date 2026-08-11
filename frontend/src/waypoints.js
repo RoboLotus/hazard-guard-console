@@ -70,6 +70,7 @@ export function saveWaypointRoute(
   mapSpec,
   routeName = "기본 순찰 경로",
   worldId = "facility_map",
+  schedule = null,
 ) {
   const payload = {
     version: 2,
@@ -78,6 +79,7 @@ export function saveWaypointRoute(
     mapSignature: routeMapSignature(mapSpec),
     savedAt: new Date().toISOString(),
     waypoints,
+    schedule,
   };
   localStorage.setItem(storageKey(worldId), JSON.stringify(payload));
   return payload;

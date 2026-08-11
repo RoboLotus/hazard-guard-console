@@ -277,6 +277,7 @@ class WorldCatalog:
                     if cloud_file
                     else metadata_path.parent / "cloud.ply"
                 )
+                image_path = self.map_image_path(map_path)
                 result.append(
                     {
                         "id": session_id,
@@ -306,6 +307,14 @@ class WorldCatalog:
                         "cloud_bytes": (
                             cloud_path.stat().st_size if cloud_path.is_file() else 0
                         ),
+                        "storage_directory": str(metadata_path.parent),
+                        "map_yaml_path": str(map_path),
+                        "map_image_path": str(image_path) if image_path else None,
+                        "rtabmap_database_path": (
+                            str(database_path) if database_path else None
+                        ),
+                        "cloud_path": str(cloud_path),
+                        "localization_pose": metadata.get("localization_pose"),
                     }
                 )
         return sorted(result, key=lambda item: item.get("created_at") or "", reverse=True)
@@ -388,6 +397,27 @@ class WorldCatalog:
         except OSError:
             return False
         return False
+
+    @staticmethod
+    def map_image_path(map_path: Path) -> Path | None:
+        """Resolve the image referenced by a ROS occupancy-map YAML file."""
+
+        if not map_path.is_file():
+            return None
+        try:
+            for line in map_path.read_text(encoding="utf-8").splitlines():
+                if not line.lstrip().startswith("image:"):
+                    continue
+                image_value = line.split(":", 1)[1].strip().strip("'\"")
+                image_path = Path(image_value).expanduser()
+                return (
+                    image_path
+                    if image_path.is_absolute()
+                    else (map_path.parent / image_path).resolve()
+                )
+        except OSError:
+            return None
+        return None
 
     def activate_session(self, world_id: str, session_id: str) -> Path:
         matching = next(

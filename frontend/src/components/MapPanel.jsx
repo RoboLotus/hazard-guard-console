@@ -225,6 +225,8 @@ export default function MapPanel({
   selectedWaypointId = null,
   onWaypointSelect,
   waitingForMap = false,
+  waitingLabel = "새 SLAM 지도 수신 대기 중",
+  allowMockFallback = true,
 }) {
   const mapLive = Boolean(mediaStatus?.map?.available);
   const mapSpec = resolveMapSpec(mediaStatus, spatialState);
@@ -390,16 +392,20 @@ export default function MapPanel({
               height: `${imageGeometry.height}px`,
             }}
           >
-            <LiveImage className={mapLive ? "live-map" : ""} draggable="false" endpoint="/api/v1/media/map" fallback={slamMap} enabled={mapLive} interval={1000} alt="ROS 2 SLAM 점유 지도" />
-            <SpatialMapOverlay
-              spatialState={spatialState}
-              mapSpec={mapSpec}
-              layers={layers}
-              detail={detail}
-              waypoints={waypoints}
-              selectedWaypointId={selectedWaypointId}
-              onWaypointSelect={onWaypointSelect}
-            />
+            {(mapLive || allowMockFallback) && (
+              <>
+                <LiveImage className={mapLive ? "live-map" : ""} draggable="false" endpoint="/api/v1/media/map" fallback={slamMap} enabled={mapLive} interval={1000} alt="ROS 2 SLAM 점유 지도" />
+                <SpatialMapOverlay
+                  spatialState={spatialState}
+                  mapSpec={mapSpec}
+                  layers={layers}
+                  detail={detail}
+                  waypoints={waypoints}
+                  selectedWaypointId={selectedWaypointId}
+                  onWaypointSelect={onWaypointSelect}
+                />
+              </>
+            )}
           </div>
           {goalCandidate && (
             <div
@@ -414,12 +420,12 @@ export default function MapPanel({
         {waitingForMap && !mapLive && (
           <div className="map-waiting-overlay" role="status">
             <span className="map-waiting-spinner" />
-            <strong>새 SLAM 지도 수신 대기 중</strong>
-            <small>이전 세션 지도는 초기화되었습니다.</small>
+            <strong>{waitingLabel}</strong>
+            <small>{allowMockFallback ? "이전 세션 지도는 초기화되었습니다." : "센서와 ROS 2 브리지가 준비되면 자동으로 표시됩니다."}</small>
           </div>
         )}
-        <div className={`map-live-badge ${mapLive ? "" : "mock"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : waitingForMap ? "새 지도 대기" : "디지털 트윈 목업"}</div>
-        {spatialState?.heatmap?.simulated && layers.heatmap && <div className="heatmap-simulation-badge">SIMULATED HEAT</div>}
+        <div className={`map-live-badge ${mapLive ? "" : "mock"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : waitingForMap ? "ROS 지도 대기" : "디지털 트윈 목업"}</div>
+        {allowMockFallback && spatialState?.heatmap?.simulated && layers.heatmap && <div className="heatmap-simulation-badge">SIMULATED HEAT</div>}
         {goalMode && <div className="goal-mode-hint">지도를 클릭해 목적지 후보를 선택하세요</div>}
         {detail && (
           <div className="map-axis-guide" aria-label="ROS 지도 각도 기준">
@@ -437,7 +443,7 @@ export default function MapPanel({
         {depthLegend && <span><i className="legend-depth" />{depthLegend}</span>}
         {thermalLegend && <span><i className="legend-thermal" />{thermalLegend}</span>}
         <span><i className="legend-heat" />열원</span>
-        <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : `목업 · ${Math.round(mapView.zoom * 100)}%`}</strong>
+        <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : allowMockFallback ? `목업 · ${Math.round(mapView.zoom * 100)}%` : `센서 대기 · ${Math.round(mapView.zoom * 100)}%`}</strong>
       </footer>
     </section>
   );

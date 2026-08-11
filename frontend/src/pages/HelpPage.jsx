@@ -5,6 +5,7 @@ import {
   BookOpenText,
   Camera,
   CheckCircle,
+  Clock,
   Cube,
   DownloadSimple,
   Eye,
@@ -92,7 +93,7 @@ export default function HelpPage({ onNavigate }) {
             <span className="eyebrow">QUICK START</span>
             <h2 id="quick-start-title">기본 운용 흐름</h2>
           </div>
-          <p>시뮬레이션 기준 · 왼쪽부터 순서대로 진행</p>
+          <p>시뮬레이션·실물 공통 · 왼쪽부터 순서대로 진행</p>
         </header>
         <div className="help-quick-grid">
           {quickSteps.map(({ icon: Icon, title, description }, index) => (
@@ -139,15 +140,19 @@ export default function HelpPage({ onNavigate }) {
           <HelpSection id="mapping" icon={MapTrifold} eyebrow="02 · SLAM" title="새 2D·3D 지도 세션 만들기">
             <StepList>
               <li><strong>지도 탭</strong>에서 기존 운용 모드가 정지 상태인지 확인합니다.</li>
-              <li><strong>시뮬레이션 환경·지도</strong>에서 시험할 환경을 선택하고 환경 적용을 누릅니다.</li>
+              <li>시뮬레이션에서는 <strong>시뮬레이션 환경·지도</strong>에서 시험 환경을 선택합니다. 실물에서는 <strong>현장 지도 세션</strong>이 표시됩니다.</li>
               <li><strong>지도 생성 방식</strong>에서 빠른 2D 표준 또는 2D + RGB-D 3D 수집을 선택합니다.</li>
-              <li><strong>새 맵 생성</strong>을 선택합니다. 실행 중으로 바뀌면 Gazebo와 SLAM Toolbox가 준비된 상태입니다.</li>
-              <li><strong>가상 조작기</strong>의 버튼 또는 방향키/WASD를 누르고 있는 동안 로봇을 이동합니다.</li>
+              <li><strong>새 맵 생성</strong>을 선택합니다. 실행 중으로 바뀌면 선택한 배포 대상의 SLAM Toolbox가 준비된 상태입니다.</li>
+              <li>시뮬레이션은 <strong>가상 조작기</strong>의 버튼 또는 방향키/WASD를 사용하고, 실물 M1은 동봉 조이스틱으로 이동합니다.</li>
               <li>작성이 끝나면 계속 수집할 경우 <strong>현재 SLAM 지도 저장</strong>, 작업을 마칠 경우 <strong>지도 저장 후 종료</strong>를 누릅니다.</li>
             </StepList>
             <div className="help-callout info">
               <Keyboard size={20} weight="fill" />
               <div><strong>가상 조작기는 시뮬레이션 전용입니다.</strong><p>키나 버튼을 놓거나 창에서 벗어나면 정지합니다. 통신이 끊겨도 서버가 자동으로 정지 명령을 보냅니다.</p></div>
+            </div>
+            <div className="help-callout warning">
+              <ShieldWarning size={20} weight="fill" />
+              <div><strong>실물 로봇은 WebUI 가상 조작을 차단합니다.</strong><p>백엔드를 physical 대상으로 실행하면 Gazebo와 가상 조작기가 비활성화됩니다. 맵 작성 중에는 조이스틱을 사용하고 비상 정지 공간을 확보하세요.</p></div>
             </div>
             <div className="help-callout neutral">
               <FloppyDisk size={20} weight="fill" />
@@ -167,14 +172,19 @@ export default function HelpPage({ onNavigate }) {
             <StepList>
               <li>맵 생성이 끝났다면 지도를 저장하고 현재 모드를 종료합니다.</li>
               <li><strong>순찰용 SLAM 결과</strong>에서 사용할 지도를 선택하고 <strong>순찰 지도 지정</strong>을 누릅니다.</li>
-              <li><strong>순찰</strong> 모드로 전환하여 AMCL 위치 추정과 Nav2가 준비될 때까지 기다립니다.</li>
+              <li><strong>순찰</strong> 모드로 전환합니다. 맵 생성 종료 위치가 AMCL 초기 위치로 자동 전달되며, 실패하면 <strong>저장된 마지막 위치로 AMCL 다시 초기화</strong>를 누릅니다.</li>
               <li><strong>지도에서 웨이포인트 추가</strong>를 누르고 지점을 클릭한 뒤 이름, 바라볼 방향, 관찰 시간을 입력합니다.</li>
               <li>드래그 또는 순서 버튼으로 방문 순서를 바꿉니다. 지점이 여러 개면 <strong>순서 추천</strong>을 사용할 수 있습니다.</li>
-              <li><strong>경로 저장</strong> 후 순찰을 시작합니다. 실행 중에는 임무 상태와 현재 웨이포인트를 확인합니다.</li>
+              <li><strong>반복·운영 시간</strong>에서 즉시/예약 시작과 1회·지정 횟수·지정 시각·수동 종료 중 하나를 선택합니다. 반복 순찰은 회차 사이 대기시간도 지정할 수 있습니다.</li>
+              <li><strong>경로 저장</strong> 후 순찰을 시작합니다. 실행 중에는 현재 회차, 다음 시작 시각, 운영 종료 시각과 현재 웨이포인트를 확인합니다.</li>
             </StepList>
             <div className="help-callout warning">
               <ShieldWarning size={20} weight="fill" />
               <div><strong>맵 생성 모드에서는 순찰 명령을 보낼 수 없습니다.</strong><p>오조작을 막기 위해 순찰 버튼이 제한됩니다. 반드시 저장 지도와 순찰 모드를 먼저 준비하세요.</p></div>
+            </div>
+            <div className="help-callout info">
+              <Clock size={20} weight="fill" />
+              <div><strong>예약은 Jetson의 실제 시각을 기준으로 실행됩니다.</strong><p>WebUI를 닫거나 새로고침해도 ROS 임무 관리자가 예약과 반복을 계속 처리합니다. 정확한 시작·종료를 위해 Jetson의 날짜, 시간대와 NTP 동기화 상태를 먼저 확인하세요.</p></div>
             </div>
           </HelpSection>
 
@@ -185,6 +195,7 @@ export default function HelpPage({ onNavigate }) {
               <li><Archive size={15} /> <strong>보관 아이콘</strong>으로 당장 사용하지 않는 세션을 목록에서 숨깁니다. 보관은 파일 삭제가 아니며 언제든 해제할 수 있습니다.</li>
               <li><Eye size={15} /> <strong>눈 아이콘</strong>으로 저장된 3D 세션을 다시 열고, <DownloadSimple size={15} /> <strong>다운로드 아이콘</strong>으로 컬러 PLY를 내려받습니다.</li>
               <li>순찰에 사용할 2D 지도는 세션을 고른 뒤 <strong>순찰 지도 지정</strong>으로 활성화합니다.</li>
+              <li><strong>저장 파일 위치</strong>에서 세션 폴더와 map.yaml, map.pgm, RTAB-Map DB, PLY 경로를 확인하거나 폴더 경로를 복사합니다.</li>
             </StepList>
             <div className="help-callout info">
               <FloppyDisk size={20} weight="fill" />
@@ -260,7 +271,7 @@ export default function HelpPage({ onNavigate }) {
               </details>
               <details>
                 <summary>순찰 시작 버튼을 누를 수 없습니다.</summary>
-                <p>저장 지도 선택, 순찰 모드, AMCL 위치 추정, Nav2 및 임무 관리자 준비 상태를 순서대로 확인합니다. 웨이포인트도 최소 한 개 이상 활성화되어야 합니다.</p>
+                <p>저장 지도 선택, 순찰 모드, AMCL 위치 추정, Nav2 및 임무 관리자 준비 상태를 순서대로 확인합니다. AMCL만 대기 중이면 저장된 마지막 위치 재적용 버튼을 사용합니다. 실물 로봇을 지도 저장 위치에서 옮겼다면 RViz의 2D Pose Estimate로 현재 위치를 다시 지정해야 합니다.</p>
               </details>
               <details>
                 <summary>재실행 후 지도가 겹쳐 보입니다.</summary>

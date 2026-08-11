@@ -234,6 +234,27 @@ export function App() {
       setModeBusy(false);
     }
   };
+  const initializeLocalization = async () => {
+    const pose = systemMode?.localization_pose;
+    if (!pose) {
+      notify("저장된 초기 위치가 없습니다. 맵 생성 직후 순찰 모드로 전환하거나 RViz에서 초기 위치를 지정하세요.", "warning");
+      return null;
+    }
+    try {
+      const response = await fetch("/api/v1/system/localization/initialize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pose),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "초기 위치를 적용하지 못했습니다.");
+      notify(result.message, "info");
+      return result;
+    } catch (error) {
+      notify(error.message || "AMCL 초기 위치 API에 연결하지 못했습니다.", "warning");
+      return null;
+    }
+  };
 
   return (
     <div className="app-shell">
@@ -244,7 +265,7 @@ export function App() {
       />
       <main className="main-content">
         {active === "overview" && <Overview events={events} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} />}
-        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} notify={notify} />}
+        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} notify={notify} />}
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
         {active === "report" && <ReportsPage events={events} notify={notify} />}
