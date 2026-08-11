@@ -85,6 +85,9 @@ export function saveWaypointRoute(
 
 export function clearWaypointRoute(worldId = "facility_map") {
   localStorage.removeItem(storageKey(worldId));
+  if (worldId === "facility_map") {
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  }
 }
 
 export function activeWaypoints(waypoints) {

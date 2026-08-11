@@ -111,3 +111,17 @@ def test_catalog_rejects_unknown_or_path_like_world_ids(tmp_path):
 
     with pytest.raises(KeyError):
         catalog.get("../outside")
+
+
+def test_empty_launch_session_can_be_discarded_without_deleting_map_data(tmp_path):
+    worlds = tmp_path / "src" / "hazard_guard_simulation" / "worlds"
+    write_world(worlds / "facility_map.sdf", "facility_map")
+    catalog = WorldCatalog(tmp_path)
+    empty = catalog.begin_session("facility_map")
+    populated = catalog.begin_session("facility_map")
+    populated["map_path"].write_text("map data", encoding="utf-8")
+
+    assert catalog.discard_empty_session("facility_map", empty["id"]) is True
+    assert not empty["directory"].exists()
+    assert catalog.discard_empty_session("facility_map", populated["id"]) is False
+    assert populated["map_path"].is_file()

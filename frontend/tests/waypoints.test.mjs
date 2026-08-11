@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   activeWaypoints,
+  clearWaypointRoute,
   createWaypoint,
+  loadWaypointRoute,
   moveWaypoint,
   routeMapSignature,
   shiftWaypoint,
@@ -57,4 +59,26 @@ test("filters disabled points and fingerprints the current map", () => {
     }),
     "static:donut:abc123:map:120:80:0.0500:-3.000:-2.000",
   );
+});
+
+test("clearing the default route also removes its legacy fallback", (t) => {
+  const values = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  };
+  t.after(() => {
+    delete globalThis.localStorage;
+  });
+  values.set(
+    "hazard-guard:waypoint-route:v1",
+    JSON.stringify({ waypoints: [{ id: "legacy" }] }),
+  );
+
+  assert.equal(loadWaypointRoute("facility_map").waypoints[0].id, "legacy");
+
+  clearWaypointRoute("facility_map");
+
+  assert.equal(loadWaypointRoute("facility_map"), null);
 });
