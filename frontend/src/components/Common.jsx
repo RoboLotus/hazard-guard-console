@@ -4,6 +4,7 @@ import {
   Clock,
   MapTrifold,
   NavigationArrow,
+  Robot,
 } from "@phosphor-icons/react";
 import SimulationTeleop from "./SimulationTeleop.jsx";
 
@@ -156,6 +157,7 @@ export function SystemModeControl({ systemMode, busy, onChange }) {
     ? "Nav2 준비 중"
     : systemStateLabels[state] || state;
   const activeMappingProfile = systemMode?.mapping_profile || "toolbox";
+  const physicalTarget = systemMode?.deployment_target === "physical";
   const [mappingProfile, setMappingProfile] = useState(activeMappingProfile);
 
   useEffect(() => {
@@ -166,13 +168,15 @@ export function SystemModeControl({ systemMode, busy, onChange }) {
     <CollapsibleCard
       icon={MapTrifold}
       title="지도 운용 모드"
-      subtitle="SLAM과 AMCL·Nav2 실행 환경 전환"
+      subtitle={physicalTarget ? "실물 M1 SLAM·Nav2 전환" : "시뮬레이션 SLAM·Nav2 전환"}
       className={`system-mode-control ${state}`}
       headerAside={<StatusPill tone={stateTone}>{stateLabel}</StatusPill>}
     >
       <p className="system-mode-description">
         {mode === "mapping"
-          ? "회차별 새 세션에서 공간을 수동 주행하며 지도를 작성합니다."
+          ? physicalTarget
+            ? "실물 조이스틱으로 공간을 주행하며 회차별 새 지도를 작성합니다."
+            : "회차별 새 세션에서 공간을 수동 주행하며 지도를 작성합니다."
           : mode === "patrol"
             ? "저장된 지도에서 위치를 추정하고 웨이포인트를 순찰합니다."
             : "작업 목적에 맞는 모드를 선택하세요."}
@@ -218,7 +222,14 @@ export function SystemModeControl({ systemMode, busy, onChange }) {
           <span>순찰<small>AMCL · Nav2</small></span>
         </button>
       </div>
-      <SimulationTeleop systemMode={systemMode} />
+      {physicalTarget ? (
+        <div className="physical-operation-note">
+          <Robot size={17} weight="fill" />
+          <span><strong>실물 로봇 제어</strong>WebUI 가상 조작은 차단되며 동봉 조이스틱을 사용합니다.</span>
+        </div>
+      ) : (
+        <SimulationTeleop systemMode={systemMode} />
+      )}
       {mode === "mapping" && activeMappingProfile === "toolbox_rtabmap" && (
         <div className={`rtabmap-session-status ${systemMode?.rtabmap?.live ? "live" : "waiting"}`}>
           <span />

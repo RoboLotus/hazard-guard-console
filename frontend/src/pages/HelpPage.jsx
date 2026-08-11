@@ -92,7 +92,7 @@ export default function HelpPage({ onNavigate }) {
             <span className="eyebrow">QUICK START</span>
             <h2 id="quick-start-title">기본 운용 흐름</h2>
           </div>
-          <p>시뮬레이션 기준 · 왼쪽부터 순서대로 진행</p>
+          <p>시뮬레이션·실물 공통 · 왼쪽부터 순서대로 진행</p>
         </header>
         <div className="help-quick-grid">
           {quickSteps.map(({ icon: Icon, title, description }, index) => (
@@ -139,15 +139,19 @@ export default function HelpPage({ onNavigate }) {
           <HelpSection id="mapping" icon={MapTrifold} eyebrow="02 · SLAM" title="새 2D·3D 지도 세션 만들기">
             <StepList>
               <li><strong>지도 탭</strong>에서 기존 운용 모드가 정지 상태인지 확인합니다.</li>
-              <li><strong>시뮬레이션 환경·지도</strong>에서 시험할 환경을 선택하고 환경 적용을 누릅니다.</li>
+              <li>시뮬레이션에서는 <strong>시뮬레이션 환경·지도</strong>에서 시험 환경을 선택합니다. 실물에서는 <strong>현장 지도 세션</strong>이 표시됩니다.</li>
               <li><strong>지도 생성 방식</strong>에서 빠른 2D 표준 또는 2D + RGB-D 3D 수집을 선택합니다.</li>
-              <li><strong>새 맵 생성</strong>을 선택합니다. 실행 중으로 바뀌면 Gazebo와 SLAM Toolbox가 준비된 상태입니다.</li>
-              <li><strong>가상 조작기</strong>의 버튼 또는 방향키/WASD를 누르고 있는 동안 로봇을 이동합니다.</li>
+              <li><strong>새 맵 생성</strong>을 선택합니다. 실행 중으로 바뀌면 선택한 배포 대상의 SLAM Toolbox가 준비된 상태입니다.</li>
+              <li>시뮬레이션은 <strong>가상 조작기</strong>의 버튼 또는 방향키/WASD를 사용하고, 실물 M1은 동봉 조이스틱으로 이동합니다.</li>
               <li>작성이 끝나면 계속 수집할 경우 <strong>현재 SLAM 지도 저장</strong>, 작업을 마칠 경우 <strong>지도 저장 후 종료</strong>를 누릅니다.</li>
             </StepList>
             <div className="help-callout info">
               <Keyboard size={20} weight="fill" />
               <div><strong>가상 조작기는 시뮬레이션 전용입니다.</strong><p>키나 버튼을 놓거나 창에서 벗어나면 정지합니다. 통신이 끊겨도 서버가 자동으로 정지 명령을 보냅니다.</p></div>
+            </div>
+            <div className="help-callout warning">
+              <ShieldWarning size={20} weight="fill" />
+              <div><strong>실물 로봇은 WebUI 가상 조작을 차단합니다.</strong><p>백엔드를 physical 대상으로 실행하면 Gazebo와 가상 조작기가 비활성화됩니다. 맵 작성 중에는 조이스틱을 사용하고 비상 정지 공간을 확보하세요.</p></div>
             </div>
             <div className="help-callout neutral">
               <FloppyDisk size={20} weight="fill" />

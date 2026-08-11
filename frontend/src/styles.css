@@ -59,6 +59,10 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .system-mode-control footer { margin-top: 9px; padding-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 6px; color: #7c8999; border-top: 1px solid #e4e9ef; font-size: 7px; font-weight: 700; }
 .system-mode-control footer small { color: #9a6670; font-size: 7px; text-align: right; }
 .system-mode-control footer small.available { color: var(--success); }
+.physical-operation-note { margin-top: 10px; padding: 9px 10px; display: flex; align-items: center; gap: 8px; color: #245d73; background: #edf8fa; border: 1px solid #c9e8ed; border-radius: 8px; }
+.physical-operation-note > svg { flex: 0 0 auto; }
+.physical-operation-note span { display: flex; flex-direction: column; gap: 2px; font-size: 7px; line-height: 1.4; }
+.physical-operation-note strong { color: #174c60; font-size: 8px; }
 .simulation-teleop { margin-top: 12px; padding: 10px; background: #f7f9fc; border: 1px solid #dfe6ee; border-radius: 10px; }
 .simulation-teleop header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .teleop-title { display: inline-flex; align-items: center; gap: 6px; color: #35475d; font-size: 10px; font-weight: 800; }

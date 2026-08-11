@@ -53,6 +53,7 @@ export default function MapPage({
   const [selected3dSession, setSelected3dSession] = useState(null);
   const [goalCandidate, setGoalCandidate] = useState(null);
   const activeWorldId = systemMode?.active_world_id || "facility_map";
+  const physicalTarget = systemMode?.deployment_target === "physical";
   const initialRoute = loadWaypointRoute(activeWorldId);
   const [waypoints, setWaypoints] = useState(() => initialRoute?.waypoints || []);
   const [savedMapSignature, setSavedMapSignature] = useState(
@@ -71,7 +72,19 @@ export default function MapPage({
     footprint: true,
   });
   const mapLive = Boolean(mediaStatus?.map?.available);
-  const mapSpec = resolveMapSpec(mediaStatus, spatialState);
+  const mapSpatialState = physicalTarget
+    ? {
+        ...spatialState,
+        pose: spatialState?.pose?.mock
+          ? { ...spatialState.pose, available: false }
+          : spatialState?.pose,
+        trail: spatialState?.pose?.mock ? [] : spatialState?.trail,
+        heatmap: spatialState?.heatmap?.simulated
+          ? { ...spatialState.heatmap, detections: [] }
+          : spatialState?.heatmap,
+      }
+    : spatialState;
+  const mapSpec = resolveMapSpec(mediaStatus, mapSpatialState);
   const currentMapSignature = routeMapSignature(mapSpec);
   const mapMismatch = Boolean(
     mapLive
@@ -346,14 +359,18 @@ export default function MapPage({
             <Cube size={16} />3D RGB-D
           </button>
         </div>
-        <span className={`api-status ${mapLive ? "online" : ""}`}><span />{mapLive ? "공간 데이터 연결" : "디지털 트윈 목업"}</span>
+        <span className={`api-status ${mapLive ? "online" : ""}`}><span />{
+          physicalTarget
+            ? mapLive ? "실물 로봇 지도 연결" : "실물 로봇 데이터 대기"
+            : mapLive ? "공간 데이터 연결" : "디지털 트윈 목업"
+        }</span>
       </DetailHeading>
       <div className="map-workspace">
         {mapDimension === "2d" ? (
           <MapPanel
             detail
             mediaStatus={mediaStatus}
-            spatialState={spatialState}
+            spatialState={mapSpatialState}
             layers={layers}
             goalMode={goalMode}
             goalCandidate={goalCandidate}
@@ -362,7 +379,9 @@ export default function MapPage({
             onWaypointSelect={setSelectedWaypointId}
             onGoalCandidate={selectGoal}
             onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")}
-            waitingForMap={systemMode?.mode === "mapping" && !mapLive}
+            waitingForMap={!mapLive && (physicalTarget || systemMode?.mode === "mapping")}
+            waitingLabel={physicalTarget ? "실물 ROS /map 수신 대기 중" : undefined}
+            allowMockFallback={!physicalTarget}
           />
         ) : (
           <Suspense fallback={<div className="point-cloud-panel point-cloud-loading">3D 지도 뷰어를 불러오는 중입니다.</div>}>
@@ -411,7 +430,8 @@ export default function MapPage({
               <div><dt>운행 모드</dt><dd>{telemetry?.mode === "paused" ? "일시정지" : telemetry?.mode === "stopped" ? "정지" : "자율 순찰"}</dd></div>
               <div><dt>현재 속도</dt><dd>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</dd></div>
               <div><dt>LiDAR</dt><dd className="healthy">{telemetry?.lidar_status === "error" ? "확인 필요" : "정상"}</dd></div>
-              <div><dt>지도 소스</dt><dd>{mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : "UI 목업"}</dd></div>
+              <div><dt>운용 대상</dt><dd>{physicalTarget ? "실물 ROSMASTER M1" : "Gazebo 시뮬레이션"}</dd></div>
+              <div><dt>지도 소스</dt><dd>{mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
               <div><dt>로봇 위치</dt><dd>{spatialState?.pose?.available ? `X ${spatialState.pose.x.toFixed(2)} · Y ${spatialState.pose.y.toFixed(2)}` : "확인 중"}</dd></div>
               <div><dt>Nav2 상태</dt><dd className={navigationStatus?.status === "executing" ? "healthy" : ""}>{navStatusLabels[navigationStatus?.status] || "확인 중"}</dd></div>
             </dl>

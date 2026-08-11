@@ -51,6 +51,7 @@ export default function SimulationMapManager({
   const [draftSessionId, setDraftSessionId] = useState("");
   const [busy, setBusy] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const physicalTarget = systemMode?.deployment_target === "physical";
   const activeWorldId = systemMode?.active_world_id || "facility_map";
   const activeWorld = useMemo(
     () => worlds.find((world) => world.id === activeWorldId),
@@ -63,7 +64,8 @@ export default function SimulationMapManager({
   const modeActive = ["starting", "running", "stopping", "external"].includes(
     systemMode?.state,
   );
-  const externalSimulation = systemMode?.simulation_state === "external"
+  const externalSimulation = !physicalTarget
+    && systemMode?.simulation_state === "external"
     && !systemMode?.simulation_managed;
   const environmentLocked = modeActive || externalSimulation;
   const visibleSessions = useMemo(
@@ -104,8 +106,12 @@ export default function SimulationMapManager({
   };
 
   useEffect(() => {
+    if (physicalTarget) {
+      setWorlds([]);
+      return;
+    }
     void refreshWorlds().catch(() => setWorlds([]));
-  }, []);
+  }, [physicalTarget]);
 
   useEffect(() => {
     setDraftWorldId(activeWorldId);
@@ -183,7 +189,8 @@ export default function SimulationMapManager({
   };
 
   const saveAndStop = async () => {
-    if (!window.confirm("현재 지도 세션을 저장하고 SLAM·Gazebo를 종료할까요?")) return;
+    const targetLabel = physicalTarget ? "실물 로봇 SLAM" : "SLAM·Gazebo";
+    if (!window.confirm(`현재 지도 세션을 저장하고 ${targetLabel}을 종료할까요?`)) return;
     setBusy(true);
     try {
       const result = await onSaveAndStop();
@@ -262,44 +269,46 @@ export default function SimulationMapManager({
   return (
     <CollapsibleCard
       icon={Stack}
-      title="시뮬레이션 환경·지도"
-      subtitle={`${worlds.length}개 환경 · 회차별 SLAM 결과`}
+      title={physicalTarget ? "현장 지도 세션" : "시뮬레이션 환경·지도"}
+      subtitle={physicalTarget ? "실물 M1 · 회차별 SLAM 결과" : `${worlds.length}개 환경 · 회차별 SLAM 결과`}
       className="simulation-map-manager"
     >
-      <div className="map-manager-field">
-        <label htmlFor="simulation-world">시뮬레이션 환경</label>
-        <div className="map-manager-select-row">
-          <select
-            id="simulation-world"
-            value={draftWorldId}
-            disabled={busy || environmentLocked}
-            onChange={(event) => setDraftWorldId(event.target.value)}
-          >
-            {worlds.map((world) => (
-              <option key={world.id} value={world.id}>
-                {world.label} · {difficultyLabels[world.difficulty] || world.difficulty}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="button secondary"
-            disabled={busy || environmentLocked || !draftWorldId || draftWorldId === activeWorldId}
-            onClick={applyWorld}
-          >
-            환경 적용
-          </button>
-        </div>
-        {activeWorld && (
-          <div className="world-summary">
-            <span className={`difficulty-badge ${activeWorld.difficulty}`}>
-              {difficultyLabels[activeWorld.difficulty] || activeWorld.difficulty}
-            </span>
-            <p>{activeWorld.description}</p>
-            <small>{activeWorld.file_name} · 열원 프로필 {activeWorld.has_heat_source_profile ? "연동" : "없음"}</small>
+      {!physicalTarget && (
+        <div className="map-manager-field">
+          <label htmlFor="simulation-world">시뮬레이션 환경</label>
+          <div className="map-manager-select-row">
+            <select
+              id="simulation-world"
+              value={draftWorldId}
+              disabled={busy || environmentLocked}
+              onChange={(event) => setDraftWorldId(event.target.value)}
+            >
+              {worlds.map((world) => (
+                <option key={world.id} value={world.id}>
+                  {world.label} · {difficultyLabels[world.difficulty] || world.difficulty}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="button secondary"
+              disabled={busy || environmentLocked || !draftWorldId || draftWorldId === activeWorldId}
+              onClick={applyWorld}
+            >
+              환경 적용
+            </button>
           </div>
-        )}
-      </div>
+          {activeWorld && (
+            <div className="world-summary">
+              <span className={`difficulty-badge ${activeWorld.difficulty}`}>
+                {difficultyLabels[activeWorld.difficulty] || activeWorld.difficulty}
+              </span>
+              <p>{activeWorld.description}</p>
+              <small>{activeWorld.file_name} · 열원 프로필 {activeWorld.has_heat_source_profile ? "연동" : "없음"}</small>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="map-manager-field">
         <div className="map-manager-label-row">
@@ -390,7 +399,9 @@ export default function SimulationMapManager({
         {systemMode?.mode === "mapping"
           ? `${systemMode?.mapping_profile === "toolbox_rtabmap" ? "2D + 3D" : "2D"} 새 SLAM 세션 ${systemMode?.mapping_session_id || "준비 중"}`
           : systemMode?.map_available
-            ? "선택한 환경에서 AMCL 순찰에 사용할 지도가 준비되었습니다."
+            ? physicalTarget
+              ? "실물 로봇 AMCL·Nav2 순찰에 사용할 지도가 준비되었습니다."
+              : "선택한 환경에서 AMCL 순찰에 사용할 지도가 준비되었습니다."
             : "맵 생성 모드에서 새 세션을 시작하고 지도를 저장하세요."}
       </p>
     </CollapsibleCard>
