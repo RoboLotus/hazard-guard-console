@@ -37,6 +37,40 @@ class CommandRequest(BaseModel):
 
 class SystemModeRequest(BaseModel):
     mode: Literal["mapping", "patrol"]
+    mapping_profile: Literal["toolbox", "toolbox_rtabmap"] = "toolbox"
+
+
+class WorldSelectionRequest(BaseModel):
+    world_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
+
+
+class MapSelectionRequest(WorldSelectionRequest):
+    session_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
+
+
+class MapSessionUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=60)
+    archived: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if self.name is None and self.archived is None:
+            raise ValueError("at least one session field must be provided")
+        if self.name is not None:
+            self.name = self.name.strip()
+            if not self.name:
+                raise ValueError("session name must not be blank")
+        return self
 
 
 class NavigationGoal(BaseModel):

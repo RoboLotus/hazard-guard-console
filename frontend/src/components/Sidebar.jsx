@@ -35,8 +35,8 @@ export default function Sidebar({ active, onNavigate, pendingEvents }) {
           <Gear size={20} weight={active === "settings" ? "fill" : "regular"} />
           <span>설정</span>
         </button>
-        <button type="button" className="nav-item" onClick={() => onNavigate("help")}>
-          <Question size={20} />
+        <button type="button" className={`nav-item ${active === "help" ? "active" : ""}`} onClick={() => onNavigate("help")}>
+          <Question size={20} weight={active === "help" ? "fill" : "regular"} />
           <span>도움말</span>
         </button>
         <div className="sidebar-version">

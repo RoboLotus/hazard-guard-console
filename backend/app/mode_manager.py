@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .process_control import ProcessController
+from .world_catalog import WorldCatalog
 
 
 def utc_now() -> str:
@@ -23,6 +24,7 @@ class SystemModeManager:
     """
 
     MODES = {"mapping", "patrol"}
+    MAPPING_PROFILES = {"toolbox", "toolbox_rtabmap"}
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -35,13 +37,28 @@ class SystemModeManager:
         self._workspace = Path(
             os.getenv("HAZARD_GUARD_WORKSPACE", os.getcwd())
         ).expanduser().resolve()
+        self._world_catalog = WorldCatalog(self._workspace)
+        self._active_world = self._world_catalog.selected_world()
+        self._current_session_id: str | None = None
+        self._mapping_profile = "toolbox"
+        self._rtabmap_database_path: Path | None = None
         configured_map = Path(
             os.getenv("HAZARD_GUARD_MAP_PATH", "runtime/maps/facility.yaml")
         ).expanduser()
-        self._map_path = (
+        legacy_map_path = (
             configured_map
             if configured_map.is_absolute()
             else (self._workspace / configured_map).resolve()
+        )
+        active_map_path = self._world_catalog.active_map_path(self._active_world["id"])
+        self._map_path = active_map_path or (
+            legacy_map_path
+            if self._active_world["id"] == "facility_map"
+            else self._workspace
+            / "runtime"
+            / "maps"
+            / self._active_world["id"]
+            / "unavailable.yaml"
         )
         self._gui = os.getenv("HAZARD_GUARD_SIMULATION_GUI", "true").lower() in {
             "1",
@@ -56,9 +73,7 @@ class SystemModeManager:
         self._simulation_log_path = (
             self._workspace / "runtime" / "logs" / "simulation.log"
         )
-        self._simulation_world_marker = os.getenv(
-            "HAZARD_GUARD_SIMULATION_WORLD_MARKER", "facility_map.sdf"
-        )
+        self._simulation_world_marker = self._active_world["file_name"]
         self._process_controller = ProcessController(
             self._workspace,
             self._simulation_world_marker,
@@ -71,6 +86,11 @@ class SystemModeManager:
             "control_enabled": self._enabled,
             "pid": None,
             "map_path": str(self._map_path),
+            "active_world_id": self._active_world["id"],
+            "active_world_label": self._active_world["label"],
+            "mapping_session_id": None,
+            "mapping_profile": self._mapping_profile,
+            "rtabmap_database_path": None,
             "log_path": str(self._log_path),
             "simulation_log_path": str(self._simulation_log_path),
             "simulation_state": "stopped",
@@ -92,22 +112,224 @@ class SystemModeManager:
         return self._enabled
 
     def _map_files_available(self) -> bool:
-        if not self._map_path.is_file():
-            return False
+        return self._world_catalog.map_available(self._map_path)
+
+    @staticmethod
+    def _launch_value(value: float) -> str:
+        return format(float(value), ".6g")
+
+    def _world_launch_arguments(self) -> list[str]:
+        world = self._active_world
+        spawn = world["spawn"]
+        arguments = [
+            f"world:={world['path']}",
+            f"world_name:={world['world_name']}",
+            f"spawn_x:={self._launch_value(spawn['x'])}",
+            f"spawn_y:={self._launch_value(spawn['y'])}",
+            f"spawn_z:={self._launch_value(spawn['z'])}",
+            f"spawn_yaw:={self._launch_value(spawn['yaw'])}",
+        ]
+        profile = world.get("heat_source_profile_path")
+        if profile is not None:
+            arguments.append(f"heat_source_profile:={profile}")
+        return arguments
+
+    def worlds(self) -> dict[str, Any]:
+        return self._world_catalog.public_worlds()
+
+    def maps(self, world_id: str | None = None) -> dict[str, Any]:
+        selected_id = world_id or self._active_world["id"]
+        return {
+            "world_id": selected_id,
+            "sessions": self._world_catalog.sessions(selected_id),
+        }
+
+    def edit_map_session(
+        self,
+        world_id: str,
+        session_id: str,
+        *,
+        name: str | None = None,
+        archived: bool | None = None,
+    ) -> dict[str, Any]:
         try:
-            for line in self._map_path.read_text(encoding="utf-8").splitlines():
-                if not line.lstrip().startswith("image:"):
-                    continue
-                image_value = line.split(":", 1)[1].strip().strip("'\"")
-                if not image_value:
-                    return False
-                image_path = Path(image_value).expanduser()
-                if not image_path.is_absolute():
-                    image_path = self._map_path.parent / image_path
-                return image_path.is_file()
-        except OSError:
-            return False
-        return False
+            session = self._world_catalog.edit_session(
+                world_id,
+                session_id,
+                name=name,
+                archived=archived,
+            )
+        except KeyError:
+            return {
+                "accepted": False,
+                "message": "지도 세션을 찾지 못했습니다.",
+            }
+        return {
+            "accepted": True,
+            "message": "지도 세션 정보를 저장했습니다.",
+            "session": session,
+        }
+
+    def export_map_cloud(self, world_id: str, session_id: str) -> dict[str, Any]:
+        with self._lock:
+            current_mapping = (
+                self._data.get("mode") == "mapping"
+                and self._data.get("state") in {"starting", "running", "stopping"}
+                and self._current_session_id == session_id
+            )
+        if current_mapping:
+            return {
+                "accepted": False,
+                "message": "현재 3D 세션을 저장 후 종료한 뒤 내보내세요.",
+            }
+        try:
+            paths = self._world_catalog.session_paths(world_id, session_id)
+        except KeyError:
+            return {"accepted": False, "message": "지도 세션을 찾지 못했습니다."}
+        database_path = paths["database"]
+        cloud_path = paths["cloud"]
+        if cloud_path.is_file() and cloud_path.stat().st_size > 0:
+            return {
+                "accepted": True,
+                "path": cloud_path,
+                "message": "저장된 3D 지도 파일을 준비했습니다.",
+            }
+        if not database_path.is_file() or database_path.stat().st_size <= 0:
+            return {
+                "accepted": False,
+                "message": "선택한 세션에는 RTAB-Map 3D 데이터가 없습니다.",
+            }
+        output_name = "cloud-export"
+        expected_path = paths["directory"] / f"{output_name}_cloud.ply"
+        try:
+            result = self._process_controller.run(
+                [
+                    "rtabmap-export",
+                    "--cloud",
+                    "--opt",
+                    "2",
+                    "--voxel",
+                    "0.03",
+                    "--decimation",
+                    "4",
+                    "--output",
+                    output_name,
+                    "--output_dir",
+                    str(paths["directory"]),
+                    str(database_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {
+                "accepted": False,
+                "message": f"3D 지도 내보내기 도구를 실행하지 못했습니다: {exc}",
+            }
+        if result.returncode != 0 or not expected_path.is_file():
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            return {
+                "accepted": False,
+                "message": "3D 지도 파일을 생성하지 못했습니다."
+                + (f" {detail[-1]}" if detail else ""),
+            }
+        expected_path.replace(cloud_path)
+        self._world_catalog.record_cloud_export(world_id, session_id, cloud_path)
+        return {
+            "accepted": True,
+            "path": cloud_path,
+            "message": "저장된 RTAB-Map DB에서 컬러 PLY 지도를 생성했습니다.",
+        }
+
+    def select_world(self, world_id: str) -> dict[str, Any]:
+        with self._lock:
+            if self._process is not None or self._data["state"] in {
+                "starting",
+                "running",
+                "stopping",
+                "external",
+            }:
+                return self._update_locked(
+                    accepted=False,
+                    message="SLAM 또는 순찰 모드를 종료한 뒤 환경을 전환하세요.",
+                )
+        with self._lock:
+            managed_simulation = self._simulation_process is not None
+        if managed_simulation:
+            self._stop_managed_simulation()
+        elif self._detect_external_simulation():
+            with self._lock:
+                return self._update_locked(
+                    accepted=False,
+                    message="터미널에서 실행 중인 Gazebo를 종료한 뒤 환경을 전환하세요.",
+                )
+        try:
+            world = self._world_catalog.get(world_id)
+        except KeyError:
+            with self._lock:
+                return self._update_locked(
+                    accepted=False,
+                    message="등록되지 않은 시뮬레이션 환경입니다.",
+                )
+        if self._enabled and not world["path"].is_file():
+            with self._lock:
+                return self._update_locked(
+                    accepted=False,
+                    message="선택한 시뮬레이션 환경 파일을 찾지 못했습니다.",
+                )
+        world = self._world_catalog.select_world(world_id)
+        self._active_world = world
+        self._current_session_id = None
+        self._map_path = (
+            self._world_catalog.active_map_path(world_id)
+            or self._workspace / "runtime" / "maps" / world_id / "unavailable.yaml"
+        )
+        self._simulation_world_marker = world["file_name"]
+        self._process_controller = ProcessController(
+            self._workspace,
+            self._simulation_world_marker,
+        )
+        with self._lock:
+            return self._update_locked(
+                accepted=True,
+                mode="idle",
+                state="stopped",
+                active_world_id=world_id,
+                active_world_label=world["label"],
+                map_path=str(self._map_path),
+                mapping_session_id=None,
+                message=f"시뮬레이션 환경을 '{world['label']}'로 변경했습니다.",
+            )
+
+    def select_map(self, world_id: str, session_id: str) -> dict[str, Any]:
+        if world_id != self._active_world["id"]:
+            with self._lock:
+                return self._update_locked(
+                    accepted=False,
+                    message="현재 선택된 환경의 지도만 순찰 지도에 지정할 수 있습니다.",
+                )
+        with self._lock:
+            if self._data["state"] in {"starting", "running", "stopping", "external"}:
+                return self._update_locked(
+                    accepted=False,
+                    message="SLAM 또는 순찰 모드를 종료한 뒤 순찰 지도를 변경하세요.",
+                )
+        try:
+            self._map_path = self._world_catalog.activate_session(world_id, session_id)
+        except KeyError:
+            with self._lock:
+                return self._update_locked(
+                    accepted=False,
+                    message="사용 가능한 SLAM 지도 세션을 찾지 못했습니다.",
+                )
+        with self._lock:
+            return self._update_locked(
+                accepted=True,
+                map_path=str(self._map_path),
+                message="선택한 SLAM 결과를 순찰용 지도로 지정했습니다.",
+            )
 
     def _update_locked(self, **values: Any) -> dict[str, Any]:
         self._data.update(values)
@@ -150,7 +372,23 @@ class SystemModeManager:
                 return dict(self._data)
 
         external_mode = self._detect_external_mode() if detect_external else None
+        external_simulation = (
+            self._detect_external_simulation() if detect_external else False
+        )
         with self._lock:
+            if detect_external and self._simulation_process is None:
+                if external_simulation:
+                    self._data.update(
+                        simulation_state="external",
+                        simulation_managed=False,
+                        simulation_pid=None,
+                    )
+                elif self._data["simulation_state"] == "external":
+                    self._data.update(
+                        simulation_state="stopped",
+                        simulation_managed=False,
+                        simulation_pid=None,
+                    )
             if self._process is None and external_mode is not None:
                 return self._update_locked(
                     mode=external_mode,
@@ -178,19 +416,35 @@ class SystemModeManager:
             self._data["updated_at"] = utc_now()
             return dict(self._data)
 
-    def _launch_arguments(self, mode: str) -> list[str]:
+    def _launch_arguments(
+        self,
+        mode: str,
+        *,
+        mapping_profile: str | None = None,
+        rtabmap_database_path: Path | None = None,
+    ) -> list[str]:
         common = [
             f"gui:={'true' if self._gui else 'false'}",
             f"simulation_mode:={self._simulation_mode}",
             "start_simulation:=false",
+            *self._world_launch_arguments(),
         ]
         if mode == "mapping":
+            selected_profile = mapping_profile or self._mapping_profile
+            database_path = rtabmap_database_path or self._rtabmap_database_path
+            enable_rtabmap = selected_profile == "toolbox_rtabmap"
             return [
                 "ros2",
                 "launch",
                 "hazard_guard_simulation",
                 "slam.launch.py",
                 *common,
+                f"enable_rtabmap:={'true' if enable_rtabmap else 'false'}",
+                "rtabmap_database_path:="
+                + str(
+                    database_path
+                    or Path("/tmp/hazard_guard_rtabmap_sim.db")
+                ),
             ]
         return [
             "ros2",
@@ -209,6 +463,7 @@ class SystemModeManager:
             "simulation.launch.py",
             f"gui:={'true' if self._gui else 'false'}",
             f"simulation_mode:={self._simulation_mode}",
+            *self._world_launch_arguments(),
         ]
 
     def _detect_external_simulation(self) -> bool:
@@ -367,6 +622,13 @@ class SystemModeManager:
                 "accepted": False,
                 "message": "WebUI 모드 제어가 비활성화되어 지도를 저장할 수 없습니다.",
             }
+        if self._current_session_id is None:
+            session = self._world_catalog.begin_session(
+                self._active_world["id"], self._mapping_profile
+            )
+            self._current_session_id = session["id"]
+            self._map_path = session["map_path"]
+            self._rtabmap_database_path = session["rtabmap_database_path"]
         self._map_path.parent.mkdir(parents=True, exist_ok=True)
         map_base = self._map_path.with_suffix("")
         try:
@@ -396,9 +658,32 @@ class SystemModeManager:
                     message=f"지도 저장 명령을 실행하지 못했습니다: {exc}",
                 )
         accepted = result.returncode == 0 and self._map_files_available()
+        rtabmap_available = bool(
+            self._mapping_profile == "toolbox_rtabmap"
+            and self._rtabmap_database_path is not None
+            and self._rtabmap_database_path.is_file()
+            and self._rtabmap_database_path.stat().st_size > 0
+        )
+        if self._current_session_id is not None:
+            self._world_catalog.update_session(
+                self._current_session_id,
+                self._active_world["id"],
+                status="saved" if accepted else "save_failed",
+                mapping_profile=self._mapping_profile,
+                rtabmap_available=rtabmap_available,
+                rtabmap_database_bytes=(
+                    self._rtabmap_database_path.stat().st_size
+                    if rtabmap_available and self._rtabmap_database_path is not None
+                    else 0
+                ),
+            )
+            if accepted:
+                self._map_path = self._world_catalog.activate_session(
+                    self._active_world["id"], self._current_session_id
+                )
         detail = (result.stderr or result.stdout).strip().splitlines()
         message = (
-            f"순찰용 지도를 저장했습니다: {self._map_path.name}"
+            f"순찰용 지도를 세션 {self._current_session_id}에 저장했습니다."
             if accepted
             else (
                 "지도를 저장하지 못했습니다."
@@ -406,7 +691,24 @@ class SystemModeManager:
             )
         )
         with self._lock:
-            return self._update_locked(accepted=accepted, message=message)
+            return self._update_locked(
+                accepted=accepted,
+                rtabmap_available=rtabmap_available,
+                message=message,
+            )
+
+    def save_map_and_stop(self) -> dict[str, Any]:
+        saved = self.save_map()
+        if not saved.get("accepted"):
+            return saved
+        stopped = self.stop()
+        return {
+            **stopped,
+            "accepted": True,
+            "map_available": True,
+            "rtabmap_available": saved.get("rtabmap_available", False),
+            "message": "현재 지도 세션을 저장하고 SLAM·Gazebo를 종료했습니다.",
+        }
 
     def _stop_managed_process(self) -> None:
         with self._lock:
@@ -427,9 +729,16 @@ class SystemModeManager:
             # external stack.
             self._ignore_external_until = time.monotonic() + 10.0
 
-    def switch_mode(self, mode: str) -> dict[str, Any]:
+    def switch_mode(
+        self,
+        mode: str,
+        mapping_profile: str | None = None,
+    ) -> dict[str, Any]:
         if mode not in self.MODES:
             raise ValueError(f"Unsupported mode: {mode}")
+        requested_profile = mapping_profile or self._mapping_profile
+        if requested_profile not in self.MAPPING_PROFILES:
+            raise ValueError(f"Unsupported mapping profile: {requested_profile}")
         if not self._enabled:
             return {
                 **self.snapshot(detect_external=False),
@@ -449,6 +758,7 @@ class SystemModeManager:
             and current_process.poll() is None
             and current_mode == mode
             and current_state in {"starting", "running"}
+            and (mode != "mapping" or self._mapping_profile == requested_profile)
         ):
             simulation_ready = self._ensure_simulation()
             with self._lock:
@@ -512,13 +822,30 @@ class SystemModeManager:
                     ),
                 )
 
-        command = self._launch_arguments(mode)
+        pending_session: dict[str, Any] | None = None
+        if mode == "mapping":
+            pending_session = self._world_catalog.begin_session(
+                self._active_world["id"], requested_profile
+            )
+        command = self._launch_arguments(
+            mode,
+            mapping_profile=requested_profile,
+            rtabmap_database_path=(
+                pending_session["rtabmap_database_path"]
+                if pending_session is not None
+                else None
+            ),
+        )
         try:
             process = self._process_controller.start_logged(
                 command,
                 self._log_path,
             )
         except OSError as exc:
+            if pending_session is not None:
+                self._world_catalog.discard_empty_session(
+                    self._active_world["id"], pending_session["id"]
+                )
             with self._lock:
                 return self._update_locked(
                     mode="idle",
@@ -529,6 +856,13 @@ class SystemModeManager:
                     message=f"ROS launch를 시작하지 못했습니다: {exc}",
                 )
         with self._lock:
+            if pending_session is not None:
+                self._mapping_profile = requested_profile
+                self._current_session_id = pending_session["id"]
+                self._map_path = pending_session["map_path"]
+                self._rtabmap_database_path = pending_session[
+                    "rtabmap_database_path"
+                ]
             self._generation += 1
             generation = self._generation
             self._process = process
@@ -540,6 +874,15 @@ class SystemModeManager:
                 pid=process.pid,
                 exit_code=None,
                 started_at=utc_now(),
+                map_path=str(self._map_path),
+                mapping_session_id=self._current_session_id,
+                mapping_profile=self._mapping_profile,
+                rtabmap_database_path=(
+                    str(self._rtabmap_database_path)
+                    if mode == "mapping"
+                    and self._mapping_profile == "toolbox_rtabmap"
+                    else None
+                ),
                 message=(
                     "SLAM 지도 생성 모드를 시작하고 있습니다."
                     if mode == "mapping"

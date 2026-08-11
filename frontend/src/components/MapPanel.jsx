@@ -224,6 +224,7 @@ export default function MapPanel({
   waypoints = [],
   selectedWaypointId = null,
   onWaypointSelect,
+  waitingForMap = false,
 }) {
   const mapLive = Boolean(mediaStatus?.map?.available);
   const mapSpec = resolveMapSpec(mediaStatus, spatialState);
@@ -410,7 +411,14 @@ export default function MapPanel({
             </div>
           )}
         </div>
-        <div className={`map-live-badge ${mapLive ? "" : "mock"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : "디지털 트윈 목업"}</div>
+        {waitingForMap && !mapLive && (
+          <div className="map-waiting-overlay" role="status">
+            <span className="map-waiting-spinner" />
+            <strong>새 SLAM 지도 수신 대기 중</strong>
+            <small>이전 세션 지도는 초기화되었습니다.</small>
+          </div>
+        )}
+        <div className={`map-live-badge ${mapLive ? "" : "mock"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : waitingForMap ? "새 지도 대기" : "디지털 트윈 목업"}</div>
         {spatialState?.heatmap?.simulated && layers.heatmap && <div className="heatmap-simulation-badge">SIMULATED HEAT</div>}
         {goalMode && <div className="goal-mode-hint">지도를 클릭해 목적지 후보를 선택하세요</div>}
         {detail && (

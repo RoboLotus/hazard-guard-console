@@ -1,6 +1,6 @@
 # HazardGuard Console
 
-산업 현장을 순찰하는 ROSMASTER-M1 기반 안전 로봇의 관제 WebUI 프로토타입입니다. React 대시보드와 FastAPI ROS bridge를 통해 로봇 상태, 2D SLAM 지도, RGB·ThermoEye TMC160B 사양 기반 합성 열화상 영상, 위험 이벤트, Nav2 목적지와 열원 히트맵을 확인합니다.
+산업 현장을 순찰하는 ROSMASTER-M1 기반 안전 로봇의 관제 WebUI 프로토타입입니다. React 대시보드와 FastAPI ROS bridge를 통해 로봇 상태, 2D SLAM 지도, RTAB-Map RGB-D 컬러 3D 지도, RGB·ThermoEye TMC160B 사양 기반 합성 열화상 영상, 위험 이벤트, Nav2 목적지와 열원 히트맵을 확인합니다.
 
 ## 구성
 
@@ -105,5 +105,77 @@ Docker Desktop의 WebUI 제어는 WSLg 창 연결 여부와 무관하게 동작�
 GUI를 기본적으로 끈 headless 모드입니다. 브라우저의 2D 지도·RGB·열화상은
 계속 표시됩니다. Gazebo 3D 창까지 필요하면 WSL2 셸에서 launch의 `gui:=true`를
 사용하되, 이때는 WebUI 모드 제어와 동시에 실행하지 않습니다.
+
+## RGB-D 3D 지도 보기
+
+WebUI의 `지도` 탭에서 `맵 생성`을 선택한 다음 지도 작성 프로필을 고릅니다.
+
+| 지도 작성 프로필 | ROS 구성 | 저장 결과 |
+|---|---|---|
+| `2D 표준` | SLAM Toolbox | Nav2용 `map.yaml`·`map.pgm` |
+| `2D + RGB-D 3D` | SLAM Toolbox + RTAB-Map | 같은 2D 지도 + 세션별 `rtabmap.db` |
+
+`2D + RGB-D 3D` 프로필에서도 Nav2용 `/map`은 SLAM Toolbox가 단독으로
+발행합니다. RTAB-Map은 RGB·Depth의 3D 정보를 별도 좌표계에 누적하므로 두
+SLAM이 같은 TF나 2D 지도를 중복 발행하지 않습니다. 프로필을 선택하고
+`새 맵 생성`을 누른 뒤 로봇을 움직이면 `3D RGB-D` 화면에서 현재 포인트 수와
+컬러 지도를 확인할 수 있습니다. 정지한 상태에서는 관측 범위가 늘지 않으므로
+3D 지도가 거의 생성되지 않는 것처럼 보일 수 있습니다.
+
+`현재 SLAM 지도 저장` 또는 `현재 2D + 3D 세션 저장`을 누르면 현재 세션의
+2D 지도를 저장하고 RTAB-Map DB의 존재와
+크기도 세션 메타데이터에 기록합니다. 현재 WebUI는 저장된 3D DB의 과거 장면을
+세션 목록의 눈 아이콘으로 다시 열 수 있습니다. 최초 조회 시 백엔드가
+`rtabmap-export`를 사용해 컬러 PLY를 생성하며, 같은 파일을 팀원 공유용으로
+내려받을 수 있습니다. `지도 저장 후 종료`는 2D 지도와 RTAB-Map DB를 보존한
+뒤 WebUI가 시작한 SLAM·Gazebo 프로세스를 함께 종료합니다.
+
+지도 세션은 이름을 붙이거나 보관 상태로 전환할 수 있습니다. 보관은 목록에서
+숨기는 기능일 뿐 원본 지도·DB·PLY를 삭제하지 않습니다.
+
+## 센서 진단과 설정 저장
+
+`설정` 화면의 ROS 센서 연결 진단에서 LiDAR, RGB, Depth, 두 CameraInfo,
+열화상, IMU, Odometry, 2D 지도와 RTAB-Map 컬러 클라우드의 최근 수신 상태를
+확인할 수 있습니다. `실시간`, `데이터 대기`, `갱신 중단`, `ROS 미연결`은
+각 토픽의 마지막 수신 시각을 기준으로 표시합니다.
+
+화재 판정 임계값은 브라우저 localStorage뿐 아니라
+`Robot/runtime/settings/thresholds.json`에도 원자적으로 저장됩니다. 따라서
+FastAPI를 재시작하거나 다른 관제 PC에서 접속해도 서버 설정을 다시 불러옵니다.
+
+Robot 저장소에서 RTAB-Map 실험을 실행한 뒤 WebUI의 `지도` 탭에서
+`3D RGB-D`를 선택합니다.
+
+```bash
+ros2 launch hazard_guard_simulation rtabmap_sim.launch.py \
+  gui:=false \
+  rviz:=false \
+  demo_route:=true
+```
+
+데이터는 다음 순서로 전달됩니다.
+
+1. RGB·Depth 포인트를 RTAB-Map의 `map` 좌표계에 누적해
+   `/hazard_guard/rtabmap/cloud_surface`에 X/Y/Z/RGB 포인트를 발행합니다.
+2. FastAPI ROS bridge가 포인트 수를 제한하고 브라우저용 바이너리 패킷으로
+   변환합니다.
+3. `/ws/pointcloud` WebSocket이 스냅샷을 전송합니다.
+4. React의 Three.js 뷰어가 점 색상, 높이, 원근을 포함한 3D 지도를 표시합니다.
+
+마우스 왼쪽 버튼은 회전, 오른쪽 버튼은 이동, 휠은 확대·축소입니다. 화면
+맞춤 버튼을 누르면 현재 포인트 전체가 보이도록 카메라가 이동합니다.
+웨이포인트 작성과 Nav2 순찰 경로 편집은 계속 2D 지도에서 수행합니다.
+
+이 화면은 RViz 화면을 캡처하거나 전송하지 않습니다. ROS의 원본
+`PointCloud2` 데이터를 직접 변환하므로 RViz를 실행하지 않아도 동작합니다.
+상태 확인 API는 `/api/v1/spatial/cloud/status`입니다. 다른 토픽을 사용할
+때는 백엔드 실행 전에 `HAZARD_GUARD_POINT_CLOUD_TOPIC`을 지정할 수 있습니다.
+
+3D RGB-D 화면은 카메라가 실제로 관측한 표면을 복원한 SLAM 결과입니다.
+가려졌거나 아직 지나가지 않은 구역은 표시되지 않습니다. Gazebo SDF에 정의된
+벽과 메시를 처음부터 완전한 형태로 보여주는 기능은 SLAM이 아니라 별도의
+`시뮬레이터 원본 디지털 트윈` 뷰이며, 필요하면 SDF·메시 로더로 분리해
+추가해야 합니다.
 
 > 현재 열화상은 TMC160B의 160×120, 수평 57°, 8.7 Hz 형식을 반영한 시뮬레이션 데이터입니다. 지도 부채꼴의 5 m 길이는 시뮬레이션 표시 범위이며 제조사 측정거리 보장이 아닙니다. 실제 화재 판정이나 안전 성능을 검증한 결과도 아닙니다.

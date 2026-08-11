@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .ros_media import RosMediaAdapter
+from .point_cloud import PointCloudAdapter, PointCloudStore
+from .sensor_diagnostics import SensorDiagnosticsStore
 from .stores import (
     MediaStore,
     NavigationStore,
@@ -27,12 +29,17 @@ class RosBridge:
         navigation: NavigationStore,
         mission: RouteMissionStore,
         spatial: SpatialStore,
+        point_cloud: PointCloudStore,
+        diagnostics: SensorDiagnosticsStore,
     ) -> None:
         self.store = store
         self.media = media
         self.navigation = navigation
         self.mission = mission
         self.spatial = spatial
+        self.point_cloud = point_cloud
+        self.diagnostics = diagnostics
+        self._point_cloud_adapter = PointCloudAdapter(point_cloud, self._set_error)
         self._media_adapter = RosMediaAdapter(
             media,
             spatial,
@@ -61,9 +68,41 @@ class RosBridge:
         self._mission_cancel_request_type = None
         self._mission_goal_handle = None
         self._navigation_goal_handle = None
+        self._teleop_publisher = None
+        self._teleop_twist_type = None
+        self._teleop_lock = threading.Lock()
         self._navigation_result_event = threading.Event()
         self._navigation_result_status: str | None = None
         self._mission_lock = threading.RLock()
+
+        sensor_specs = [
+            ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0),
+            ("map", "2D 지도", "/map", ("mapping", "patrol"), 4.0),
+            ("lidar", "2D LiDAR", os.getenv("HAZARD_GUARD_SCAN_TOPIC", "/scan"), ("mapping", "patrol"), 2.0),
+            ("rgb", "RGB 카메라", os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw"), ("3d", "inspection"), 2.0),
+            ("rgb_info", "RGB CameraInfo", os.getenv("HAZARD_GUARD_RGB_INFO_TOPIC", "/camera/camera_info"), ("3d",), 5.0),
+            ("depth", "Depth 카메라", os.getenv("HAZARD_GUARD_DEPTH_TOPIC", "/depth_camera/image_raw"), ("3d",), 2.0),
+            ("depth_info", "Depth CameraInfo", os.getenv("HAZARD_GUARD_DEPTH_INFO_TOPIC", "/depth_camera/camera_info"), ("3d",), 5.0),
+            ("thermal", "열화상 카메라", os.getenv("HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"), ("inspection",), 2.0),
+            ("imu", "IMU", os.getenv("HAZARD_GUARD_IMU_TOPIC", "/imu/data_raw"), ("mapping", "patrol"), 2.0),
+            ("odom", "Odometry", os.getenv("HAZARD_GUARD_ODOM_TOPIC", "/odom"), ("mapping", "patrol", "3d"), 2.0),
+            ("point_cloud", "RTAB-Map 컬러 클라우드", os.getenv("HAZARD_GUARD_POINT_CLOUD_TOPIC", "/hazard_guard/rtabmap/cloud_surface"), ("3d",), 3.0),
+        ]
+        for sensor_id, label, topic, required_for, stale_after in sensor_specs:
+            self.diagnostics.register(
+                sensor_id,
+                label=label,
+                topic=topic,
+                required_for=required_for,
+                stale_after_sec=stale_after,
+            )
+
+    def _observe(self, sensor_id: str, callback=None):
+        def observed(message):
+            self.diagnostics.mark(sensor_id)
+            if callback is not None:
+                callback(message)
+        return observed
 
     def _set_error(self, message: str) -> None:
         self.error = message
@@ -77,7 +116,7 @@ class RosBridge:
             from cv_bridge import CvBridge
             from hazard_guard_interfaces.msg import RobotTelemetry
             from hazard_guard_interfaces.srv import RobotCommand
-            from nav_msgs.msg import OccupancyGrid
+            from nav_msgs.msg import OccupancyGrid, Odometry
             from nav2_msgs.action import ComputePathToPose, NavigateToPose
             from rclpy.action import ActionClient
             from rclpy.context import Context
@@ -90,7 +129,8 @@ class RosBridge:
                 qos_profile_sensor_data,
             )
             from rclpy.time import Time
-            from sensor_msgs.msg import Image
+            from sensor_msgs.msg import CameraInfo, Image, Imu, LaserScan, PointCloud2
+            from geometry_msgs.msg import Twist
             from std_msgs.msg import String
             from std_srvs.srv import Trigger
             from tf2_ros import Buffer, TransformListener
@@ -111,7 +151,7 @@ class RosBridge:
             self._node.create_subscription(
                 RobotTelemetry,
                 "/hazard_guard/telemetry",
-                self._on_telemetry,
+                self._observe("telemetry", self._on_telemetry),
                 10,
             )
             map_qos = QoSProfile(
@@ -122,13 +162,22 @@ class RosBridge:
             self._node.create_subscription(
                 OccupancyGrid,
                 "/map",
-                self._media_adapter.on_map,
+                self._observe("map", self._media_adapter.on_map),
                 map_qos,
             )
             self._node.create_subscription(
                 Image,
                 os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw"),
-                self._media_adapter.on_rgb_image,
+                self._observe("rgb", self._media_adapter.on_rgb_image),
+                qos_profile_sensor_data,
+            )
+            self._node.create_subscription(
+                PointCloud2,
+                os.getenv(
+                    "HAZARD_GUARD_POINT_CLOUD_TOPIC",
+                    "/hazard_guard/rtabmap/cloud_surface",
+                ),
+                self._observe("point_cloud", self._point_cloud_adapter.on_cloud),
                 qos_profile_sensor_data,
             )
             self._node.create_subscription(
@@ -136,9 +185,24 @@ class RosBridge:
                 os.getenv(
                     "HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"
                 ),
-                self._media_adapter.on_thermal_image,
+                self._observe("thermal", self._media_adapter.on_thermal_image),
                 qos_profile_sensor_data,
             )
+            diagnostic_topics = [
+                (LaserScan, os.getenv("HAZARD_GUARD_SCAN_TOPIC", "/scan"), "lidar"),
+                (CameraInfo, os.getenv("HAZARD_GUARD_RGB_INFO_TOPIC", "/camera/camera_info"), "rgb_info"),
+                (Image, os.getenv("HAZARD_GUARD_DEPTH_TOPIC", "/depth_camera/image_raw"), "depth"),
+                (CameraInfo, os.getenv("HAZARD_GUARD_DEPTH_INFO_TOPIC", "/depth_camera/camera_info"), "depth_info"),
+                (Imu, os.getenv("HAZARD_GUARD_IMU_TOPIC", "/imu/data_raw"), "imu"),
+                (Odometry, os.getenv("HAZARD_GUARD_ODOM_TOPIC", "/odom"), "odom"),
+            ]
+            for message_type, topic, sensor_id in diagnostic_topics:
+                self._node.create_subscription(
+                    message_type,
+                    topic,
+                    self._observe(sensor_id),
+                    qos_profile_sensor_data,
+                )
             try:
                 from hazard_guard_interfaces.msg import HazardDetection
 
@@ -195,6 +259,12 @@ class RosBridge:
                 RobotCommand, "/hazard_guard/command"
             )
             self._request_type = RobotCommand.Request
+            self._teleop_twist_type = Twist
+            self._teleop_publisher = self._node.create_publisher(
+                Twist,
+                os.getenv("HAZARD_GUARD_CMD_VEL_TOPIC", "/cmd_vel"),
+                10,
+            )
             self._executor = SingleThreadedExecutor(context=self._context)
             self._executor.add_node(self._node)
             self._thread = threading.Thread(
@@ -233,6 +303,52 @@ class RosBridge:
                 and mission_client.server_is_ready()
             ),
         }
+
+    def publish_simulation_teleop(self, direction: str) -> dict[str, Any]:
+        """Publish a bounded simulator teleop command to ``/cmd_vel``.
+
+        Access control lives in the WebSocket endpoint. Keeping the ROS adapter
+        limited to a small direction vocabulary prevents browser payloads from
+        selecting arbitrary velocities.
+        """
+
+        commands = {
+            "forward": (0.15, 0.0),
+            "backward": (-0.12, 0.0),
+            "left": (0.0, 0.55),
+            "right": (0.0, -0.55),
+            "stop": (0.0, 0.0),
+        }
+        if direction not in commands:
+            return {
+                "accepted": False,
+                "direction": "stop",
+                "message": "지원하지 않는 시뮬레이션 조작 명령입니다.",
+            }
+        if not self.active or self._teleop_publisher is None or self._teleop_twist_type is None:
+            return {
+                "accepted": False,
+                "direction": "stop",
+                "message": "ROS 시뮬레이션 브리지가 준비되지 않았습니다.",
+            }
+
+        linear_x, angular_z = commands[direction]
+        message = self._teleop_twist_type()
+        message.linear.x = linear_x
+        message.angular.z = angular_z
+        with self._teleop_lock:
+            self._teleop_publisher.publish(message)
+        return {
+            "accepted": True,
+            "direction": direction,
+            "linear_x": linear_x,
+            "angular_z": angular_z,
+        }
+
+    def stop_simulation_teleop(self) -> dict[str, Any]:
+        """Best-effort zero velocity used by release and dead-man handling."""
+
+        return self.publish_simulation_teleop("stop")
 
     def _on_mission_status(self, message: Any) -> None:
         """Mirror the ROS mission manager's latched state for WebUI polling."""
@@ -929,6 +1045,7 @@ class RosBridge:
         return self.mission.snapshot()
 
     def stop(self) -> None:
+        self.stop_simulation_teleop()
         if self._mission_goal_handle is not None:
             self._mission_goal_handle.cancel_goal_async()
         self._stop_event.set()
@@ -943,6 +1060,8 @@ class RosBridge:
         if self._context is not None and self._context.ok():
             self._context.shutdown()
         self.active = False
+        self._teleop_publisher = None
+        self._teleop_twist_type = None
 
 
 telemetry_store = TelemetryStore()
@@ -950,10 +1069,14 @@ media_store = MediaStore()
 navigation_store = NavigationStore()
 route_mission_store = RouteMissionStore()
 spatial_store = SpatialStore()
+point_cloud_store = PointCloudStore()
+sensor_diagnostics_store = SensorDiagnosticsStore()
 ros_bridge = RosBridge(
     telemetry_store,
     media_store,
     navigation_store,
     route_mission_store,
     spatial_store,
+    point_cloud_store,
+    sensor_diagnostics_store,
 )

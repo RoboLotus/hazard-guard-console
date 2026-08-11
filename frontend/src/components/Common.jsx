@@ -1,9 +1,49 @@
 import { useEffect, useState } from "react";
 import {
+  CaretDown,
   Clock,
   MapTrifold,
   NavigationArrow,
 } from "@phosphor-icons/react";
+import SimulationTeleop from "./SimulationTeleop.jsx";
+
+export function CollapsibleCard({
+  icon: Icon,
+  title,
+  subtitle,
+  className = "",
+  defaultOpen = true,
+  headerAside,
+  children,
+}) {
+  const [expanded, setExpanded] = useState(defaultOpen);
+  return (
+    <section className={`detail-card collapsible-card ${expanded ? "expanded" : "collapsed"} ${className}`.trim()}>
+      <header className="collapsible-card-header">
+        <div className="detail-card-title">
+          {Icon && <Icon size={20} weight="fill" />}
+          <div>
+            <strong>{title}</strong>
+            <span>{subtitle}</span>
+          </div>
+        </div>
+        <div className="collapsible-card-actions">
+          {headerAside}
+          <button
+            type="button"
+            className="card-collapse-button"
+            aria-label={`${title} 상세 ${expanded ? "숨기기" : "표시"}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            <CaretDown size={16} weight="bold" />
+          </button>
+        </div>
+      </header>
+      {expanded && <div className="collapsible-card-body">{children}</div>}
+    </section>
+  );
+}
 
 export function StatusPill({ tone = "success", children }) {
   return <span className={`status-pill ${tone}`}><span className="status-dot" />{children}</span>;
@@ -115,48 +155,77 @@ export function SystemModeControl({ systemMode, busy, onChange }) {
   const stateLabel = navigationPreparing
     ? "Nav2 준비 중"
     : systemStateLabels[state] || state;
+  const activeMappingProfile = systemMode?.mapping_profile || "toolbox";
+  const [mappingProfile, setMappingProfile] = useState(activeMappingProfile);
+
+  useEffect(() => {
+    setMappingProfile(activeMappingProfile);
+  }, [activeMappingProfile]);
 
   return (
-    <section className={`detail-card system-mode-control ${state}`} aria-label="로봇 운용 모드">
-      <header className="system-mode-heading">
-        <div className="detail-card-title">
-          <MapTrifold size={20} weight="fill" />
-          <div>
-            <strong>지도 운용 모드</strong>
-            <span>SLAM과 AMCL·Nav2 실행 환경 전환</span>
-          </div>
-        </div>
-        <StatusPill tone={stateTone}>{stateLabel}</StatusPill>
-      </header>
+    <CollapsibleCard
+      icon={MapTrifold}
+      title="지도 운용 모드"
+      subtitle="SLAM과 AMCL·Nav2 실행 환경 전환"
+      className={`system-mode-control ${state}`}
+      headerAside={<StatusPill tone={stateTone}>{stateLabel}</StatusPill>}
+    >
       <p className="system-mode-description">
         {mode === "mapping"
-          ? "공간을 수동 주행하며 새로운 지도를 작성합니다."
+          ? "회차별 새 세션에서 공간을 수동 주행하며 지도를 작성합니다."
           : mode === "patrol"
             ? "저장된 지도에서 위치를 추정하고 웨이포인트를 순찰합니다."
             : "작업 목적에 맞는 모드를 선택하세요."}
       </p>
+      <fieldset className="mapping-profile-selector" disabled={!controlEnabled || changing}>
+        <legend>지도 생성 방식</legend>
+        <button
+          type="button"
+          className={mappingProfile === "toolbox" ? "active" : ""}
+          aria-pressed={mappingProfile === "toolbox"}
+          onClick={() => setMappingProfile("toolbox")}
+        >
+          <span>2D 표준<strong>SLAM Toolbox</strong></span>
+        </button>
+        <button
+          type="button"
+          className={mappingProfile === "toolbox_rtabmap" ? "active" : ""}
+          aria-pressed={mappingProfile === "toolbox_rtabmap"}
+          onClick={() => setMappingProfile("toolbox_rtabmap")}
+        >
+          <span>2D + RGB-D 3D<strong>Toolbox + RTAB-Map</strong></span>
+        </button>
+      </fieldset>
       <div className="system-mode-buttons">
         <button
           type="button"
           className={mode === "mapping" ? "active" : ""}
           disabled={unavailable}
           aria-pressed={mode === "mapping"}
-          onClick={() => onChange("mapping")}
+          onClick={() => onChange("mapping", mappingProfile)}
         >
           <MapTrifold size={18} weight={mode === "mapping" ? "fill" : "regular"} />
-          <span>맵 생성<small>SLAM</small></span>
+          <span>새 맵 생성<small>SLAM 세션</small></span>
         </button>
         <button
           type="button"
           className={mode === "patrol" ? "active" : ""}
           disabled={unavailable}
           aria-pressed={mode === "patrol"}
-          onClick={() => onChange("patrol")}
+          onClick={() => onChange("patrol", activeMappingProfile)}
         >
           <NavigationArrow size={18} weight={mode === "patrol" ? "fill" : "regular"} />
           <span>순찰<small>AMCL · Nav2</small></span>
         </button>
       </div>
+      <SimulationTeleop systemMode={systemMode} />
+      {mode === "mapping" && activeMappingProfile === "toolbox_rtabmap" && (
+        <div className={`rtabmap-session-status ${systemMode?.rtabmap?.live ? "live" : "waiting"}`}>
+          <span />
+          <strong>{systemMode?.rtabmap?.live ? "3D 수집 중" : "RGB-D 데이터 대기"}</strong>
+          <small>{(systemMode?.rtabmap?.point_count || 0).toLocaleString("ko-KR")} points</small>
+        </div>
+      )}
       <footer>
         <span>
           {navigationPreparing
@@ -167,7 +236,7 @@ export function SystemModeControl({ systemMode, busy, onChange }) {
           {systemMode?.map_available ? "순찰 지도 준비됨" : "저장 지도 없음"}
         </small>
       </footer>
-    </section>
+    </CollapsibleCard>
   );
 }
 export function DetailHeading({ eyebrow, title, description, children }) {

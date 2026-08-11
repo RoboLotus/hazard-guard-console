@@ -1,21 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Camera,
-  DownloadSimple,
-  FloppyDisk,
+  Cube,
   Path,
   Robot,
   SlidersHorizontal,
   ThermometerHot,
+  MapTrifold,
   VideoCamera,
 } from "@phosphor-icons/react";
 import slamMap from "../assets/slam-map.webp";
 import {
+  CollapsibleCard,
   DetailHeading,
   SystemModeControl,
   downloadAsset,
 } from "../components/Common.jsx";
 import MapPanel from "../components/MapPanel.jsx";
+import SimulationMapManager from "../components/SimulationMapManager.jsx";
 import WaypointMissionPanel from "../WaypointMissionPanel.jsx";
 import {
   fallbackSpatialState,
@@ -32,6 +34,8 @@ import {
   shiftWaypoint,
 } from "../waypoints.js";
 
+const PointCloudPanel = lazy(() => import("../components/PointCloudPanel.jsx"));
+
 export default function MapPage({
   mediaStatus,
   telemetry,
@@ -39,15 +43,20 @@ export default function MapPage({
   systemMode,
   modeBusy,
   onModeChange,
+  onSystemModeUpdate,
   onSaveSystemMap,
+  onSaveAndStop,
   notify,
 }) {
   const [goalMode, setGoalMode] = useState(false);
+  const [mapDimension, setMapDimension] = useState("2d");
+  const [selected3dSession, setSelected3dSession] = useState(null);
   const [goalCandidate, setGoalCandidate] = useState(null);
-  const savedRoute = useRef(loadWaypointRoute());
-  const [waypoints, setWaypoints] = useState(() => savedRoute.current?.waypoints || []);
+  const activeWorldId = systemMode?.active_world_id || "facility_map";
+  const initialRoute = loadWaypointRoute(activeWorldId);
+  const [waypoints, setWaypoints] = useState(() => initialRoute?.waypoints || []);
   const [savedMapSignature, setSavedMapSignature] = useState(
-    () => savedRoute.current?.mapSignature || null,
+    () => initialRoute?.mapSignature || null,
   );
   const [selectedWaypointId, setSelectedWaypointId] = useState(null);
   const [repositionWaypointId, setRepositionWaypointId] = useState(null);
@@ -86,6 +95,17 @@ export default function MapPage({
     rejected: "거부됨",
     failed: "실패",
   };
+
+  useEffect(() => {
+    const route = loadWaypointRoute(activeWorldId);
+    setWaypoints(route?.waypoints || []);
+    setSavedMapSignature(route?.mapSignature || null);
+    setSelectedWaypointId(null);
+    setRepositionWaypointId(null);
+    setGoalCandidate(null);
+    setGoalMode(false);
+    setSelected3dSession(null);
+  }, [activeWorldId]);
 
   useEffect(() => {
     let disposed = false;
@@ -178,6 +198,14 @@ export default function MapPage({
   };
 
   const toggleWaypointMode = () => {
+    if (mapDimension !== "2d") {
+      setMapDimension("2d");
+      setGoalMode(true);
+      setGoalCandidate(null);
+      setRepositionWaypointId(null);
+      notify("웨이포인트를 지정할 수 있도록 2D 지도로 전환했습니다.", "info");
+      return;
+    }
     const next = !goalMode;
     setGoalMode(next);
     setGoalCandidate(null);
@@ -185,7 +213,7 @@ export default function MapPage({
   };
 
   const persistRoute = () => {
-    saveWaypointRoute(waypoints, mapSpec);
+    saveWaypointRoute(waypoints, mapSpec, "기본 순찰 경로", activeWorldId);
     setSavedMapSignature(currentMapSignature);
     notify("현재 지도 버전과 함께 순찰 경로를 브라우저에 저장했습니다.");
   };
@@ -197,7 +225,7 @@ export default function MapPage({
     setGoalMode(false);
     setRepositionWaypointId(null);
     setSavedMapSignature(null);
-    clearWaypointRoute();
+    clearWaypointRoute(activeWorldId);
     notify("모든 웨이포인트를 삭제했습니다.", "info");
   };
 
@@ -298,26 +326,49 @@ export default function MapPage({
   const toggleLayer = (layer) => {
     setLayers((current) => ({ ...current, [layer]: !current[layer] }));
   };
+  const changeMapDimension = (dimension) => {
+    setMapDimension(dimension);
+    if (dimension === "3d") {
+      setGoalMode(false);
+      setGoalCandidate(null);
+      setRepositionWaypointId(null);
+    }
+  };
 
   return (
     <div className="detail-page map-page">
-      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="SLAM 지도 위에서 로봇 위치, 센서 시야각, 이동 궤적과 열원 분포를 실시간으로 확인합니다.">
+      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="2D 점유 지도와 RTAB-Map RGB-D 컬러 포인트클라우드를 전환해 확인합니다.">
+        <div className="map-dimension-switch" aria-label="지도 표시 방식">
+          <button type="button" className={mapDimension === "2d" ? "active" : ""} aria-pressed={mapDimension === "2d"} onClick={() => changeMapDimension("2d")}>
+            <MapTrifold size={16} />2D 지도
+          </button>
+          <button type="button" className={mapDimension === "3d" ? "active" : ""} aria-pressed={mapDimension === "3d"} onClick={() => changeMapDimension("3d")}>
+            <Cube size={16} />3D RGB-D
+          </button>
+        </div>
         <span className={`api-status ${mapLive ? "online" : ""}`}><span />{mapLive ? "공간 데이터 연결" : "디지털 트윈 목업"}</span>
       </DetailHeading>
       <div className="map-workspace">
-        <MapPanel
-          detail
-          mediaStatus={mediaStatus}
-          spatialState={spatialState}
-          layers={layers}
-          goalMode={goalMode}
-          goalCandidate={goalCandidate}
-          waypoints={waypoints}
-          selectedWaypointId={selectedWaypointId}
-          onWaypointSelect={setSelectedWaypointId}
-          onGoalCandidate={selectGoal}
-          onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")}
-        />
+        {mapDimension === "2d" ? (
+          <MapPanel
+            detail
+            mediaStatus={mediaStatus}
+            spatialState={spatialState}
+            layers={layers}
+            goalMode={goalMode}
+            goalCandidate={goalCandidate}
+            waypoints={waypoints}
+            selectedWaypointId={selectedWaypointId}
+            onWaypointSelect={setSelectedWaypointId}
+            onGoalCandidate={selectGoal}
+            onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")}
+            waitingForMap={systemMode?.mode === "mapping" && !mapLive}
+          />
+        ) : (
+          <Suspense fallback={<div className="point-cloud-panel point-cloud-loading">3D 지도 뷰어를 불러오는 중입니다.</div>}>
+            <PointCloudPanel systemMode={systemMode} archivedSession={selected3dSession} />
+          </Suspense>
+        )}
         <aside className="map-side-panel">
           <SystemModeControl
             systemMode={systemMode}
@@ -355,19 +406,17 @@ export default function MapPage({
             onSave={persistRoute}
             onClear={clearRoute}
           />
-          <section className="detail-card">
-            <div className="detail-card-title"><Robot size={20} weight="fill" /><div><strong>로봇 주행 상태</strong><span>ROS 2 텔레메트리</span></div></div>
+          <CollapsibleCard icon={Robot} title="로봇 주행 상태" subtitle="ROS 2 텔레메트리">
             <dl className="status-list">
               <div><dt>운행 모드</dt><dd>{telemetry?.mode === "paused" ? "일시정지" : telemetry?.mode === "stopped" ? "정지" : "자율 순찰"}</dd></div>
               <div><dt>현재 속도</dt><dd>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</dd></div>
               <div><dt>LiDAR</dt><dd className="healthy">{telemetry?.lidar_status === "error" ? "확인 필요" : "정상"}</dd></div>
-              <div><dt>지도 소스</dt><dd>{mapLive ? "ROS /map" : "UI 목업"}</dd></div>
+              <div><dt>지도 소스</dt><dd>{mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : "UI 목업"}</dd></div>
               <div><dt>로봇 위치</dt><dd>{spatialState?.pose?.available ? `X ${spatialState.pose.x.toFixed(2)} · Y ${spatialState.pose.y.toFixed(2)}` : "확인 중"}</dd></div>
               <div><dt>Nav2 상태</dt><dd className={navigationStatus?.status === "executing" ? "healthy" : ""}>{navStatusLabels[navigationStatus?.status] || "확인 중"}</dd></div>
             </dl>
-          </section>
-          <section className="detail-card layer-card">
-            <div className="detail-card-title"><SlidersHorizontal size={20} /><div><strong>지도 레이어</strong><span>실시간 표시 선택</span></div></div>
+          </CollapsibleCard>
+          <CollapsibleCard icon={SlidersHorizontal} title="지도 레이어" subtitle="실시간 표시 선택" className="layer-card">
             <div className="layer-toggle-grid">
               {[
                 ["heatmap", "열원 히트맵", ThermometerHot],
@@ -395,26 +444,21 @@ export default function MapPage({
               ))}
               <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
             </div>
-          </section>
-          <section className="detail-card compact-card">
-            <div className="detail-card-title"><FloppyDisk size={20} /><div><strong>지도 파일</strong><span>순찰용 지도와 현재 화면 저장</span></div></div>
-            <div className="map-file-actions">
-              <button
-                type="button"
-                className="button primary wide-button"
-                onClick={onSaveSystemMap}
-                disabled={systemMode?.mode !== "mapping" || !systemMode?.control_enabled}
-              >
-                <FloppyDisk size={18} />ROS 지도 저장
-              </button>
-              <button type="button" className="button ghost wide-button" onClick={saveMapImage}><DownloadSimple size={18} />PNG로 저장</button>
-            </div>
-            <p className={`map-storage-status ${systemMode?.map_available ? "available" : ""}`}>
-              {systemMode?.map_available
-                ? "AMCL 순찰에 사용할 지도 파일이 준비되었습니다."
-                : "맵 생성 모드에서 지도를 작성한 뒤 ROS 지도를 저장하세요."}
-            </p>
-          </section>
+          </CollapsibleCard>
+          <SimulationMapManager
+            systemMode={systemMode}
+            onSystemModeUpdate={onSystemModeUpdate}
+            onSaveSystemMap={onSaveSystemMap}
+            onSaveAndStop={onSaveAndStop}
+            onSaveImage={saveMapImage}
+            selected3dSession={selected3dSession}
+            onSelect3dSession={(session) => {
+              setSelected3dSession(session);
+              setMapDimension("3d");
+              notify(`${session.name || "저장된 세션"} 3D 지도를 불러옵니다.`, "info");
+            }}
+            notify={notify}
+          />
         </aside>
       </div>
     </div>

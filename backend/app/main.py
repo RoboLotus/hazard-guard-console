@@ -4,12 +4,15 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from .bridge import (
     media_store,
     navigation_store,
+    point_cloud_store,
     ros_bridge,
     route_mission_store,
+    sensor_diagnostics_store,
     spatial_store,
     telemetry_store,
 )
@@ -17,13 +20,17 @@ from .mode_manager import system_mode_manager
 from .models import (
     CommandRequest,
     MockCommand,
+    MapSelectionRequest,
+    MapSessionUpdate,
     NavigationGoal,
     NavigationRoute,
     RobotTelemetry,
     SystemModeRequest,
     ThermalDetection,
     ThresholdSettings,
+    WorldSelectionRequest,
 )
+from .settings_store import ThresholdSettingsStore
 
 
 @asynccontextmanager
@@ -47,12 +54,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-thresholds = ThresholdSettings()
+threshold_store = ThresholdSettingsStore()
 
 
 def system_mode_status() -> dict:
     status = system_mode_manager.snapshot()
     capabilities = ros_bridge.capability_status()
+    cloud_status = point_cloud_store.status()
+    cloud_live = bool(cloud_status.get("available")) and float(
+        cloud_status.get("age_sec") or 0.0
+    ) <= 2.0
     pose = spatial_store.snapshot().get("pose") or {}
     pose_fresh = False
     if pose.get("available") and not pose.get("mock"):
@@ -92,6 +103,14 @@ def system_mode_status() -> dict:
         readiness_message = f"{', '.join(waiting_for)} 준비를 기다리고 있습니다."
     return {
         **status,
+        "rtabmap": {
+            "enabled": status.get("mapping_profile") == "toolbox_rtabmap",
+            "live": cloud_live,
+            "point_count": int(cloud_status.get("point_count") or 0),
+            "color_available": bool(cloud_status.get("color_available")),
+            "source": cloud_status.get("source"),
+            "age_sec": cloud_status.get("age_sec"),
+        },
         "navigation_ready": navigation_ready,
         "readiness": readiness,
         "readiness_message": readiness_message,
@@ -119,6 +138,26 @@ def require_patrol_mode() -> None:
         )
 
 
+def simulation_teleop_readiness() -> tuple[bool, str]:
+    """Allow browser teleop only for a WebUI-managed mapping simulation."""
+
+    status = system_mode_status()
+    if not status.get("control_enabled"):
+        return False, "WebUI 시뮬레이션 제어가 비활성화되어 있습니다."
+    if status.get("mode") != "mapping":
+        return False, "가상 조작은 맵 생성 모드에서만 사용할 수 있습니다."
+    if status.get("state") != "running" or not status.get("managed"):
+        return False, "WebUI에서 시작한 SLAM 맵 생성 프로세스가 준비되지 않았습니다."
+    if (
+        status.get("simulation_state") != "running"
+        or not status.get("simulation_managed")
+    ):
+        return False, "WebUI에서 시작한 Gazebo 시뮬레이션이 준비되지 않았습니다."
+    if not ros_bridge.active:
+        return False, "ROS 시뮬레이션 브리지가 준비되지 않았습니다."
+    return True, "시뮬레이션 조작 준비 완료"
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -143,9 +182,18 @@ def system_mode():
 def update_system_mode(request: SystemModeRequest):
     ros_bridge.cancel_route()
     ros_bridge.cancel_navigation()
-    result = system_mode_manager.switch_mode(request.mode)
+    result = system_mode_manager.switch_mode(
+        request.mode,
+        mapping_profile=request.mapping_profile,
+    )
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
+    if request.mode == "mapping" and result.get("mapping_session_id"):
+        media_store.clear("map")
+        session_id = result["mapping_session_id"]
+        spatial_store.reset_for_mapping(
+            f"{result.get('active_world_id', 'world')}:{session_id}"
+        )
     return result
 
 
@@ -164,6 +212,79 @@ def save_system_map():
     return result
 
 
+@app.post("/api/v1/system/map/save-and-stop")
+def save_and_stop_system_map():
+    result = system_mode_manager.save_map_and_stop()
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result
+
+
+@app.get("/api/v1/system/worlds")
+def simulation_worlds():
+    return system_mode_manager.worlds()
+
+
+@app.put("/api/v1/system/world")
+def select_simulation_world(request: WorldSelectionRequest):
+    ros_bridge.cancel_route()
+    ros_bridge.cancel_navigation()
+    result = system_mode_manager.select_world(request.world_id)
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    media_store.clear("map")
+    spatial_store.reset_for_mapping(f"{request.world_id}:waiting")
+    return result
+
+
+@app.get("/api/v1/system/maps")
+def saved_system_maps(world_id: str | None = None):
+    try:
+        return system_mode_manager.maps(world_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="등록되지 않은 환경입니다.")
+
+
+@app.put("/api/v1/system/map/active")
+def select_active_system_map(request: MapSelectionRequest):
+    result = system_mode_manager.select_map(request.world_id, request.session_id)
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result
+
+
+@app.patch("/api/v1/system/maps/{world_id}/{session_id}")
+def update_system_map_session(
+    world_id: str,
+    session_id: str,
+    request: MapSessionUpdate,
+):
+    result = system_mode_manager.edit_map_session(
+        world_id,
+        session_id,
+        name=request.name,
+        archived=request.archived,
+    )
+    if not result["accepted"]:
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
+
+
+@app.get("/api/v1/system/maps/{world_id}/{session_id}/cloud.ply")
+def system_map_cloud(world_id: str, session_id: str, download: bool = False):
+    result = system_mode_manager.export_map_cloud(world_id, session_id)
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    disposition = "attachment" if download else "inline"
+    return FileResponse(
+        result["path"],
+        media_type="application/octet-stream",
+        filename=f"hazard-guard-{session_id}.ply",
+        content_disposition_type=disposition,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @app.get("/api/v1/media/status")
 def media_status():
     return media_store.status()
@@ -172,6 +293,16 @@ def media_status():
 @app.get("/api/v1/spatial/status")
 def spatial_status():
     return spatial_store.snapshot()
+
+
+@app.get("/api/v1/spatial/cloud/status")
+def point_cloud_status():
+    return point_cloud_store.status()
+
+
+@app.get("/api/v1/system/sensors")
+def sensor_diagnostics():
+    return sensor_diagnostics_store.snapshot(ros_active=ros_bridge.active)
 
 
 @app.post("/api/v1/spatial/detections")
@@ -198,14 +329,12 @@ def media_image(kind: str):
 
 @app.get("/api/v1/settings/thresholds", response_model=ThresholdSettings)
 def get_thresholds():
-    return thresholds
+    return threshold_store.get()
 
 
 @app.put("/api/v1/settings/thresholds", response_model=ThresholdSettings)
 def update_thresholds(settings: ThresholdSettings):
-    global thresholds
-    thresholds = settings
-    return thresholds
+    return threshold_store.save(settings)
 
 
 @app.post("/api/v1/commands/{command}", response_model=MockCommand)
@@ -273,3 +402,82 @@ async def spatial(websocket: WebSocket):
             await asyncio.sleep(0.2)
     except (WebSocketDisconnect, RuntimeError):
         return
+
+
+@app.websocket("/ws/pointcloud")
+async def point_cloud(websocket: WebSocket):
+    await websocket.accept()
+    sequence = None
+    try:
+        while True:
+            item = point_cloud_store.packet_after(sequence)
+            if item is not None:
+                sequence, packet = item
+                await websocket.send_bytes(packet)
+            await asyncio.sleep(0.2)
+    except (WebSocketDisconnect, RuntimeError):
+        return
+
+
+@app.websocket("/ws/teleop")
+async def simulation_teleop(websocket: WebSocket):
+    """Receive hold-to-drive simulator commands with a server-side dead man."""
+
+    await websocket.accept()
+    ready, message = simulation_teleop_readiness()
+    if not ready:
+        await websocket.send_json({"accepted": False, "direction": "stop", "message": message})
+        await websocket.close(code=1008, reason="simulation teleop unavailable")
+        return
+
+    await websocket.send_json(
+        {"accepted": True, "direction": "stop", "message": message}
+    )
+    moving = False
+    try:
+        while True:
+            ready, message = simulation_teleop_readiness()
+            if not ready:
+                ros_bridge.stop_simulation_teleop()
+                await websocket.send_json(
+                    {"accepted": False, "direction": "stop", "message": message}
+                )
+                await websocket.close(code=1008, reason="simulation teleop disabled")
+                return
+            try:
+                payload = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=0.35,
+                )
+            except asyncio.TimeoutError:
+                if moving:
+                    ros_bridge.stop_simulation_teleop()
+                    moving = False
+                    await websocket.send_json(
+                        {
+                            "accepted": True,
+                            "direction": "stop",
+                            "message": "조작 신호가 끊겨 자동 정지했습니다.",
+                        }
+                    )
+                continue
+
+            direction = payload.get("direction") if isinstance(payload, dict) else None
+            if direction not in {"forward", "backward", "left", "right", "stop"}:
+                ros_bridge.stop_simulation_teleop()
+                moving = False
+                await websocket.send_json(
+                    {
+                        "accepted": False,
+                        "direction": "stop",
+                        "message": "지원하지 않는 시뮬레이션 조작 명령입니다.",
+                    }
+                )
+                continue
+            result = ros_bridge.publish_simulation_teleop(direction)
+            moving = bool(result.get("accepted") and direction != "stop")
+            await websocket.send_json(result)
+    except (WebSocketDisconnect, RuntimeError):
+        return
+    finally:
+        ros_bridge.stop_simulation_teleop()
