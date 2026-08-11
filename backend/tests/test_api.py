@@ -17,6 +17,7 @@ def test_health_reports_mock_mode():
         "status": "ok",
         "mode": "mock",
         "ros_bridge": False,
+        "deployment_target": "simulation",
         "capabilities": {
             "navigate_to_pose": False,
             "compute_path_to_pose": False,
@@ -65,6 +66,7 @@ def test_system_mode_status_exposes_webui_control_contract():
     assert "control_enabled" in payload
     assert "map_available" in payload
     assert "managed" in payload
+    assert payload["deployment_target"] == "simulation"
     assert "navigation_ready" in payload
     assert set(payload["readiness"]) == {
         "navigate_to_pose",

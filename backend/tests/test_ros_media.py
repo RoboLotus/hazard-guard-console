@@ -26,3 +26,16 @@ def test_thermal_detection_is_forwarded_to_spatial_store():
     assert detection["detection_id"] == "hot-motor"
     assert detection["temperature_c"] == 82.5
     assert detection["simulated"] is True
+
+
+def test_physical_target_waits_for_ros_without_animating_mock_data(monkeypatch):
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+
+    snapshot = SpatialStore().snapshot()
+
+    assert snapshot["source"] == "waiting"
+    assert snapshot["mock"] is False
+    assert snapshot["pose"]["available"] is False
+    assert snapshot["trail"] == []
+    assert snapshot["heatmap"]["detections"] == []
+    assert snapshot["map"]["source"] == "pending:/map"

@@ -142,6 +142,8 @@ def simulation_teleop_readiness() -> tuple[bool, str]:
     """Allow browser teleop only for a WebUI-managed mapping simulation."""
 
     status = system_mode_status()
+    if status.get("deployment_target") == "physical":
+        return False, "실물 로봇에서는 안전을 위해 WebUI 가상 조작기를 사용할 수 없습니다."
     if not status.get("control_enabled"):
         return False, "WebUI 시뮬레이션 제어가 비활성화되어 있습니다."
     if status.get("mode") != "mapping":
@@ -164,6 +166,9 @@ def health():
         "status": "ok",
         "mode": "ros-mock" if ros_bridge.active else "mock",
         "ros_bridge": ros_bridge.active,
+        "deployment_target": system_mode_manager.snapshot(
+            detect_external=False
+        ).get("deployment_target"),
         "capabilities": ros_bridge.capability_status(),
     }
 
@@ -182,6 +187,7 @@ def system_mode():
 def update_system_mode(request: SystemModeRequest):
     ros_bridge.cancel_route()
     ros_bridge.cancel_navigation()
+    ros_bridge.stop_motion()
     result = system_mode_manager.switch_mode(
         request.mode,
         mapping_profile=request.mapping_profile,
@@ -201,6 +207,7 @@ def update_system_mode(request: SystemModeRequest):
 def stop_system_mode():
     ros_bridge.cancel_route()
     ros_bridge.cancel_navigation()
+    ros_bridge.stop_motion()
     return system_mode_manager.stop()
 
 

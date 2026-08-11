@@ -273,16 +273,32 @@ class SpatialStore:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._source = "mock"
-        self._map_id = os.getenv("HAZARD_GUARD_MAP_ID", "mock:facility-v1")
-        self._map = {**self.MOCK_MAP, "map_id": self._map_id}
+        default_mock_enabled = (
+            "0"
+            if os.getenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "simulation").lower()
+            == "physical"
+            else "1"
+        )
+        self._mock_enabled = os.getenv(
+            "HAZARD_GUARD_MOCK_DATA_ENABLED", default_mock_enabled
+        ).lower() in {"1", "true", "yes", "on"}
+        self._source = "mock" if self._mock_enabled else "waiting"
+        self._map_id = os.getenv(
+            "HAZARD_GUARD_MAP_ID",
+            "mock:facility-v1" if self._mock_enabled else "physical:pending",
+        )
+        self._map = {
+            **self.MOCK_MAP,
+            "map_id": self._map_id,
+            "source": "mock:slam-map" if self._mock_enabled else "pending:/map",
+        }
         self._pose = {
-            "available": True,
+            "available": self._mock_enabled,
             "frame_id": "map",
             "x": self.MOCK_ROUTE[0][0],
             "y": self.MOCK_ROUTE[0][1],
             "yaw": 0.0,
-            "mock": True,
+            "mock": self._mock_enabled,
             "updated_at": utc_now(),
         }
         self._trail: list[dict[str, Any]] = []
@@ -290,15 +306,16 @@ class SpatialStore:
         self._started_monotonic = time.monotonic()
         self._last_mock_update = 0.0
         self._live_initialized = False
-        for detection in self.MOCK_HEAT_SOURCES:
-            self._store_detection_locked(
-                {
-                    **detection,
-                    "frame_id": "map",
-                    "z": 0.0,
-                    "simulated": True,
-                }
-            )
+        if self._mock_enabled:
+            for detection in self.MOCK_HEAT_SOURCES:
+                self._store_detection_locked(
+                    {
+                        **detection,
+                        "frame_id": "map",
+                        "z": 0.0,
+                        "simulated": True,
+                    }
+                )
 
     def _activate_live_locked(self) -> None:
         if self._live_initialized:

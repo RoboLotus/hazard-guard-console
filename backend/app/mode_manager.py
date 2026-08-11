@@ -25,6 +25,7 @@ class SystemModeManager:
 
     MODES = {"mapping", "patrol"}
     MAPPING_PROFILES = {"toolbox", "toolbox_rtabmap"}
+    DEPLOYMENT_TARGETS = {"simulation", "physical"}
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -34,6 +35,15 @@ class SystemModeManager:
         self._simulation_generation = 0
         self._ignore_external_until = 0.0
         self._enabled = os.getenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "0") == "1"
+        self._deployment_target = os.getenv(
+            "HAZARD_GUARD_DEPLOYMENT_TARGET", "simulation"
+        ).strip().lower()
+        if self._deployment_target not in self.DEPLOYMENT_TARGETS:
+            supported = ", ".join(sorted(self.DEPLOYMENT_TARGETS))
+            raise ValueError(
+                "Unsupported HAZARD_GUARD_DEPLOYMENT_TARGET: "
+                f"{self._deployment_target!r}. Expected one of: {supported}"
+            )
         self._workspace = Path(
             os.getenv("HAZARD_GUARD_WORKSPACE", os.getcwd())
         ).expanduser().resolve()
@@ -84,16 +94,25 @@ class SystemModeManager:
             "accepted": False,
             "managed": False,
             "control_enabled": self._enabled,
+            "deployment_target": self._deployment_target,
             "pid": None,
             "map_path": str(self._map_path),
             "active_world_id": self._active_world["id"],
-            "active_world_label": self._active_world["label"],
+            "active_world_label": (
+                self._active_world["label"]
+                if self._deployment_target == "simulation"
+                else "실물 로봇 현장"
+            ),
             "mapping_session_id": None,
             "mapping_profile": self._mapping_profile,
             "rtabmap_database_path": None,
             "log_path": str(self._log_path),
             "simulation_log_path": str(self._simulation_log_path),
-            "simulation_state": "stopped",
+            "simulation_state": (
+                "stopped"
+                if self._deployment_target == "simulation"
+                else "not_applicable"
+            ),
             "simulation_managed": False,
             "simulation_pid": None,
             "map_available": self._map_files_available(),
@@ -244,6 +263,12 @@ class SystemModeManager:
         }
 
     def select_world(self, world_id: str) -> dict[str, Any]:
+        if self._deployment_target != "simulation":
+            with self._lock:
+                return self._update_locked(
+                    accepted=False,
+                    message="시뮬레이션 환경 전환은 simulation 배포 대상에서만 사용할 수 있습니다.",
+                )
         with self._lock:
             if self._process is not None or self._data["state"] in {
                 "starting",
@@ -373,10 +398,16 @@ class SystemModeManager:
 
         external_mode = self._detect_external_mode() if detect_external else None
         external_simulation = (
-            self._detect_external_simulation() if detect_external else False
+            self._detect_external_simulation()
+            if detect_external and self._deployment_target == "simulation"
+            else False
         )
         with self._lock:
-            if detect_external and self._simulation_process is None:
+            if (
+                detect_external
+                and self._deployment_target == "simulation"
+                and self._simulation_process is None
+            ):
                 if external_simulation:
                     self._data.update(
                         simulation_state="external",
@@ -417,6 +448,32 @@ class SystemModeManager:
             return dict(self._data)
 
     def _launch_arguments(self, mode: str) -> list[str]:
+        if self._deployment_target == "physical":
+            if mode == "mapping":
+                enable_rtabmap = self._mapping_profile == "toolbox_rtabmap"
+                return [
+                    "ros2",
+                    "launch",
+                    "hazard_guard_simulation",
+                    "physical_mapping.launch.py",
+                    f"enable_rtabmap:={'true' if enable_rtabmap else 'false'}",
+                    "database_path:="
+                    + str(
+                        self._rtabmap_database_path
+                        or self._workspace
+                        / "runtime"
+                        / "maps"
+                        / "physical_rtabmap.db"
+                    ),
+                ]
+            return [
+                "ros2",
+                "launch",
+                "hazard_guard_simulation",
+                "physical_patrol.launch.py",
+                f"map:={self._map_path}",
+            ]
+
         common = [
             f"gui:={'true' if self._gui else 'false'}",
             f"simulation_mode:={self._simulation_mode}",
@@ -459,7 +516,7 @@ class SystemModeManager:
         ]
 
     def _detect_external_simulation(self) -> bool:
-        if not self._enabled:
+        if not self._enabled or self._deployment_target != "simulation":
             return False
         nodes = self._process_controller.ros_nodes()
         return any(node.endswith("/hazard_guard_gz_bridge") for node in nodes)
@@ -561,6 +618,17 @@ class SystemModeManager:
         with self._lock:
             self._update_locked(simulation_state="running")
         return True
+
+    def _ensure_runtime_environment(self) -> bool:
+        if self._deployment_target == "physical":
+            with self._lock:
+                self._update_locked(
+                    simulation_state="not_applicable",
+                    simulation_managed=False,
+                    simulation_pid=None,
+                )
+            return True
+        return self._ensure_simulation()
 
     def _last_log_line(self) -> str | None:
         return self._process_controller.last_log_line(self._log_path)
@@ -699,7 +767,11 @@ class SystemModeManager:
             "accepted": True,
             "map_available": True,
             "rtabmap_available": saved.get("rtabmap_available", False),
-            "message": "현재 지도 세션을 저장하고 SLAM·Gazebo를 종료했습니다.",
+            "message": (
+                "현재 지도 세션을 저장하고 실물 로봇 SLAM을 종료했습니다."
+                if self._deployment_target == "physical"
+                else "현재 지도 세션을 저장하고 SLAM·Gazebo를 종료했습니다."
+            ),
         }
 
     def _stop_managed_process(self) -> None:
@@ -737,7 +809,7 @@ class SystemModeManager:
                 "accepted": False,
                 "message": (
                     "WebUI 모드 제어가 비활성화되어 있습니다. "
-                    "Docker 환경 변수 HAZARD_GUARD_MODE_CONTROL_ENABLED=1이 필요합니다."
+                    "백엔드 환경 변수 HAZARD_GUARD_MODE_CONTROL_ENABLED=1이 필요합니다."
                 ),
             }
 
@@ -752,11 +824,11 @@ class SystemModeManager:
             and current_state in {"starting", "running"}
             and (mode != "mapping" or self._mapping_profile == requested_profile)
         ):
-            simulation_ready = self._ensure_simulation()
+            runtime_ready = self._ensure_runtime_environment()
             with self._lock:
                 return self._update_locked(
-                    accepted=simulation_ready,
-                    state=current_state if simulation_ready else "failed",
+                    accepted=runtime_ready,
+                    state=current_state if runtime_ready else "failed",
                     message="이미 선택한 운용 모드가 실행 중입니다.",
                 )
 
@@ -820,7 +892,7 @@ class SystemModeManager:
                     ),
                 )
 
-        if not self._ensure_simulation():
+        if not self._ensure_runtime_environment():
             with self._lock:
                 return self._update_locked(
                     mode="idle",
@@ -828,9 +900,11 @@ class SystemModeManager:
                     accepted=False,
                     managed=False,
                     pid=None,
-                    message=(
-                        "Gazebo 시뮬레이터를 시작하지 못했습니다. "
+                    message="운용 환경을 준비하지 못했습니다. "
+                    + (
                         f"{self._simulation_log_path} 로그를 확인하세요."
+                        if self._deployment_target == "simulation"
+                        else f"{self._log_path} 로그와 실물 센서 연결을 확인하세요."
                     ),
                 )
 
@@ -899,7 +973,8 @@ class SystemModeManager:
 
     def stop(self) -> dict[str, Any]:
         self._stop_managed_process()
-        self._stop_managed_simulation()
+        if self._deployment_target == "simulation":
+            self._stop_managed_simulation()
         with self._lock:
             return self._update_locked(
                 mode="idle",

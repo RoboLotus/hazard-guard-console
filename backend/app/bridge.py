@@ -348,6 +348,11 @@ class RosBridge:
     def stop_simulation_teleop(self) -> dict[str, Any]:
         """Best-effort zero velocity used by release and dead-man handling."""
 
+        return self.stop_motion()
+
+    def stop_motion(self) -> dict[str, Any]:
+        """Publish a best-effort zero velocity before changing ROS stacks."""
+
         return self.publish_simulation_teleop("stop")
 
     def _on_mission_status(self, message: Any) -> None:

@@ -141,3 +141,82 @@ def test_existing_simulator_is_reused_without_starting_duplicate(
     snapshot = manager.snapshot(detect_external=False)
     assert snapshot["simulation_state"] == "external"
     assert snapshot["simulation_managed"] is False
+
+
+def test_physical_mapping_profiles_use_hardware_launch_without_gazebo(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    manager._rtabmap_database_path = tmp_path / "runtime" / "maps" / "rtabmap.db"
+
+    manager._mapping_profile = "toolbox"
+    toolbox = manager._launch_arguments("mapping")
+    manager._mapping_profile = "toolbox_rtabmap"
+    hybrid = manager._launch_arguments("mapping")
+
+    assert toolbox[:4] == [
+        "ros2",
+        "launch",
+        "hazard_guard_simulation",
+        "physical_mapping.launch.py",
+    ]
+    assert "enable_rtabmap:=false" in toolbox
+    assert "enable_rtabmap:=true" in hybrid
+    assert f"database_path:={manager._rtabmap_database_path}" in hybrid
+    assert all("world:=" not in argument for argument in toolbox + hybrid)
+
+
+def test_physical_patrol_passes_selected_map_to_hardware_launch(
+    monkeypatch,
+    tmp_path,
+):
+    map_path = tmp_path / "runtime" / "maps" / "facility.yaml"
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("HAZARD_GUARD_MAP_PATH", str(map_path))
+    manager = SystemModeManager()
+
+    command = manager._launch_arguments("patrol")
+
+    assert command[:4] == [
+        "ros2",
+        "launch",
+        "hazard_guard_simulation",
+        "physical_patrol.launch.py",
+    ]
+    assert f"map:={map_path}" in command
+    assert all("start_simulation" not in argument for argument in command)
+
+
+def test_physical_runtime_never_starts_gazebo(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(
+        manager,
+        "_ensure_simulation",
+        lambda: (_ for _ in ()).throw(AssertionError("must not start Gazebo")),
+    )
+
+    assert manager._ensure_runtime_environment() is True
+    snapshot = manager.snapshot(detect_external=False)
+    assert snapshot["deployment_target"] == "physical"
+    assert snapshot["simulation_state"] == "not_applicable"
+
+
+def test_physical_target_rejects_simulation_world_switch(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+
+    result = manager.select_world("facility_map")
+
+    assert result["accepted"] is False
+    assert "simulation" in result["message"]
