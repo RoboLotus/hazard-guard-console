@@ -33,6 +33,10 @@ import {
   saveWaypointRoute,
   shiftWaypoint,
 } from "../waypoints.js";
+import {
+  buildPatrolSchedulePayload,
+  normalizePatrolSchedule,
+} from "../patrolSchedule.js";
 
 const PointCloudPanel = lazy(() => import("../components/PointCloudPanel.jsx"));
 
@@ -43,6 +47,7 @@ export default function MapPage({
   systemMode,
   modeBusy,
   onModeChange,
+  onInitializeLocalization,
   onSystemModeUpdate,
   onSaveSystemMap,
   onSaveAndStop,
@@ -56,6 +61,9 @@ export default function MapPage({
   const physicalTarget = systemMode?.deployment_target === "physical";
   const initialRoute = loadWaypointRoute(activeWorldId);
   const [waypoints, setWaypoints] = useState(() => initialRoute?.waypoints || []);
+  const [patrolSchedule, setPatrolSchedule] = useState(
+    () => normalizePatrolSchedule(initialRoute?.schedule),
+  );
   const [savedMapSignature, setSavedMapSignature] = useState(
     () => initialRoute?.mapSignature || null,
   );
@@ -112,6 +120,7 @@ export default function MapPage({
   useEffect(() => {
     const route = loadWaypointRoute(activeWorldId);
     setWaypoints(route?.waypoints || []);
+    setPatrolSchedule(normalizePatrolSchedule(route?.schedule));
     setSavedMapSignature(route?.mapSignature || null);
     setSelectedWaypointId(null);
     setRepositionWaypointId(null);
@@ -226,7 +235,13 @@ export default function MapPage({
   };
 
   const persistRoute = () => {
-    saveWaypointRoute(waypoints, mapSpec, "기본 순찰 경로", activeWorldId);
+    saveWaypointRoute(
+      waypoints,
+      mapSpec,
+      "기본 순찰 경로",
+      activeWorldId,
+      patrolSchedule,
+    );
     setSavedMapSignature(currentMapSignature);
     notify("현재 지도 버전과 함께 순찰 경로를 브라우저에 저장했습니다.");
   };
@@ -294,6 +309,7 @@ export default function MapPage({
     }
     setRouteBusy(true);
     try {
+      const schedulePayload = buildPatrolSchedulePayload(patrolSchedule);
       const response = await fetch("/api/v1/navigation/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -301,6 +317,7 @@ export default function MapPage({
           name: "기본 순찰 경로",
           frame_id: mapSpec.frame_id || "map",
           return_to_start: false,
+          ...schedulePayload,
           waypoints: enabled,
         }),
       });
@@ -311,8 +328,8 @@ export default function MapPage({
         return;
       }
       notify("경로 안전성 확인 후 순찰을 시작합니다.");
-    } catch {
-      notify("순찰 임무 API에 연결하지 못했습니다.", "warning");
+    } catch (error) {
+      notify(error?.message || "순찰 임무 API에 연결하지 못했습니다.", "warning");
     } finally {
       setRouteBusy(false);
     }
@@ -393,6 +410,7 @@ export default function MapPage({
             systemMode={systemMode}
             busy={modeBusy}
             onChange={onModeChange}
+            onInitializeLocalization={onInitializeLocalization}
           />
           <WaypointMissionPanel
             waypoints={waypoints}
@@ -408,6 +426,7 @@ export default function MapPage({
             modeTransitioning={modeTransitioning}
             readinessMessage={systemMode?.readiness_message}
             missionStatus={missionStatus}
+            schedule={patrolSchedule}
             busy={routeBusy}
             onSelect={setSelectedWaypointId}
             onToggleAdd={toggleWaypointMode}
@@ -419,6 +438,10 @@ export default function MapPage({
             onShift={shiftWaypointOrder}
             onReposition={beginReposition}
             onStart={startRoute}
+            onScheduleChange={(patch) => setPatrolSchedule((current) => ({
+              ...current,
+              ...patch,
+            }))}
             onRequestPatrolMode={() => onModeChange("patrol")}
             onCancelMission={cancelRoute}
             onRecommend={recommendRoute}

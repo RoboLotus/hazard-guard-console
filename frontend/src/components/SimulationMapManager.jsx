@@ -266,6 +266,17 @@ export default function SimulationMapManager({
     }
   };
 
+  const copyStoragePath = async () => {
+    const path = selectedSession?.storage_directory || systemMode?.map_files?.directory;
+    if (!path) return;
+    try {
+      await navigator.clipboard.writeText(path);
+      notify("지도 저장 경로를 클립보드에 복사했습니다.", "info");
+    } catch {
+      notify(`지도 저장 위치: ${path}`, "info");
+    }
+  };
+
   return (
     <CollapsibleCard
       icon={Stack}
@@ -369,6 +380,25 @@ export default function SimulationMapManager({
                 </>
               )}
             </div>
+          </div>
+        )}
+        {(selectedSession?.map_yaml_path || systemMode?.map_files?.yaml) && (
+          <div className="map-file-location">
+            <div>
+              <strong>저장 파일 위치</strong>
+              <button type="button" onClick={copyStoragePath}>경로 복사</button>
+            </div>
+            <dl>
+              <div><dt>폴더</dt><dd title={selectedSession?.storage_directory || systemMode?.map_files?.directory}>{selectedSession?.storage_directory || systemMode?.map_files?.directory}</dd></div>
+              <div><dt>2D 설정</dt><dd title={selectedSession?.map_yaml_path || systemMode?.map_files?.yaml}>{selectedSession?.map_yaml_path || systemMode?.map_files?.yaml}</dd></div>
+              <div><dt>2D 이미지</dt><dd title={selectedSession?.map_image_path || systemMode?.map_files?.image}>{selectedSession?.map_image_path || systemMode?.map_files?.image || "저장 전"}</dd></div>
+              {(selectedSession?.rtabmap_database_path || systemMode?.map_files?.rtabmap_database) && (
+                <div><dt>3D DB</dt><dd title={selectedSession?.rtabmap_database_path || systemMode?.map_files?.rtabmap_database}>{selectedSession?.rtabmap_database_path || systemMode?.map_files?.rtabmap_database}</dd></div>
+              )}
+              {(selectedSession?.cloud_available || systemMode?.map_files?.point_cloud) && (
+                <div><dt>3D PLY</dt><dd title={selectedSession?.cloud_path || systemMode?.map_files?.point_cloud}>{selectedSession?.cloud_path || systemMode?.map_files?.point_cloud || "내보내기 전"}</dd></div>
+              )}
+            </dl>
           </div>
         )}
       </div>

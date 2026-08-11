@@ -59,6 +59,10 @@ def test_map_sessions_are_scoped_to_world_and_require_complete_map_files(tmp_pat
     assert active_path == session["map_path"]
     assert catalog.sessions("hard_map")[0]["active"] is True
     assert catalog.active_map_path("hard_map") == session["map_path"]
+    saved = catalog.sessions("hard_map")[0]
+    assert saved["storage_directory"] == str(session["directory"])
+    assert saved["map_yaml_path"] == str(session["map_path"])
+    assert saved["map_image_path"] == str(session["directory"] / "map.pgm")
 
 
 def test_hybrid_session_reports_persistent_rtabmap_database(tmp_path):

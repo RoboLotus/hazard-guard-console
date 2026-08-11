@@ -70,6 +70,19 @@ class SystemModeManager:
             / self._active_world["id"]
             / "unavailable.yaml"
         )
+        self._localization_pose: dict[str, float] | None = None
+        active_session = next(
+            (
+                session
+                for session in self._world_catalog.sessions(self._active_world["id"])
+                if session.get("active")
+            ),
+            None,
+        )
+        if active_session is not None:
+            self._localization_pose = self._validated_pose(
+                active_session.get("localization_pose")
+            )
         self._gui = os.getenv("HAZARD_GUARD_SIMULATION_GUI", "true").lower() in {
             "1",
             "true",
@@ -97,6 +110,8 @@ class SystemModeManager:
             "deployment_target": self._deployment_target,
             "pid": None,
             "map_path": str(self._map_path),
+            "map_files": self._map_file_summary(),
+            "localization_pose": self._localization_pose,
             "active_world_id": self._active_world["id"],
             "active_world_label": (
                 self._active_world["label"]
@@ -134,8 +149,48 @@ class SystemModeManager:
         return self._world_catalog.map_available(self._map_path)
 
     @staticmethod
+    def _validated_pose(pose: Any) -> dict[str, float] | None:
+        if not isinstance(pose, dict):
+            return None
+        try:
+            return {
+                "x": float(pose["x"]),
+                "y": float(pose["y"]),
+                "yaw": float(pose["yaw"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _map_file_summary(self) -> dict[str, Any]:
+        image_path = self._world_catalog.map_image_path(self._map_path)
+        session_directory = self._map_path.parent
+        database_path = session_directory / "rtabmap.db"
+        cloud_path = session_directory / "cloud.ply"
+        return {
+            "directory": str(session_directory),
+            "yaml": str(self._map_path),
+            "image": str(image_path) if image_path is not None else None,
+            "rtabmap_database": (
+                str(database_path) if database_path.is_file() else None
+            ),
+            "point_cloud": str(cloud_path) if cloud_path.is_file() else None,
+        }
+
+    def set_localization_pose(self, pose: Any) -> dict[str, float] | None:
+        """Remember the last mapped pose for the following AMCL startup."""
+
+        validated = self._validated_pose(pose)
+        if validated is None:
+            return None
+        with self._lock:
+            self._localization_pose = validated
+            self._data["localization_pose"] = dict(validated)
+        return dict(validated)
+
+    @staticmethod
     def _launch_value(value: float) -> str:
-        return format(float(value), ".6g")
+        formatted = format(float(value), ".6g")
+        return formatted if any(marker in formatted for marker in ".eE") else f"{formatted}.0"
 
     def _world_launch_arguments(self) -> list[str]:
         world = self._active_world
@@ -349,6 +404,17 @@ class SystemModeManager:
                     accepted=False,
                     message="사용 가능한 SLAM 지도 세션을 찾지 못했습니다.",
                 )
+        selected_session = next(
+            (
+                session
+                for session in self._world_catalog.sessions(world_id)
+                if session["id"] == session_id
+            ),
+            None,
+        )
+        self._localization_pose = self._validated_pose(
+            selected_session.get("localization_pose") if selected_session else None
+        )
         with self._lock:
             return self._update_locked(
                 accepted=True,
@@ -359,6 +425,8 @@ class SystemModeManager:
     def _update_locked(self, **values: Any) -> dict[str, Any]:
         self._data.update(values)
         self._data["map_available"] = self._map_files_available()
+        self._data["map_files"] = self._map_file_summary()
+        self._data["localization_pose"] = self._localization_pose
         self._data["updated_at"] = utc_now()
         return dict(self._data)
 
@@ -474,12 +542,16 @@ class SystemModeManager:
                         / "physical_rtabmap.db"
                     ),
                 ]
+            initial_pose = self._localization_pose or {"x": 0.0, "y": 0.0, "yaw": 0.0}
             return [
                 "ros2",
                 "launch",
                 "hazard_guard_simulation",
                 "physical_patrol.launch.py",
                 f"map:={self._map_path}",
+                f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
+                f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
+                f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
             ]
 
         common = [
@@ -503,6 +575,12 @@ class SystemModeManager:
                     or Path("/tmp/hazard_guard_rtabmap_sim.db")
                 ),
             ]
+        spawn = self._active_world["spawn"]
+        initial_pose = self._localization_pose or {
+            "x": float(spawn["x"]),
+            "y": float(spawn["y"]),
+            "yaw": float(spawn["yaw"]),
+        }
         return [
             "ros2",
             "launch",
@@ -510,6 +588,9 @@ class SystemModeManager:
             "localization.launch.py",
             *common,
             f"map:={self._map_path}",
+            f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
+            f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
+            f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
         ]
 
     def _simulation_launch_arguments(self) -> list[str]:
@@ -744,6 +825,7 @@ class SystemModeManager:
                     if rtabmap_available and self._rtabmap_database_path is not None
                     else 0
                 ),
+                localization_pose=self._localization_pose,
             )
             if accepted:
                 self._map_path = self._world_catalog.activate_session(
@@ -751,7 +833,10 @@ class SystemModeManager:
                 )
         detail = (result.stderr or result.stdout).strip().splitlines()
         message = (
-            f"순찰용 지도를 세션 {self._current_session_id}에 저장했습니다."
+            (
+                f"순찰용 지도를 세션 {self._current_session_id}에 저장했습니다. "
+                f"저장 위치: {self._map_path.parent}"
+            )
             if accepted
             else (
                 "지도를 저장하지 못했습니다."
@@ -934,6 +1019,7 @@ class SystemModeManager:
                 self._mapping_profile = requested_profile
                 self._current_session_id = pending_session["id"]
                 self._map_path = pending_session["map_path"]
+                self._localization_pose = None
                 self._rtabmap_database_path = pending_session[
                     "rtabmap_database_path"
                 ]

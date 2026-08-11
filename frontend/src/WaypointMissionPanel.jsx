@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  Clock,
   Crosshair,
   DotsSixVertical,
   FloppyDisk,
@@ -15,6 +16,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { CollapsibleCard } from "./components/Common.jsx";
+import { formatUnixTime } from "./patrolSchedule.js";
 
 const missionActiveStates = new Set([
   "preparing",
@@ -23,6 +25,8 @@ const missionActiveStates = new Set([
   "executing",
   "aligning",
   "dwelling",
+  "scheduled",
+  "waiting",
   "canceling",
 ]);
 
@@ -62,6 +66,7 @@ export default function WaypointMissionPanel({
   modeTransitioning,
   readinessMessage,
   missionStatus,
+  schedule,
   busy,
   onSelect,
   onToggleAdd,
@@ -73,6 +78,7 @@ export default function WaypointMissionPanel({
   onShift,
   onReposition,
   onStart,
+  onScheduleChange,
   onRequestPatrolMode,
   onCancelMission,
   onRecommend,
@@ -89,6 +95,8 @@ export default function WaypointMissionPanel({
     () => new Map((missionStatus?.waypoints || []).map((item) => [item.id, item])),
     [missionStatus],
   );
+  const nextRunLabel = formatUnixTime(missionStatus?.next_run_at_unix_ms);
+  const endAtLabel = formatUnixTime(missionStatus?.end_at_unix_ms);
 
   useEffect(() => {
     if (!candidate) return;
@@ -381,6 +389,114 @@ export default function WaypointMissionPanel({
         >
           <FloppyDisk size={17} />경로 저장
         </button>
+      </div>
+
+      <div className="patrol-schedule-editor">
+        <header>
+          <Clock size={17} weight="fill" />
+          <span><strong>반복·운영 시간</strong><small>실제 시각 기준</small></span>
+        </header>
+        <div className="patrol-schedule-grid">
+          <label>
+            <span>순찰 시작</span>
+            <select
+              disabled={missionActive}
+              value={schedule.startMode}
+              onChange={(event) => onScheduleChange({ startMode: event.target.value })}
+            >
+              <option value="now">지금 바로</option>
+              <option value="scheduled">예약 시각</option>
+            </select>
+          </label>
+          <label>
+            <span>종료 조건</span>
+            <select
+              disabled={missionActive}
+              value={schedule.repeatMode}
+              onChange={(event) => onScheduleChange({ repeatMode: event.target.value })}
+            >
+              <option value="once">1회 완료</option>
+              <option value="count">지정 횟수</option>
+              <option value="until_time">지정 시각</option>
+              <option value="forever">수동 종료</option>
+            </select>
+          </label>
+        </div>
+        {schedule.startMode === "scheduled" && (
+          <label className="patrol-schedule-wide">
+            <span>예약 시작 시각</span>
+            <input
+              type="datetime-local"
+              disabled={missionActive}
+              value={schedule.startAt}
+              onChange={(event) => onScheduleChange({ startAt: event.target.value })}
+            />
+          </label>
+        )}
+        {schedule.repeatMode === "count" && (
+          <label className="patrol-schedule-wide">
+            <span>총 순찰 횟수</span>
+            <div className="input-suffix">
+              <input
+                type="number"
+                min="2"
+                max="1000"
+                disabled={missionActive}
+                value={schedule.repeatCount}
+                onChange={(event) => onScheduleChange({
+                  repeatCount: Math.max(2, Math.min(1000, Number(event.target.value) || 2)),
+                })}
+              />
+              <i>회</i>
+            </div>
+          </label>
+        )}
+        {schedule.repeatMode === "until_time" && (
+          <label className="patrol-schedule-wide">
+            <span>순찰 종료 시각</span>
+            <input
+              type="datetime-local"
+              disabled={missionActive}
+              value={schedule.endAt}
+              onChange={(event) => onScheduleChange({ endAt: event.target.value })}
+            />
+          </label>
+        )}
+        {schedule.repeatMode !== "once" && (
+          <label className="patrol-schedule-wide">
+            <span>회차 사이 대기</span>
+            <div className="input-suffix">
+              <input
+                type="number"
+                min="0"
+                max="1440"
+                step="1"
+                disabled={missionActive}
+                value={schedule.repeatIntervalMinutes}
+                onChange={(event) => onScheduleChange({
+                  repeatIntervalMinutes: Math.max(
+                    0,
+                    Math.min(1440, Number(event.target.value) || 0),
+                  ),
+                })}
+              />
+              <i>분</i>
+            </div>
+          </label>
+        )}
+        {(missionActive || Number(missionStatus?.completed_cycles) > 0) && (
+          <div className="patrol-schedule-status">
+            <strong>
+              {missionStatus?.total_cycles
+                ? `${missionStatus.current_cycle || missionStatus.completed_cycles}/${missionStatus.total_cycles}회차`
+                : `${missionStatus?.current_cycle || missionStatus?.completed_cycles || 0}회차`}
+            </strong>
+            <span>{missionStatus?.message}</span>
+            {nextRunLabel && <small>다음 시작 · {nextRunLabel}</small>}
+            {endAtLabel && <small>운영 종료 · {endAtLabel}</small>}
+          </div>
+        )}
+        <p>예약은 ROS 임무 관리자에서 실행되므로 WebUI를 새로고침해도 유지됩니다.</p>
       </div>
 
       <div className="route-primary-actions">

@@ -136,7 +136,7 @@ const systemStateLabels = {
   failed: "오류",
 };
 
-export function SystemModeControl({ systemMode, busy, onChange }) {
+export function SystemModeControl({ systemMode, busy, onChange, onInitializeLocalization }) {
   const mode = systemMode?.mode || "idle";
   const state = systemMode?.state || "disabled";
   const controlEnabled = Boolean(systemMode?.control_enabled);
@@ -247,6 +247,18 @@ export function SystemModeControl({ systemMode, busy, onChange }) {
           {systemMode?.map_available ? "순찰 지도 준비됨" : "저장 지도 없음"}
         </small>
       </footer>
+      {navigationPreparing && systemMode?.readiness?.localized_pose === false && (
+        <button
+          type="button"
+          className="localization-retry-button"
+          disabled={!systemMode?.localization_pose || changing}
+          onClick={onInitializeLocalization}
+        >
+          {systemMode?.localization_pose
+            ? "저장된 마지막 위치로 AMCL 다시 초기화"
+            : "저장된 초기 위치 없음 · RViz 지정 필요"}
+        </button>
+      )}
     </CollapsibleCard>
   );
 }

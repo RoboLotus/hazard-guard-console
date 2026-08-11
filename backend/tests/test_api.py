@@ -141,6 +141,39 @@ def test_system_mode_rejects_unknown_mapping_profile():
     assert response.status_code == 422
 
 
+def test_localization_initial_pose_can_be_retried_in_running_patrol(monkeypatch):
+    recorded = {}
+    monkeypatch.setattr(
+        main_module,
+        "system_mode_status",
+        lambda: {"mode": "patrol", "state": "running"},
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "set_localization_pose",
+        lambda pose: recorded.update(pose) or pose,
+    )
+    monkeypatch.setattr(main_module.spatial_store, "reset_for_localization", lambda: None)
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "publish_initial_pose",
+        lambda x, y, yaw: {
+            "accepted": True,
+            "pose": {"x": x, "y": y, "yaw": yaw},
+            "message": "초기 위치 전송",
+        },
+    )
+
+    response = client.post(
+        "/api/v1/system/localization/initialize",
+        json={"x": 1.2, "y": -0.4, "yaw": 0.5},
+    )
+
+    assert response.status_code == 200
+    assert recorded == {"x": 1.2, "y": -0.4, "yaw": 0.5}
+    assert response.json()["accepted"] is True
+
+
 def test_save_and_stop_endpoint_returns_manager_result(monkeypatch):
     monkeypatch.setattr(
         main_module.system_mode_manager,
@@ -261,6 +294,8 @@ def test_navigation_goal_never_claims_nav2_action_in_mock_mode():
     assert response.status_code == 200
     payload = response.json()
     assert payload["accepted"] is False
+    assert payload["status"] == "mock"
+    assert payload["mock"] is True
     assert payload["mock"] is True
     assert payload["status"] == "mock"
     assert payload["x"] == 1.25
@@ -342,8 +377,52 @@ def test_route_start_never_claims_motion_without_ros():
     assert response.status_code == 200
     payload = response.json()
     assert payload["accepted"] is False
-    assert payload["status"] == "mock"
-    assert payload["mock"] is True
+
+
+def test_route_schedule_requires_an_end_time_for_clock_based_patrol():
+    response = client.post(
+        "/api/v1/navigation/route/recommend",
+        json={
+            "name": "Work-hours patrol",
+            "frame_id": "map",
+            "repeat_mode": "until_time",
+            "repeat_interval_seconds": 600,
+            "waypoints": [
+                {
+                    "id": "clock-1",
+                    "name": "Clock waypoint",
+                    "x": 0,
+                    "y": 0,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_route_schedule_accepts_timezone_aware_start_and_end_times():
+    response = client.post(
+        "/api/v1/navigation/route/recommend",
+        json={
+            "name": "Work-hours patrol",
+            "frame_id": "map",
+            "repeat_mode": "until_time",
+            "repeat_interval_seconds": 600,
+            "start_at": "2099-08-11T09:00:00+09:00",
+            "end_at": "2099-08-11T18:00:00+09:00",
+            "waypoints": [
+                {
+                    "id": "clock-1",
+                    "name": "Clock waypoint",
+                    "x": 0,
+                    "y": 0,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
 
 
 def test_route_start_rejects_mapping_mode_before_ros_motion(monkeypatch):

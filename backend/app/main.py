@@ -19,6 +19,7 @@ from .bridge import (
 from .mode_manager import system_mode_manager
 from .models import (
     CommandRequest,
+    LocalizationPoseRequest,
     MockCommand,
     MapSelectionRequest,
     MapSessionUpdate,
@@ -188,6 +189,10 @@ def update_system_mode(request: SystemModeRequest):
     ros_bridge.cancel_route()
     ros_bridge.cancel_navigation()
     ros_bridge.stop_motion()
+    if request.mode == "patrol":
+        current_pose = spatial_store.snapshot().get("pose") or {}
+        if current_pose.get("available") and not current_pose.get("mock"):
+            system_mode_manager.set_localization_pose(current_pose)
     result = system_mode_manager.switch_mode(
         request.mode,
         mapping_profile=request.mapping_profile,
@@ -200,6 +205,27 @@ def update_system_mode(request: SystemModeRequest):
         spatial_store.reset_for_mapping(
             f"{result.get('active_world_id', 'world')}:{session_id}"
         )
+    elif request.mode == "patrol":
+        spatial_store.reset_for_localization()
+    return result
+
+
+@app.post("/api/v1/system/localization/initialize")
+def initialize_localization(request: LocalizationPoseRequest):
+    status = system_mode_status()
+    if status.get("mode") != "patrol" or status.get("state") not in {
+        "running",
+        "external",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="순찰 모드가 실행 중일 때만 AMCL 초기 위치를 적용할 수 있습니다.",
+        )
+    system_mode_manager.set_localization_pose(request.model_dump())
+    spatial_store.reset_for_localization()
+    result = ros_bridge.publish_initial_pose(request.x, request.y, request.yaw)
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
     return result
 
 

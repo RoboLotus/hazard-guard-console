@@ -61,6 +61,7 @@ def test_mode_launch_arguments_are_shell_free_and_mode_specific(monkeypatch, tmp
     assert "start_simulation:=false" in mapping
     assert "start_simulation:=false" in patrol
     assert any(argument.startswith("map:=") for argument in patrol)
+    assert any(argument.startswith("initial_pose_x:=") for argument in patrol)
     assert all(";" not in argument for argument in mapping + patrol)
 
 
@@ -180,6 +181,7 @@ def test_physical_patrol_passes_selected_map_to_hardware_launch(
     monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
     monkeypatch.setenv("HAZARD_GUARD_MAP_PATH", str(map_path))
     manager = SystemModeManager()
+    manager.set_localization_pose({"x": 1.25, "y": -0.4, "yaw": 0.75})
 
     command = manager._launch_arguments("patrol")
 
@@ -190,6 +192,9 @@ def test_physical_patrol_passes_selected_map_to_hardware_launch(
         "physical_patrol.launch.py",
     ]
     assert f"map:={map_path}" in command
+    assert "initial_pose_x:=1.25" in command
+    assert "initial_pose_y:=-0.4" in command
+    assert "initial_pose_yaw:=0.75" in command
     assert all("start_simulation" not in argument for argument in command)
 
 

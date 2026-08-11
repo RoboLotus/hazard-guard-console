@@ -70,6 +70,8 @@ class RosBridge:
         self._navigation_goal_handle = None
         self._teleop_publisher = None
         self._teleop_twist_type = None
+        self._initial_pose_publisher = None
+        self._initial_pose_type = None
         self._teleop_lock = threading.Lock()
         self._navigation_result_event = threading.Event()
         self._navigation_result_status: str | None = None
@@ -130,7 +132,7 @@ class RosBridge:
             )
             from rclpy.time import Time
             from sensor_msgs.msg import CameraInfo, Image, Imu, LaserScan, PointCloud2
-            from geometry_msgs.msg import Twist
+            from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
             from std_msgs.msg import String
             from std_srvs.srv import Trigger
             from tf2_ros import Buffer, TransformListener
@@ -265,6 +267,12 @@ class RosBridge:
                 os.getenv("HAZARD_GUARD_CMD_VEL_TOPIC", "/cmd_vel"),
                 10,
             )
+            self._initial_pose_type = PoseWithCovarianceStamped
+            self._initial_pose_publisher = self._node.create_publisher(
+                PoseWithCovarianceStamped,
+                "/initialpose",
+                10,
+            )
             self._executor = SingleThreadedExecutor(context=self._context)
             self._executor.add_node(self._node)
             self._thread = threading.Thread(
@@ -302,6 +310,44 @@ class RosBridge:
                 and mission_client is not None
                 and mission_client.server_is_ready()
             ),
+        }
+
+    def publish_initial_pose(self, x: float, y: float, yaw: float) -> dict[str, Any]:
+        """Publish a retry burst that lets AMCL recover after a mode switch."""
+
+        if (
+            not self.active
+            or self._initial_pose_publisher is None
+            or self._initial_pose_type is None
+        ):
+            return {
+                "accepted": False,
+                "message": "ROS 브리지가 준비되지 않아 초기 위치를 전송하지 못했습니다.",
+            }
+
+        # Complete the short discovery burst before returning to the WebUI.
+        # This prevents an operator from starting Nav2 while a fixed pose is
+        # still being replayed in the background.
+        for _ in range(3):
+            if self._stop_event.is_set():
+                break
+            message = self._initial_pose_type()
+            # A zero stamp asks tf2/AMCL to use the latest available transform
+            # and avoids startup-time extrapolation between odom and map clocks.
+            message.header.frame_id = "map"
+            message.pose.pose.position.x = float(x)
+            message.pose.pose.position.y = float(y)
+            message.pose.pose.orientation.z = math.sin(float(yaw) / 2.0)
+            message.pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
+            message.pose.covariance[0] = 0.25
+            message.pose.covariance[7] = 0.25
+            message.pose.covariance[35] = 0.0685
+            self._initial_pose_publisher.publish(message)
+            time.sleep(0.25)
+        return {
+            "accepted": True,
+            "pose": {"x": float(x), "y": float(y), "yaw": float(yaw)},
+            "message": "저장된 초기 위치를 AMCL에 다시 전송하고 있습니다.",
         }
 
     def publish_simulation_teleop(self, direction: str) -> dict[str, Any]:
@@ -374,6 +420,15 @@ class RosBridge:
             "current_index",
             "total_waypoints",
             "completed_waypoints",
+            "repeat_mode",
+            "repeat_count",
+            "repeat_interval_sec",
+            "current_cycle",
+            "total_cycles",
+            "completed_cycles",
+            "start_at_unix_ms",
+            "end_at_unix_ms",
+            "next_run_at_unix_ms",
             "total_distance_m",
             "message",
             "waypoints",
@@ -392,6 +447,11 @@ class RosBridge:
                 "current_index": index if index >= 0 else None,
                 "total_waypoints": int(feedback.total_waypoints),
                 "completed_waypoints": int(feedback.completed_waypoints),
+                "current_cycle": int(feedback.current_cycle),
+                "total_cycles": int(feedback.total_cycles),
+                "completed_cycles": int(feedback.completed_cycles),
+                "next_run_at_unix_ms": int(feedback.next_run_at_unix_ms),
+                "end_at_unix_ms": int(feedback.end_at_unix_ms),
                 "total_distance_m": round(float(feedback.total_distance_m), 3),
             }
         )
@@ -455,6 +515,7 @@ class RosBridge:
                     "status": result.status,
                     "accepted": bool(result.success),
                     "completed_waypoints": int(result.completed_waypoints),
+                    "completed_cycles": int(result.completed_cycles),
                     "total_distance_m": round(float(result.total_distance_m), 3),
                     "current_index": None,
                     "message": result.message,
@@ -946,6 +1007,8 @@ class RosBridge:
                 "executing",
                 "aligning",
                 "dwelling",
+                "scheduled",
+                "waiting",
                 "canceling",
             }:
                 return {
@@ -987,6 +1050,37 @@ class RosBridge:
             goal.name = str(route["name"])
             goal.frame_id = str(route["frame_id"])
             goal.return_to_start = bool(route.get("return_to_start", False))
+            if not hasattr(goal, "repeat_mode"):
+                return self.mission.update(
+                    {
+                        "status": "failed",
+                        "accepted": False,
+                        "mock": False,
+                        "message": (
+                            "반복 순찰 인터페이스가 설치되지 않았습니다. "
+                            "Robot 워크스페이스를 다시 빌드한 뒤 백엔드를 재시작하세요."
+                        ),
+                    }
+                )
+            repeat_modes = {
+                "once": 0,
+                "count": 1,
+                "until_time": 2,
+                "forever": 3,
+            }
+            goal.repeat_mode = repeat_modes[route.get("repeat_mode", "once")]
+            goal.repeat_count = int(route.get("repeat_count", 1))
+            goal.repeat_interval_sec = float(
+                route.get("repeat_interval_seconds", 0.0)
+            )
+            start_at = route.get("start_at")
+            end_at = route.get("end_at")
+            goal.start_at_unix_ms = (
+                int(start_at.timestamp() * 1000) if start_at is not None else 0
+            )
+            goal.end_at_unix_ms = (
+                int(end_at.timestamp() * 1000) if end_at is not None else 0
+            )
             goal.waypoints = []
             for item in route["waypoints"]:
                 if not item.get("enabled", True):
@@ -1016,6 +1110,8 @@ class RosBridge:
             "executing",
             "aligning",
             "dwelling",
+            "scheduled",
+            "waiting",
             "canceling",
         }:
             return {
@@ -1067,6 +1163,8 @@ class RosBridge:
         self.active = False
         self._teleop_publisher = None
         self._teleop_twist_type = None
+        self._initial_pose_publisher = None
+        self._initial_pose_type = None
 
 
 telemetry_store = TelemetryStore()
