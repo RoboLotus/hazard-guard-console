@@ -141,3 +141,88 @@ def test_existing_simulator_is_reused_without_starting_duplicate(
     snapshot = manager.snapshot(detect_external=False)
     assert snapshot["simulation_state"] == "external"
     assert snapshot["simulation_managed"] is False
+
+
+def test_mapping_does_not_create_session_when_simulator_is_unavailable(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    original_map_path = manager._map_path
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: None)
+    monkeypatch.setattr(manager, "_ensure_simulation", lambda: False)
+
+    result = manager.switch_mode("mapping", "toolbox_rtabmap")
+
+    assert result["accepted"] is False
+    assert manager._world_catalog.sessions("facility_map") == []
+    assert manager._map_path == original_map_path
+    assert manager._current_session_id is None
+
+
+def test_mapping_discards_pending_session_when_ros_launch_fails(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    original_map_path = manager._map_path
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: None)
+    monkeypatch.setattr(manager, "_ensure_simulation", lambda: True)
+
+    def fail_launch(*_args, **_kwargs):
+        raise OSError("ros2 not found")
+
+    monkeypatch.setattr(manager._process_controller, "start_logged", fail_launch)
+
+    result = manager.switch_mode("mapping", "toolbox_rtabmap")
+
+    assert result["accepted"] is False
+    assert manager._world_catalog.sessions("facility_map") == []
+    assert manager._map_path == original_map_path
+    assert manager._current_session_id is None
+    assert manager._mapping_profile == "toolbox"
+
+
+def test_mapping_commits_session_after_ros_launch_starts(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: None)
+    monkeypatch.setattr(manager, "_ensure_simulation", lambda: True)
+
+    class FakeProcess:
+        pid = 123
+
+        @staticmethod
+        def poll():
+            return None
+
+    class NoopThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    launched = {}
+
+    def start_launch(command, _log_path):
+        launched["command"] = command
+        return FakeProcess()
+
+    monkeypatch.setattr(manager._process_controller, "start_logged", start_launch)
+    monkeypatch.setattr("app.mode_manager.threading.Thread", NoopThread)
+
+    result = manager.switch_mode("mapping", "toolbox_rtabmap")
+    sessions = manager._world_catalog.sessions("facility_map")
+
+    assert result["accepted"] is True
+    assert len(sessions) == 1
+    assert result["mapping_session_id"] == sessions[0]["id"]
+    assert f"rtabmap_database_path:={manager._rtabmap_database_path}" in launched[
+        "command"
+    ]

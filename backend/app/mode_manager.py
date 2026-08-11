@@ -416,7 +416,13 @@ class SystemModeManager:
             self._data["updated_at"] = utc_now()
             return dict(self._data)
 
-    def _launch_arguments(self, mode: str) -> list[str]:
+    def _launch_arguments(
+        self,
+        mode: str,
+        *,
+        mapping_profile: str | None = None,
+        rtabmap_database_path: Path | None = None,
+    ) -> list[str]:
         common = [
             f"gui:={'true' if self._gui else 'false'}",
             f"simulation_mode:={self._simulation_mode}",
@@ -424,7 +430,9 @@ class SystemModeManager:
             *self._world_launch_arguments(),
         ]
         if mode == "mapping":
-            enable_rtabmap = self._mapping_profile == "toolbox_rtabmap"
+            selected_profile = mapping_profile or self._mapping_profile
+            database_path = rtabmap_database_path or self._rtabmap_database_path
+            enable_rtabmap = selected_profile == "toolbox_rtabmap"
             return [
                 "ros2",
                 "launch",
@@ -434,7 +442,7 @@ class SystemModeManager:
                 f"enable_rtabmap:={'true' if enable_rtabmap else 'false'}",
                 "rtabmap_database_path:="
                 + str(
-                    self._rtabmap_database_path
+                    database_path
                     or Path("/tmp/hazard_guard_rtabmap_sim.db")
                 ),
             ]
@@ -786,26 +794,6 @@ class SystemModeManager:
 
         self._stop_managed_process()
 
-        if mode == "mapping":
-            self._mapping_profile = requested_profile
-            session = self._world_catalog.begin_session(
-                self._active_world["id"], self._mapping_profile
-            )
-            self._current_session_id = session["id"]
-            self._map_path = session["map_path"]
-            self._rtabmap_database_path = session["rtabmap_database_path"]
-            with self._lock:
-                self._update_locked(
-                    map_path=str(self._map_path),
-                    mapping_session_id=self._current_session_id,
-                    mapping_profile=self._mapping_profile,
-                    rtabmap_database_path=(
-                        str(self._rtabmap_database_path)
-                        if self._mapping_profile == "toolbox_rtabmap"
-                        else None
-                    ),
-                )
-
         if mode == "patrol" and not self._map_files_available():
             with self._lock:
                 return self._update_locked(
@@ -834,13 +822,30 @@ class SystemModeManager:
                     ),
                 )
 
-        command = self._launch_arguments(mode)
+        pending_session: dict[str, Any] | None = None
+        if mode == "mapping":
+            pending_session = self._world_catalog.begin_session(
+                self._active_world["id"], requested_profile
+            )
+        command = self._launch_arguments(
+            mode,
+            mapping_profile=requested_profile,
+            rtabmap_database_path=(
+                pending_session["rtabmap_database_path"]
+                if pending_session is not None
+                else None
+            ),
+        )
         try:
             process = self._process_controller.start_logged(
                 command,
                 self._log_path,
             )
         except OSError as exc:
+            if pending_session is not None:
+                self._world_catalog.discard_empty_session(
+                    self._active_world["id"], pending_session["id"]
+                )
             with self._lock:
                 return self._update_locked(
                     mode="idle",
@@ -851,6 +856,13 @@ class SystemModeManager:
                     message=f"ROS launch를 시작하지 못했습니다: {exc}",
                 )
         with self._lock:
+            if pending_session is not None:
+                self._mapping_profile = requested_profile
+                self._current_session_id = pending_session["id"]
+                self._map_path = pending_session["map_path"]
+                self._rtabmap_database_path = pending_session[
+                    "rtabmap_database_path"
+                ]
             self._generation += 1
             generation = self._generation
             self._process = process
@@ -864,6 +876,13 @@ class SystemModeManager:
                 started_at=utc_now(),
                 map_path=str(self._map_path),
                 mapping_session_id=self._current_session_id,
+                mapping_profile=self._mapping_profile,
+                rtabmap_database_path=(
+                    str(self._rtabmap_database_path)
+                    if mode == "mapping"
+                    and self._mapping_profile == "toolbox_rtabmap"
+                    else None
+                ),
                 message=(
                     "SLAM 지도 생성 모드를 시작하고 있습니다."
                     if mode == "mapping"

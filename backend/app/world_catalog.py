@@ -235,6 +235,24 @@ class WorldCatalog:
         self._write_json(metadata_path, metadata)
         return metadata
 
+    def discard_empty_session(self, world_id: str, session_id: str) -> bool:
+        """Remove a launch-time session only while it contains metadata alone."""
+        paths = self.session_paths(world_id, session_id)
+        session_dir = paths["directory"]
+        metadata_path = paths["metadata"]
+        try:
+            entries = list(session_dir.iterdir())
+        except OSError:
+            return False
+        if entries != [metadata_path]:
+            return False
+        try:
+            metadata_path.unlink()
+            session_dir.rmdir()
+        except OSError:
+            return False
+        return True
+
     def sessions(self, world_id: str) -> list[dict[str, Any]]:
         self.get(world_id)
         world_root = self.map_root / world_id
