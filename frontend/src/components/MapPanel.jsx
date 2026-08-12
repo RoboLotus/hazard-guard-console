@@ -8,13 +8,13 @@ import slamMap from "../assets/slam-map.webp";
 import {
   buildFootprintPolygon,
   buildFovPolygon,
+  detectionColor,
+  detectionLevel,
   detectionOpacity,
   fallbackSpatialState,
   mapToGrid,
   resolveMapSpec,
   sensorLegend,
-  temperatureColor,
-  temperatureLevel,
 } from "../spatial.js";
 import {
   CurrentTime,
@@ -90,7 +90,7 @@ function SpatialMapOverlay({
         const point = mapToGrid(detection.x, detection.y, mapSpec);
         if (!point) return null;
         const radius = Math.max(4, detection.radius_m / mapSpec.resolution);
-        const color = temperatureColor(detection.temperature_c);
+        const color = detectionColor(detection);
         const opacity = detectionOpacity(detection);
         return (
           <g key={detection.detection_id} className="heat-detection">
@@ -123,7 +123,7 @@ function SpatialMapOverlay({
               <g className="heat-label" transform={`translate(${point.x + radius * 0.72} ${point.y - radius * 0.72})`}>
                 <rect x="0" y="-7.5" width="27" height="11" rx="2.5" />
                 <text x="3.2" y="-2.3">{detection.temperature_c.toFixed(1)}°C</text>
-                <text className="heat-label-level" x="3.2" y="1.2">{temperatureLevel(detection.temperature_c)}</text>
+                <text className="heat-label-level" x="3.2" y="1.2">{detectionLevel(detection)}</text>
               </g>
             )}
           </g>

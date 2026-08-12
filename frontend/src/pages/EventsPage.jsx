@@ -59,7 +59,7 @@ export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo
           <div className="event-table-body">
             {filtered.map((event) => (
               <button key={event.id} type="button" className={`event-table-row ${event.level} ${selected?.id === event.id ? "selected" : ""}`} onClick={() => setSelectedId(event.id)}>
-                <span className="event-name-cell"><i><EventLevelIcon level={event.level} /></i><b>{event.title}</b><small>HG-{String(event.id).padStart(4, "0")}</small></span>
+                <span className="event-name-cell"><i><EventLevelIcon level={event.level} /></i><b>{event.title}</b><small>{event.code || `HG-${String(event.id).padStart(4, "0")}`}</small></span>
                 <span>{event.location}</span>
                 <strong>{event.temperature || "—"}</strong>
                 <em className={`event-state ${event.status}`}>{eventStatusLabels[event.status]}</em>

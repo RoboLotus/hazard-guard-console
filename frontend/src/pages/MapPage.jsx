@@ -104,6 +104,8 @@ export default function MapPage({
   const modeTransitioning = ["starting", "stopping"].includes(systemMode?.state);
   const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
   const heatDetections = spatialState?.heatmap?.detections || [];
+  const trendWarnings = heatDetections.filter((item) => ["warning", "critical"].includes(item.trend_status)).length;
+  const trendWatches = heatDetections.filter((item) => item.trend_status === "watch").length;
   const navStatusLabels = {
     idle: "대기",
     mock: "Nav2 미연결",
@@ -485,7 +487,7 @@ export default function MapPage({
                   </span>
                 </div>
               ))}
-              <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
+              <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · 장기판정 경고 {trendWarnings} / 관찰 {trendWatches} · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
             </div>
           </CollapsibleCard>
           <SimulationMapManager
