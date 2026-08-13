@@ -146,11 +146,55 @@ class RosMediaAdapter:
                 ),
                 1.0 - 2.0 * (orientation.y**2 + orientation.z**2),
             )
+            source_frame = str(
+                getattr(getattr(message, "header", None), "frame_id", "")
+                or "odom"
+            )
+            x = float(pose.position.x)
+            y = float(pose.position.y)
+            frame_id = source_frame
+            if (
+                source_frame != "map"
+                and self._tf_buffer is not None
+                and self._ros_time_type is not None
+            ):
+                try:
+                    stamp = getattr(
+                        getattr(message, "header", None), "stamp", None
+                    )
+                    if stamp is not None and hasattr(
+                        self._ros_time_type, "from_msg"
+                    ):
+                        lookup_time = self._ros_time_type.from_msg(stamp)
+                    else:
+                        lookup_time = self._ros_time_type()
+                    transform = self._tf_buffer.lookup_transform(
+                        "map", source_frame, lookup_time
+                    ).transform
+                    q = transform.rotation
+                    transform_yaw = math.atan2(
+                        2.0 * (q.w * q.z + q.x * q.y),
+                        1.0 - 2.0 * (q.y**2 + q.z**2),
+                    )
+                    cos_yaw = math.cos(transform_yaw)
+                    sin_yaw = math.sin(transform_yaw)
+                    x, y = (
+                        float(transform.translation.x)
+                        + cos_yaw * x
+                        - sin_yaw * y,
+                        float(transform.translation.y)
+                        + sin_yaw * x
+                        + cos_yaw * y,
+                    )
+                    yaw += transform_yaw
+                    frame_id = "map"
+                except Exception:
+                    pass
             self.spatial.update_pose(
-                x=float(pose.position.x),
-                y=float(pose.position.y),
+                x=x,
+                y=y,
                 yaw=yaw,
-                frame_id="map",
+                frame_id=frame_id,
                 mock=False,
             )
             self._last_odom_update = now

@@ -88,6 +88,11 @@ export function resolveMapSpec(mediaStatus, spatialState) {
     origin_y: metadata?.origin_y ?? fallback.origin_y,
   };
 }
+export function matchesMapFrame(item, mapSpec) {
+  const itemFrame = item?.frame_id;
+  const mapFrame = mapSpec?.frame_id;
+  return !itemFrame || !mapFrame || itemFrame === mapFrame;
+}
 
 export function mapToGrid(x, y, mapSpec) {
   if (

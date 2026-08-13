@@ -84,11 +84,49 @@ def test_odometry_updates_live_browser_pose_without_tf():
 
     pose = spatial.snapshot()["pose"]
     assert pose["mock"] is False
-    assert pose["frame_id"] == "map"
+    assert pose["frame_id"] == "odom"
     assert pose["x"] == 1.25
     assert pose["y"] == -0.75
     assert pose["yaw"] == 0.0
 
+
+
+def test_odometry_is_transformed_from_odom_to_map():
+    import math
+
+    spatial = SpatialStore()
+    adapter = RosMediaAdapter(MediaStore(), spatial, lambda _message: None)
+    half_yaw = math.pi / 4.0
+    transform = SimpleNamespace(
+        transform=SimpleNamespace(
+            translation=SimpleNamespace(x=10.0, y=-2.0, z=0.0),
+            rotation=SimpleNamespace(
+                x=0.0,
+                y=0.0,
+                z=math.sin(half_yaw),
+                w=math.cos(half_yaw),
+            ),
+        )
+    )
+    buffer = SimpleNamespace(lookup_transform=lambda *_args: transform)
+    adapter.configure(cv_bridge=None, tf_buffer=buffer, ros_time_type=lambda: None)
+    message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="odom"),
+        pose=SimpleNamespace(
+            pose=SimpleNamespace(
+                position=SimpleNamespace(x=1.0, y=0.0),
+                orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+            )
+        ),
+    )
+
+    adapter.on_odom(message)
+
+    pose = spatial.snapshot()["pose"]
+    assert pose["frame_id"] == "map"
+    assert abs(pose["x"] - 10.0) < 1e-6
+    assert abs(pose["y"] + 1.0) < 1e-6
+    assert abs(pose["yaw"] - math.pi / 2.0) < 1e-4
 
 def test_recent_map_tf_pose_is_not_overwritten_by_raw_odometry():
     spatial = SpatialStore()

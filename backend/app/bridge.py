@@ -1105,6 +1105,10 @@ class RosBridge:
                 waypoint = self._mission_waypoint_type()
                 waypoint.id = str(item["id"])
                 waypoint.name = str(item["name"])
+                if hasattr(waypoint, "equipment_id"):
+                    waypoint.equipment_id = str(
+                        item.get("equipment_id") or ""
+                    )
                 waypoint.x = float(item["x"])
                 waypoint.y = float(item["y"])
                 waypoint.yaw = float(item.get("yaw", 0.0))

@@ -13,6 +13,7 @@ import {
   detectionOpacity,
   fallbackSpatialState,
   mapToGrid,
+  matchesMapFrame,
   resolveMapSpec,
   sensorLegend,
 } from "../spatial.js";
@@ -32,15 +33,18 @@ function SpatialMapOverlay({
   onWaypointSelect,
 }) {
   const pose = spatialState?.pose;
+  const poseMatchesMap = pose?.available && matchesMapFrame(pose, mapSpec);
   const trail = (spatialState?.trail || [])
+    .filter((point) => matchesMapFrame(point, mapSpec))
     .map((point) => mapToGrid(point.x, point.y, mapSpec))
     .filter(Boolean);
   const sensors = spatialState?.sensors || [];
-  const detections = spatialState?.heatmap?.detections || [];
-  const posePoint = pose?.available ? mapToGrid(pose.x, pose.y, mapSpec) : null;
+  const detections = (spatialState?.heatmap?.detections || [])
+    .filter((item) => matchesMapFrame(item, mapSpec));
+  const posePoint = poseMatchesMap ? mapToGrid(pose.x, pose.y, mapSpec) : null;
   const robotLength = Math.max(3.2, Math.min(5, 0.22 / mapSpec.resolution));
   const robotWidth = robotLength * 0.72;
-  const robotAngle = pose?.available ? (-pose.yaw * 180) / Math.PI : 0;
+  const robotAngle = poseMatchesMap ? (-pose.yaw * 180) / Math.PI : 0;
   const waypointPoints = waypoints
     .map((waypoint) => ({ waypoint, point: mapToGrid(waypoint.x, waypoint.y, mapSpec) }))
     .filter((item) => item.point);
@@ -76,7 +80,7 @@ function SpatialMapOverlay({
         />
       )}
 
-      {pose?.available && sensors.map((sensor) => (
+      {poseMatchesMap && sensors.map((sensor) => (
         layers[sensor.id] ? (
           <polygon
             key={sensor.id}

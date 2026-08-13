@@ -444,11 +444,18 @@ class SpatialStore:
         point = {
             "x": pose["x"],
             "y": pose["y"],
+            "frame_id": pose.get("frame_id", "map"),
             "timestamp": pose["updated_at"],
         }
         if self._trail:
             previous = self._trail[-1]
-            if math.hypot(point["x"] - previous["x"], point["y"] - previous["y"]) < 0.08:
+            if (
+                previous.get("frame_id", "map") == point["frame_id"]
+                and math.hypot(
+                    point["x"] - previous["x"],
+                    point["y"] - previous["y"],
+                ) < 0.08
+            ):
                 return
         self._trail.append(point)
         self._trail = self._trail[-240:]

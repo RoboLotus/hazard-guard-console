@@ -8,6 +8,7 @@ import {
   detectionLevel,
   detectionOpacity,
   mapToGrid,
+  matchesMapFrame,
   sensorLegend,
   thermalDetectionsToEvents,
   temperatureColor,
@@ -25,6 +26,15 @@ test("converts ROS map coordinates to the top-left image grid", () => {
   assert.deepEqual(mapToGrid(-5, -2.5, mapSpec), { x: 0, y: 100 });
   assert.deepEqual(mapToGrid(5, 2.5, mapSpec), { x: 200, y: 0 });
 });
+
+test("only overlays spatial values in the active map frame", () => {
+  const activeMap = { ...mapSpec, frame_id: "map" };
+
+  assert.equal(matchesMapFrame({ frame_id: "map" }, activeMap), true);
+  assert.equal(matchesMapFrame({ frame_id: "odom" }, activeMap), false);
+  assert.equal(matchesMapFrame({}, activeMap), true);
+});
+
 
 test("builds a camera sector from pose, FOV and range", () => {
   const polygon = buildFovPolygon(
@@ -158,4 +168,23 @@ test("keeps warning separate from watch", () => {
   }]);
 
   assert.equal(event.level, "warning");
+});
+
+test("keeps repeated patrol events distinct after the history window", () => {
+  const events = [6, 7].map((visitIndex) => thermalDetectionsToEvents([{
+    detection_id: "thermal-primary_shredder_motor",
+    equipment_id: "primary_shredder_motor",
+    temperature_c: 52,
+    trend_status: "warning",
+    trend_reason: "persistent_trend_and_environment_adjusted_anomaly",
+    visit_index: visitIndex,
+  }])[0]);
+
+  assert.deepEqual(
+    events.map((event) => event.id),
+    [
+      "thermal-primary_shredder_motor-visit-6",
+      "thermal-primary_shredder_motor-visit-7",
+    ],
+  );
 });
