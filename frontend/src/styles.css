@@ -12,6 +12,7 @@
   --panel: #ffffff;
   --success: #1c9a67;
   --warning: #e69522;
+  --watch: #d0a128;
   --danger: #dc4650;
   --sidebar-width: 172px;
 }
@@ -200,10 +201,12 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .event-card { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 8px; padding: 9px; border: 1px solid #e4e9ee; border-left: 3px solid #7aa0c8; border-radius: 8px; background: #fff; }
 .event-card.critical { border-left-color: var(--danger); background: #fffafb; }
 .event-card.warning { border-left-color: var(--warning); background: #fffdf8; }
+.event-card.watch { border-left-color: var(--watch); background: #fffef7; }
 .event-card.acknowledged { opacity: .72; }
 .event-icon { width: 27px; height: 27px; display: grid; place-items: center; color: #456d9e; background: #eef4fa; border-radius: 7px; }
 .critical .event-icon { color: var(--danger); background: #ffedef; }
 .warning .event-icon { color: var(--warning); background: #fff3df; }
+.watch .event-icon { color: var(--watch); background: #fff8d9; }
 .event-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 5px; }
 .event-title-row strong { font-size: 10px; }
 .event-title-row time { color: #8b97a7; font: 500 7px "Pretendard Variable", Pretendard, sans-serif; white-space: nowrap; }
@@ -476,6 +479,7 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .event-name-cell i { grid-row: 1 / 3; width: 29px; height: 29px; display: grid; place-items: center; color: #4f739c; background: #edf3f9; border-radius: 7px; }
 .event-table-row.critical .event-name-cell i { color: var(--danger); background: #ffedef; }
 .event-table-row.warning .event-name-cell i { color: var(--warning); background: #fff3df; }
+.event-table-row.watch .event-name-cell i { color: var(--watch); background: #fff8d9; }
 .event-name-cell b { color: #2b3c51; font-size: 10px; }
 .event-name-cell small { color: #909baa; font-size: 7px; }
 .event-state { width: max-content; padding: 4px 7px; color: #5e6c7c; background: #eef1f4; border-radius: 10px; font-size: 7px; font-style: normal; font-weight: 800; white-space: nowrap; }
@@ -539,6 +543,7 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .mini-event { padding: 10px 0; display: grid; grid-template-columns: 23px minmax(0, 1fr) auto; gap: 6px; align-items: center; color: #50769e; border-bottom: 1px solid #edf0f3; }
 .mini-event.critical { color: var(--danger); }
 .mini-event.warning { color: var(--warning); }
+.mini-event.watch { color: var(--watch); }
 .mini-event > div { display: flex; flex-direction: column; gap: 2px; }
 .mini-event strong { color: #33465c; font-size: 9px; }
 .mini-event span, .mini-event time { color: #8a96a5; font-size: 7px; }

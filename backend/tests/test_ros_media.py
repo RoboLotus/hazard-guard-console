@@ -248,3 +248,39 @@ def test_completed_visit_before_live_frame_restores_visit_metadata():
     assert detection["trend_status"] == "warning"
     assert detection["trend_reason"] == "persistent_trend_only"
     assert detection["temperature_c"] == 63.0
+
+def test_completed_visit_uses_max_for_max_only_critical_temperature():
+    import json
+
+    spatial = SpatialStore()
+    adapter = RosMediaAdapter(MediaStore(), spatial, lambda _message: None)
+    adapter.on_thermal_trend(SimpleNamespace(data=json.dumps({
+        "frame_id": "map",
+        "trend_analysis": {"visit_index": 5},
+        "equipment": [{
+            "equipment_id": "motor",
+            "trend_status": "critical",
+            "voxels": [{
+                "center": [1.1, 2.1, 0.4],
+                "p95_temperature_c": 62.0,
+                "max_temperature_c": 82.5,
+                "trend_analysis": {
+                    "status": "critical",
+                    "reason": "critical_max_temperature",
+                    "critical_max": True,
+                },
+            }],
+        }],
+    })))
+    adapter.on_thermal_detection(SimpleNamespace(
+        detection_id="thermal-motor", frame_id="map",
+        x=1.0, y=2.0, z=0.4, temperature_c=62.0,
+        confidence=0.9, radius_m=0.3,
+        source="thermal_trend:motor:normal:within_expected_range",
+        simulated=True,
+    ))
+
+    detection = spatial.snapshot()["heatmap"]["detections"][0]
+    assert detection["trend_status"] == "critical"
+    assert detection["trend_reason"] == "critical_max_temperature"
+    assert detection["temperature_c"] == 82.5

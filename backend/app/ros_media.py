@@ -268,9 +268,14 @@ class RosMediaAdapter:
                 reason = str(decision.get("reason", "within_expected_range"))
                 voxel_status = str(decision.get("status", "normal"))
                 decisions.append((voxel_status, reason))
+                p95 = float(voxel.get("p95_temperature_c", 0.0))
+                peak = float(voxel.get("max_temperature_c", p95))
+                reported_temperature = (
+                    peak if bool(decision.get("critical_max")) else p95
+                )
                 candidates.append((
                     severity.get(voxel_status, 0),
-                    float(voxel.get("p95_temperature_c", 0.0)),
+                    reported_temperature,
                     voxel,
                 ))
             if candidates:

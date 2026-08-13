@@ -91,7 +91,7 @@ export default function ReportsPage({ events, notify }) {
           <div className="report-table">
             <div className="report-table-head"><span>시간</span><span>구분</span><span>내용</span><span>결과</span></div>
             {events.slice(0, 5).map((event) => (
-              <div className="report-table-row" key={event.id}><time>{event.time}</time><span>{event.level === "critical" ? "위험" : event.level === "warning" ? "경고" : "정보"}</span><strong>{event.title}</strong><em className={`event-state ${event.status}`}>{eventStatusLabels[event.status]}</em></div>
+              <div className="report-table-row" key={event.id}><time>{event.time}</time><span>{event.level === "critical" ? "위험" : event.level === "warning" ? "경고" : event.level === "watch" ? "관찰" : "정보"}</span><strong>{event.title}</strong><em className={`event-state ${event.status}`}>{eventStatusLabels[event.status]}</em></div>
             ))}
           </div>
         </section>

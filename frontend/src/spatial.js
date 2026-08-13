@@ -222,7 +222,14 @@ export function thermalDetectionsToEvents(detections = []) {
     .map((detection) => {
       const temperature = Number(detection.temperature_c);
       const status = String(detection?.trend_status || "").split(":")[0];
-      const critical = status === "critical" || temperature >= 80;
+      const level = ["critical", "warning", "watch"].includes(status)
+        ? status
+        : temperature >= 80
+          ? "critical"
+          : temperature >= 60
+            ? "warning"
+            : "watch";
+      const critical = level === "critical";
       const label = equipmentLabel(detection);
       const timestamp = eventTimestamp(detection.updated_at);
       const x = Number(detection.x);
@@ -255,9 +262,13 @@ export function thermalDetectionsToEvents(detections = []) {
       return {
         id: detectionId,
         code: `THERM-${String(detection.equipment_id || detectionId).toUpperCase()}`,
-        level: critical ? "critical" : "warning",
+        level,
         status: "new",
-        title: critical ? "고온 위험 감지" : "온도 이상 감지",
+        title: critical
+          ? "고온 위험 감지"
+          : level === "warning"
+            ? "온도 상승 경고"
+            : "온도 이상 관찰",
         ...timestamp,
         location: `${label} · ${coordinate}`,
         temperature: Number.isFinite(temperature) ? `${temperature.toFixed(1)}°C` : null,
@@ -275,7 +286,10 @@ export function thermalDetectionsToEvents(detections = []) {
       };
     })
     .sort((left, right) => {
-      if (left.level !== right.level) return left.level === "critical" ? -1 : 1;
+      const severity = { watch: 1, warning: 2, critical: 3 };
+      if (left.level !== right.level) {
+        return (severity[right.level] || 0) - (severity[left.level] || 0);
+      }
       return `${right.date} ${right.time}`.localeCompare(`${left.date} ${left.time}`);
     });
 }

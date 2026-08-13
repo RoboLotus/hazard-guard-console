@@ -117,7 +117,7 @@ test("builds current-map risk events from thermal trend detections", () => {
   assert.equal(events[0].temperature, "84.1°C");
   assert.match(events[0].location, /1차 파쇄기 모터/);
   assert.match(events[0].location, /map \(-0\.89, 0\.28\)/);
-  assert.equal(events[1].level, "warning");
+  assert.equal(events[1].level, "watch");
   assert.equal(events[1].threshold, "환경 대비 온도 이상 관찰");
   assert.equal(events[1].simulated, true);
 });
@@ -144,6 +144,18 @@ test("parses composite trend status and creates a visit-specific event", () => {
   }]);
 
   assert.equal(event.id, "thermal-baler_hydraulic_tank-visit-3");
+  assert.equal(event.level, "watch");
   assert.equal(event.visitIndex, 3);
   assert.equal(event.threshold, "환경 대비 온도 이상 관찰");
+});
+test("keeps warning separate from watch", () => {
+  const [event] = thermalDetectionsToEvents([{
+    detection_id: "thermal-primary_shredder_motor",
+    equipment_id: "primary_shredder_motor",
+    temperature_c: 52,
+    trend_status: "warning",
+    trend_reason: "persistent_trend_and_environment_adjusted_anomaly",
+  }]);
+
+  assert.equal(event.level, "warning");
 });

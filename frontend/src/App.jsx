@@ -114,10 +114,12 @@ export function App() {
     });
     if (newlyRaised.length > 0) {
       const criticalCount = newlyRaised.filter((event) => event.level === "critical").length;
-      const warningCount = newlyRaised.length - criticalCount;
+      const warningCount = newlyRaised.filter((event) => event.level === "warning").length;
+      const watchCount = newlyRaised.filter((event) => event.level === "watch").length;
       const summary = [
         criticalCount ? `위험 ${criticalCount}건` : null,
         warningCount ? `경고 ${warningCount}건` : null,
+        watchCount ? `관찰 ${watchCount}건` : null,
       ].filter(Boolean).join(" · ");
       notify(`열화상 위험 이벤트가 발생했습니다: ${summary}`, criticalCount ? "warning" : "info");
     }
