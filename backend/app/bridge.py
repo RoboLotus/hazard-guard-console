@@ -30,6 +30,7 @@ class RosBridge:
         mission: RouteMissionStore,
         spatial: SpatialStore,
         point_cloud: PointCloudStore,
+        thermal_cloud: PointCloudStore,
         diagnostics: SensorDiagnosticsStore,
     ) -> None:
         self.store = store
@@ -38,8 +39,17 @@ class RosBridge:
         self.mission = mission
         self.spatial = spatial
         self.point_cloud = point_cloud
+        self.thermal_cloud = thermal_cloud
         self.diagnostics = diagnostics
         self._point_cloud_adapter = PointCloudAdapter(point_cloud, self._set_error)
+        # The thermal map arrives already coloured by temperature, so the same
+        # adapter carries it - only the topic differs.
+        self._thermal_cloud_adapter = PointCloudAdapter(
+            thermal_cloud,
+            self._set_error,
+            source_env="HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
+            source_default="/hazard_guard/thermal_cloud",
+        )
         self._media_adapter = RosMediaAdapter(
             media,
             spatial,
@@ -89,6 +99,7 @@ class RosBridge:
             ("imu", "IMU", os.getenv("HAZARD_GUARD_IMU_TOPIC", "/imu/data_raw"), ("mapping", "patrol"), 2.0),
             ("odom", "Odometry", os.getenv("HAZARD_GUARD_ODOM_TOPIC", "/odom"), ("mapping", "patrol", "3d"), 2.0),
             ("point_cloud", "RTAB-Map 컬러 클라우드", os.getenv("HAZARD_GUARD_POINT_CLOUD_TOPIC", "/hazard_guard/rtabmap/cloud_surface"), ("3d",), 3.0),
+            ("thermal_cloud", "열화상 3D 클라우드", os.getenv("HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal_cloud"), ("3d",), 4.0),
         ]
         for sensor_id, label, topic, required_for, stale_after in sensor_specs:
             self.diagnostics.register(
@@ -180,6 +191,15 @@ class RosBridge:
                     "/hazard_guard/rtabmap/cloud_surface",
                 ),
                 self._observe("point_cloud", self._point_cloud_adapter.on_cloud),
+                qos_profile_sensor_data,
+            )
+            self._node.create_subscription(
+                PointCloud2,
+                os.getenv(
+                    "HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
+                    "/hazard_guard/thermal_cloud",
+                ),
+                self._observe("thermal_cloud", self._thermal_cloud_adapter.on_cloud),
                 qos_profile_sensor_data,
             )
             self._node.create_subscription(
@@ -1173,6 +1193,7 @@ navigation_store = NavigationStore()
 route_mission_store = RouteMissionStore()
 spatial_store = SpatialStore()
 point_cloud_store = PointCloudStore()
+thermal_cloud_store = PointCloudStore(source="ros:/hazard_guard/thermal_cloud")
 sensor_diagnostics_store = SensorDiagnosticsStore()
 ros_bridge = RosBridge(
     telemetry_store,
@@ -1181,5 +1202,6 @@ ros_bridge = RosBridge(
     route_mission_store,
     spatial_store,
     point_cloud_store,
+    thermal_cloud_store,
     sensor_diagnostics_store,
 )

@@ -344,6 +344,8 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .point-cloud-footer { gap: 18px; }
 .point-cloud-footer strong { margin-left: auto; }
 .point-cloud-color-dot { width: 9px !important; height: 9px !important; background: conic-gradient(#e95e55, #f0c34b, #54b97c, #4f8fe8, #b66bd8, #e95e55) !important; border-radius: 50%; }
+/* The JET ramp the robot node colours the thermal cloud with. */
+.thermal-scale i { width: 34px !important; height: 7px !important; border-radius: 3px; background: linear-gradient(90deg, #00007f, #0000ff, #00ffff, #7fff7f, #ffff00, #ff0000, #7f0000) !important; }
 .map-side-panel { min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
 .map-side-panel .detail-card:first-child { flex: 0 0 auto; }
 .localization-retry-button { width: 100%; min-height: 32px; margin-top: 8px; padding: 7px 9px; color: #155fae; background: #edf5ff; border: 1px solid #bcd4f2; border-radius: 7px; font-size: 8px; font-weight: 800; cursor: pointer; }

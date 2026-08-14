@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from .bridge import (
     sensor_diagnostics_store,
     spatial_store,
     telemetry_store,
+    thermal_cloud_store,
 )
 from .mode_manager import system_mode_manager
 from .models import (
@@ -333,6 +335,17 @@ def point_cloud_status():
     return point_cloud_store.status()
 
 
+@app.get("/api/v1/spatial/cloud/thermal/status")
+def thermal_cloud_status():
+    # The colour window is the robot node's, and there is no channel back from
+    # it - so both sides read the same defaults, overridable in one place.
+    return {
+        **thermal_cloud_store.status(),
+        "min_temp_c": float(os.getenv("HAZARD_GUARD_THERMAL_MIN_C", "10.0")),
+        "max_temp_c": float(os.getenv("HAZARD_GUARD_THERMAL_MAX_C", "60.0")),
+    }
+
+
 @app.get("/api/v1/system/sensors")
 def sensor_diagnostics():
     return sensor_diagnostics_store.snapshot(ros_active=ros_bridge.active)
@@ -437,19 +450,28 @@ async def spatial(websocket: WebSocket):
         return
 
 
-@app.websocket("/ws/pointcloud")
-async def point_cloud(websocket: WebSocket):
+async def stream_cloud(websocket: WebSocket, store) -> None:
     await websocket.accept()
     sequence = None
     try:
         while True:
-            item = point_cloud_store.packet_after(sequence)
+            item = store.packet_after(sequence)
             if item is not None:
                 sequence, packet = item
                 await websocket.send_bytes(packet)
             await asyncio.sleep(0.2)
     except (WebSocketDisconnect, RuntimeError):
         return
+
+
+@app.websocket("/ws/pointcloud")
+async def point_cloud(websocket: WebSocket):
+    await stream_cloud(websocket, point_cloud_store)
+
+
+@app.websocket("/ws/pointcloud/thermal")
+async def thermal_point_cloud(websocket: WebSocket):
+    await stream_cloud(websocket, thermal_cloud_store)
 
 
 @app.websocket("/ws/teleop")
