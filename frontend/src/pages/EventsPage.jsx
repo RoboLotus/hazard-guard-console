@@ -20,6 +20,7 @@ import { eventStatusLabels } from "../data/dashboardData.js";
 export function EventLevelIcon({ level, size = 19 }) {
   if (level === "critical") return <Siren size={size} weight="fill" />;
   if (level === "warning") return <Warning size={size} weight="fill" />;
+  if (level === "watch") return <ClockCounterClockwise size={size} weight="fill" />;
   return <CheckCircle size={size} weight="fill" />;
 }
 
@@ -49,7 +50,7 @@ export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo
       </DetailHeading>
       <section className="event-toolbar panel">
         <div className="search-field"><MagnifyingGlass size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="이벤트명, 위치 검색" aria-label="이벤트 검색" /></div>
-        <label><Funnel size={17} /><span>등급</span><select value={levelFilter} onChange={(event) => setLevelFilter(event.target.value)}><option value="all">전체</option><option value="critical">위험</option><option value="warning">경고</option><option value="info">정보</option></select></label>
+        <label><Funnel size={17} /><span>등급</span><select value={levelFilter} onChange={(event) => setLevelFilter(event.target.value)}><option value="all">전체</option><option value="critical">위험</option><option value="warning">경고</option><option value="watch">관찰</option><option value="info">정보</option></select></label>
         <label><ClockCounterClockwise size={17} /><span>상태</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">전체</option><option value="new">신규</option><option value="acknowledged">확인됨</option><option value="working">처리 중</option><option value="resolved">해결됨</option></select></label>
         <span className="filter-result">{filtered.length}건 표시</span>
       </section>
@@ -59,7 +60,7 @@ export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo
           <div className="event-table-body">
             {filtered.map((event) => (
               <button key={event.id} type="button" className={`event-table-row ${event.level} ${selected?.id === event.id ? "selected" : ""}`} onClick={() => setSelectedId(event.id)}>
-                <span className="event-name-cell"><i><EventLevelIcon level={event.level} /></i><b>{event.title}</b><small>HG-{String(event.id).padStart(4, "0")}</small></span>
+                <span className="event-name-cell"><i><EventLevelIcon level={event.level} /></i><b>{event.title}</b><small>{event.code || `HG-${String(event.id).padStart(4, "0")}`}</small></span>
                 <span>{event.location}</span>
                 <strong>{event.temperature || "—"}</strong>
                 <em className={`event-state ${event.status}`}>{eventStatusLabels[event.status]}</em>

@@ -5,6 +5,7 @@ import {
   ChartBar,
   Check,
   CheckCircle,
+  ClockCounterClockwise,
   GameController,
   Pause,
   Play,
@@ -69,7 +70,7 @@ function EventsPanel({ events, onAcknowledge, onViewAll }) {
         {events.map((event) => (
           <article key={event.id} className={`event-card ${event.level} ${event.acknowledged ? "acknowledged" : ""}`}>
             <div className="event-icon">
-              {event.level === "critical" ? <Siren size={19} weight="fill" /> : event.level === "warning" ? <Warning size={19} weight="fill" /> : <CheckCircle size={19} weight="fill" />}
+              {event.level === "critical" ? <Siren size={19} weight="fill" /> : event.level === "warning" ? <Warning size={19} weight="fill" /> : event.level === "watch" ? <ClockCounterClockwise size={19} weight="fill" /> : <CheckCircle size={19} weight="fill" />}
             </div>
             <div className="event-content">
               <div className="event-title-row"><strong>{event.title}</strong><time>{event.time}</time></div>

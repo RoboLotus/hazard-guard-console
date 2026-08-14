@@ -98,6 +98,11 @@ class RouteWaypoint(BaseModel):
         pattern=r"^[A-Za-z0-9_.:-]+$",
     )
     name: str = Field(..., min_length=1, max_length=40)
+    equipment_id: str | None = Field(
+        None,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
     x: float = Field(..., ge=-1000, le=1000)
     y: float = Field(..., ge=-1000, le=1000)
     yaw: float = Field(0, ge=-3.141593, le=3.141593)

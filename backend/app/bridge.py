@@ -167,6 +167,12 @@ class RosBridge:
                 self._observe("telemetry", self._on_telemetry),
                 10,
             )
+            self._node.create_subscription(
+                Odometry,
+                os.getenv("HAZARD_GUARD_ODOM_TOPIC", "/odom"),
+                self._media_adapter.on_odom,
+                qos_profile_sensor_data,
+            )
             map_qos = QoSProfile(
                 depth=1,
                 reliability=ReliabilityPolicy.RELIABLE,
@@ -177,6 +183,12 @@ class RosBridge:
                 "/map",
                 self._observe("map", self._media_adapter.on_map),
                 map_qos,
+            )
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/thermal/trend",
+                self._media_adapter.on_thermal_trend,
+                10,
             )
             self._node.create_subscription(
                 Image,
@@ -228,11 +240,16 @@ class RosBridge:
             try:
                 from hazard_guard_interfaces.msg import HazardDetection
 
+                detection_qos = QoSProfile(
+                    depth=20,
+                    reliability=ReliabilityPolicy.RELIABLE,
+                    durability=DurabilityPolicy.VOLATILE,
+                )
                 self._node.create_subscription(
                     HazardDetection,
                     "/hazard_guard/thermal_detections",
                     self._media_adapter.on_thermal_detection,
-                    qos_profile_sensor_data,
+                    detection_qos,
                 )
             except ImportError:
                 # Older interface workspaces can still provide map, pose and media.
@@ -1108,6 +1125,10 @@ class RosBridge:
                 waypoint = self._mission_waypoint_type()
                 waypoint.id = str(item["id"])
                 waypoint.name = str(item["name"])
+                if hasattr(waypoint, "equipment_id"):
+                    waypoint.equipment_id = str(
+                        item.get("equipment_id") or ""
+                    )
                 waypoint.x = float(item["x"])
                 waypoint.y = float(item["y"])
                 waypoint.yaw = float(item.get("yaw", 0.0))

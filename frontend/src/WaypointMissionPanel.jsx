@@ -86,6 +86,7 @@ export default function WaypointMissionPanel({
   onClear,
 }) {
   const [candidateName, setCandidateName] = useState("");
+  const [candidateEquipmentId, setCandidateEquipmentId] = useState("");
   const [candidateYaw, setCandidateYaw] = useState(0);
   const [candidateDwell, setCandidateDwell] = useState(2);
   const [draggingId, setDraggingId] = useState(null);
@@ -101,6 +102,7 @@ export default function WaypointMissionPanel({
   useEffect(() => {
     if (!candidate) return;
     setCandidateName(`WP-${String(waypoints.length + 1).padStart(2, "0")}`);
+    setCandidateEquipmentId("");
     setCandidateYaw(0);
     setCandidateDwell(2);
   }, [candidate?.mapX, candidate?.mapY, waypoints.length]);
@@ -108,6 +110,7 @@ export default function WaypointMissionPanel({
   const addCandidate = () => {
     onAdd({
       name: candidateName,
+      equipment_id: candidateEquipmentId,
       yaw: degreesToRadians(candidateYaw),
       dwell_seconds: Math.max(0, Math.min(300, Number(candidateDwell) || 0)),
     });
@@ -183,6 +186,16 @@ export default function WaypointMissionPanel({
               maxLength={40}
               onChange={(event) => setCandidateName(event.target.value)}
               placeholder="예: 펌프 점검구역"
+            />
+          </label>
+          <label>
+            <span>설비 ID (선택)</span>
+            <input
+              value={candidateEquipmentId}
+              maxLength={80}
+              onChange={(event) => setCandidateEquipmentId(event.target.value)}
+              placeholder="예: secondary_processor_pump"
+              pattern="[A-Za-z0-9_.:-]+"
             />
           </label>
           <div className="candidate-fields">
@@ -271,6 +284,9 @@ export default function WaypointMissionPanel({
                   <small>
                     X {waypoint.x.toFixed(2)} · Y {waypoint.y.toFixed(2)} · {radiansToDegrees(waypoint.yaw)}°
                   </small>
+                  {waypoint.equipment_id && (
+                    <small>설비 · {waypoint.equipment_id}</small>
+                  )}
                 </span>
                 {itemStatus && (
                   <span className={`waypoint-run-state ${itemStatus.status}`}>
@@ -288,6 +304,18 @@ export default function WaypointMissionPanel({
                       maxLength={40}
                       disabled={missionActive}
                       onChange={(event) => onUpdate(waypoint.id, { name: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span>설비 ID (선택)</span>
+                    <input
+                      value={waypoint.equipment_id || ""}
+                      maxLength={80}
+                      pattern="[A-Za-z0-9_.:-]+"
+                      disabled={missionActive}
+                      onChange={(event) => onUpdate(waypoint.id, {
+                        equipment_id: event.target.value.trim() || null,
+                      })}
                     />
                   </label>
                   <div className="candidate-fields">

@@ -444,18 +444,26 @@ class SpatialStore:
         point = {
             "x": pose["x"],
             "y": pose["y"],
+            "frame_id": pose.get("frame_id", "map"),
             "timestamp": pose["updated_at"],
         }
         if self._trail:
             previous = self._trail[-1]
-            if math.hypot(point["x"] - previous["x"], point["y"] - previous["y"]) < 0.08:
+            if (
+                previous.get("frame_id", "map") == point["frame_id"]
+                and math.hypot(
+                    point["x"] - previous["x"],
+                    point["y"] - previous["y"],
+                ) < 0.08
+            ):
                 return
         self._trail.append(point)
         self._trail = self._trail[-240:]
 
     def _store_detection_locked(self, detection: dict[str, Any]) -> dict[str, Any]:
+        detection_id = str(detection.get("detection_id") or "thermal-detection")
         item = {
-            "detection_id": str(detection.get("detection_id") or "thermal-detection"),
+            "detection_id": detection_id,
             "frame_id": str(detection.get("frame_id") or "map"),
             "x": round(float(detection["x"]), 4),
             "y": round(float(detection["y"]), 4),
@@ -464,10 +472,36 @@ class SpatialStore:
             "confidence": round(float(detection.get("confidence", 1.0)), 3),
             "radius_m": round(float(detection.get("radius_m", 0.35)), 3),
             "source": str(detection.get("source") or "unknown"),
+            "equipment_id": detection.get("equipment_id"),
+            "trend_status": detection.get("trend_status"),
+            "trend_reason": detection.get("trend_reason"),
+            "visit_index": detection.get("visit_index"),
             "simulated": bool(detection.get("simulated", False)),
             "updated_at": utc_now(),
             "updated_monotonic": time.monotonic(),
         }
+        previous = self._detections.get(detection_id)
+        if (
+            previous is not None
+            and float(previous["temperature_c"]) > item["temperature_c"]
+        ):
+            # A later oblique or empty view can still produce ambient points
+            # inside the equipment ROI. Keep the hottest observation for the
+            # current mapping/patrol session while refreshing its last-seen
+            # time. Session resets clear this peak together with all markers.
+            for key in (
+                "frame_id", "x", "y", "z", "temperature_c", "confidence",
+                "radius_m", "simulated",
+            ):
+                item[key] = previous[key]
+            if (
+                previous.get("visit_index") is None
+                and item.get("visit_index") is None
+            ):
+                for key in (
+                    "source", "equipment_id", "trend_status", "trend_reason"
+                ):
+                    item[key] = previous.get(key)
         self._detections[item["detection_id"]] = item
         if len(self._detections) > 80:
             oldest = min(
@@ -477,10 +511,25 @@ class SpatialStore:
             self._detections.pop(oldest, None)
         return dict(item)
 
-    def add_detection(self, detection: dict[str, Any], *, live: bool = False) -> dict[str, Any]:
+    def add_detection(
+        self,
+        detection: dict[str, Any],
+        *,
+        live: bool = False,
+        completed_visit: bool = False,
+    ) -> dict[str, Any]:
         with self._lock:
             if live:
                 self._activate_live_locked()
+            if not completed_visit:
+                previous = self._detections.get(
+                    str(detection.get("detection_id") or "thermal-detection")
+                )
+                if previous is not None and previous.get("visit_index") is not None:
+                    for key in (
+                        "trend_status", "trend_reason", "visit_index", "source"
+                    ):
+                        detection[key] = previous.get(key)
             return self._store_detection_locked(detection)
 
     def _advance_mock_locked(self) -> None:
