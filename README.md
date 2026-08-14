@@ -109,6 +109,41 @@ Jetson을 재부팅하면 다시 등록해야 합니다. 실제 시각 운용 �
 강제로 종료하지 않습니다. 기존 launch를 터미널에서 종료한 후 WebUI 모드
 제어를 사용합니다.
 
+### 실물 순찰의 사람 안전·열화상 기능
+
+실물 Jetson에서 FastAPI가 순찰 모드를 시작할 때 아래 환경 변수를
+`physical_patrol.launch.py` 인자로 전달합니다. 두 기능은 실물 검증 전까지
+기본적으로 꺼져 있으므로 명시적으로 활성화해야 합니다.
+
+```bash
+export HAZARD_GUARD_DEPLOYMENT_TARGET=physical
+export HAZARD_GUARD_MODE_CONTROL_ENABLED=1
+export HAZARD_GUARD_ROS_ENABLED=1
+
+# YOLO11n 사람 탐지 → 안전 감독 → Nav2 감속/정지
+export HAZARD_GUARD_PERSON_SAFETY_ENABLED=1
+export HAZARD_GUARD_PERSON_MODEL_PATH=/absolute/path/to/yolo11n.pt
+export HAZARD_GUARD_PERSON_DEVICE=0
+export HAZARD_GUARD_PERSON_DEPTH_REGISTERED=1
+
+# 열화상·Depth 융합 및 장기 추세 분석
+export HAZARD_GUARD_THERMAL_PIPELINE_ENABLED=1
+export HAZARD_GUARD_THERMAL_ROI_CONFIG=/absolute/path/to/rois.json
+export HAZARD_GUARD_THERMAL_SCALE=1.0
+export HAZARD_GUARD_THERMAL_OFFSET_C=0.0
+```
+
+`HAZARD_GUARD_PERSON_DEPTH_REGISTERED=1`은 HP60C의 RGB 픽셀과 Depth 픽셀이
+실제로 정합된 것을 확인한 뒤에만 사용합니다. 확인 전에는 안전 감독이
+fail-closed 상태를 유지합니다. `PERSON_DEVICE`, 열화상 scale·offset 및 토픽은
+Jetson 센서 드라이버의 실제 출력값에 맞춰야 합니다. 사람 안전 상태는
+`/hazard_guard/person/safety_state`에서 수신해 지도 탭의 `사람 안전` 항목에
+정상·감속·정지·센서 이상으로 표시합니다.
+
+열화상 3D 뷰어의 기본 입력은 Robot 열화상 융합 노드가 발행하는
+`/hazard_guard/thermal/points`입니다. 다른 토픽을 사용할 때만
+`HAZARD_GUARD_THERMAL_CLOUD_TOPIC`으로 덮어씁니다.
+
 Docker Desktop의 WebUI 제어는 WSLg 창 연결 여부와 무관하게 동작하도록 Gazebo
 GUI를 기본적으로 끈 headless 모드입니다. 브라우저의 2D 지도·RGB·열화상은
 계속 표시됩니다. Gazebo 3D 창까지 필요하면 WSL2 셸에서 launch의 `gui:=true`를

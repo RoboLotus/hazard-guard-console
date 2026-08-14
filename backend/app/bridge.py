@@ -19,6 +19,30 @@ from .stores import (
     TelemetryStore,
 )
 
+
+def person_safety_payload(message: Any) -> dict[str, Any]:
+    stamp_seconds = message.header.stamp.sec + (
+        message.header.stamp.nanosec / 1_000_000_000
+    )
+    distance_valid = bool(message.distance_valid)
+    nearest_distance = float(message.nearest_distance_m)
+    return {
+        "state": int(message.state),
+        "state_name": str(message.state_name),
+        "person_count": int(message.person_count),
+        "nearest_distance_m": (
+            round(nearest_distance, 2)
+            if distance_valid and math.isfinite(nearest_distance)
+            else None
+        ),
+        "distance_valid": distance_valid and math.isfinite(nearest_distance),
+        "detector_stale": bool(message.detector_stale),
+        "reason": str(message.reason),
+        "updated_at": datetime.fromtimestamp(
+            stamp_seconds, timezone.utc
+        ).isoformat(),
+    }
+
 class RosBridge:
     """Optional ROS 2 adapter. ROS imports happen only when explicitly enabled."""
 
@@ -48,7 +72,7 @@ class RosBridge:
             thermal_cloud,
             self._set_error,
             source_env="HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
-            source_default="/hazard_guard/thermal_cloud",
+            source_default="/hazard_guard/thermal/points",
         )
         self._media_adapter = RosMediaAdapter(
             media,
@@ -99,7 +123,8 @@ class RosBridge:
             ("imu", "IMU", os.getenv("HAZARD_GUARD_IMU_TOPIC", "/imu/data_raw"), ("mapping", "patrol"), 2.0),
             ("odom", "Odometry", os.getenv("HAZARD_GUARD_ODOM_TOPIC", "/odom"), ("mapping", "patrol", "3d"), 2.0),
             ("point_cloud", "RTAB-Map 컬러 클라우드", os.getenv("HAZARD_GUARD_POINT_CLOUD_TOPIC", "/hazard_guard/rtabmap/cloud_surface"), ("3d",), 3.0),
-            ("thermal_cloud", "열화상 3D 클라우드", os.getenv("HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal_cloud"), ("3d",), 4.0),
+            ("thermal_cloud", "열화상 3D 클라우드", os.getenv("HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/points"), ("3d",), 4.0),
+            ("person_safety", "사람 안전 감속", "/hazard_guard/person/safety_state", (), 2.0),
         ]
         for sensor_id, label, topic, required_for, stale_after in sensor_specs:
             self.diagnostics.register(
@@ -127,7 +152,7 @@ class RosBridge:
         try:
             import rclpy
             from cv_bridge import CvBridge
-            from hazard_guard_interfaces.msg import RobotTelemetry
+            from hazard_guard_interfaces.msg import PersonSafetyState, RobotTelemetry
             from hazard_guard_interfaces.srv import RobotCommand
             from nav_msgs.msg import OccupancyGrid, Odometry
             from nav2_msgs.action import ComputePathToPose, NavigateToPose
@@ -165,6 +190,12 @@ class RosBridge:
                 RobotTelemetry,
                 "/hazard_guard/telemetry",
                 self._observe("telemetry", self._on_telemetry),
+                10,
+            )
+            self._node.create_subscription(
+                PersonSafetyState,
+                "/hazard_guard/person/safety_state",
+                self._observe("person_safety", self._on_person_safety),
                 10,
             )
             self._node.create_subscription(
@@ -209,7 +240,7 @@ class RosBridge:
                 PointCloud2,
                 os.getenv(
                     "HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
-                    "/hazard_guard/thermal_cloud",
+                    "/hazard_guard/thermal/points",
                 ),
                 self._observe("thermal_cloud", self._thermal_cloud_adapter.on_cloud),
                 qos_profile_sensor_data,
@@ -589,6 +620,9 @@ class RosBridge:
                 "mock": bool(message.mock),
             }
         )
+
+    def _on_person_safety(self, message: Any) -> None:
+        self.store.update({"person_safety": person_safety_payload(message)})
 
     def command(self, command: str, enabled: bool) -> dict[str, Any]:
         if not self.active or not self._client.wait_for_service(timeout_sec=0.5):
@@ -1214,7 +1248,7 @@ navigation_store = NavigationStore()
 route_mission_store = RouteMissionStore()
 spatial_store = SpatialStore()
 point_cloud_store = PointCloudStore()
-thermal_cloud_store = PointCloudStore(source="ros:/hazard_guard/thermal_cloud")
+thermal_cloud_store = PointCloudStore(source="ros:/hazard_guard/thermal/points")
 sensor_diagnostics_store = SensorDiagnosticsStore()
 ros_bridge = RosBridge(
     telemetry_store,

@@ -613,6 +613,16 @@ class TelemetryStore:
             "alert_level": "warning",
             "controller_enabled": False,
             "mock": True,
+            "person_safety": {
+                "state": 0,
+                "state_name": "CLEAR",
+                "person_count": 0,
+                "nearest_distance_m": None,
+                "distance_valid": False,
+                "detector_stale": False,
+                "reason": "사람 안전 기능이 아직 연결되지 않았습니다.",
+                "updated_at": None,
+            },
         }
 
     def snapshot(self) -> dict[str, Any]:

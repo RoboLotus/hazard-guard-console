@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from app import bridge
@@ -56,6 +58,29 @@ def test_robot_status_exposes_dashboard_telemetry_contract():
     assert payload["robot_id"] == "rosmaster-m1-mock"
     assert isinstance(payload["battery_percent"], float)
     assert payload["lidar_status"] == "normal"
+    assert payload["person_safety"]["state_name"] == "CLEAR"
+
+
+def test_person_safety_payload_normalizes_invalid_distance():
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=1_750_000_000, nanosec=500_000_000)
+        ),
+        state=4,
+        state_name="SENSOR_FAULT",
+        person_count=1,
+        nearest_distance_m=float("nan"),
+        distance_valid=True,
+        detector_stale=True,
+        reason="depth stream stale",
+    )
+
+    payload = bridge.person_safety_payload(message)
+
+    assert payload["state_name"] == "SENSOR_FAULT"
+    assert payload["nearest_distance_m"] is None
+    assert payload["distance_valid"] is False
+    assert payload["detector_stale"] is True
 
 
 def test_system_mode_status_exposes_webui_control_contract():

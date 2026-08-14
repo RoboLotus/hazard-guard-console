@@ -195,7 +195,38 @@ def test_physical_patrol_passes_selected_map_to_hardware_launch(
     assert "initial_pose_x:=1.25" in command
     assert "initial_pose_y:=-0.4" in command
     assert "initial_pose_yaw:=0.75" in command
+    assert "use_person_safety:=false" in command
+    assert "enable_thermal_pipeline:=false" in command
     assert all("start_simulation" not in argument for argument in command)
+
+
+def test_physical_patrol_passes_opt_in_perception_settings(
+    monkeypatch,
+    tmp_path,
+):
+    map_path = tmp_path / "runtime" / "maps" / "facility.yaml"
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("HAZARD_GUARD_MAP_PATH", str(map_path))
+    monkeypatch.setenv("HAZARD_GUARD_PERSON_SAFETY_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_PERSON_MODEL_PATH", "/models/yolo11n.pt")
+    monkeypatch.setenv("HAZARD_GUARD_PERSON_DEVICE", "0")
+    monkeypatch.setenv("HAZARD_GUARD_PERSON_DEPTH_REGISTERED", "true")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_PIPELINE_ENABLED", "yes")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_SCALE", "0.01")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_OFFSET_C", "-273.15")
+    manager = SystemModeManager()
+
+    command = manager._launch_arguments("patrol")
+
+    assert "use_person_safety:=true" in command
+    assert "person_model_path:=/models/yolo11n.pt" in command
+    assert "person_device:=0" in command
+    assert "person_depth_registration_verified:=true" in command
+    assert "enable_thermal_pipeline:=true" in command
+    assert "thermal_scale:=0.01" in command
+    assert "thermal_offset_c:=-273.15" in command
 
 
 def test_physical_runtime_never_starts_gazebo(monkeypatch, tmp_path):

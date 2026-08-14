@@ -162,6 +162,17 @@ class ThermalDetection(BaseModel):
     simulated: bool = True
 
 
+class PersonSafetyStatus(BaseModel):
+    state: int = Field(0, ge=0, le=4)
+    state_name: str = "CLEAR"
+    person_count: int = Field(0, ge=0)
+    nearest_distance_m: float | None = Field(None, ge=0)
+    distance_valid: bool = False
+    detector_stale: bool = False
+    reason: str = ""
+    updated_at: str | None = None
+
+
 class RobotTelemetry(BaseModel):
     timestamp: str
     robot_id: str
@@ -176,3 +187,6 @@ class RobotTelemetry(BaseModel):
     alert_level: str
     controller_enabled: bool
     mock: bool
+    person_safety: PersonSafetyStatus = Field(
+        default_factory=PersonSafetyStatus
+    )

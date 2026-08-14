@@ -335,6 +335,8 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .status-list dt { color: #7c899a; font-size: 9px; }
 .status-list dd { margin: 0; color: #34465c; font-size: 10px; font-weight: 700; }
 .status-list dd.healthy { color: var(--success); }
+.status-list dd.warning { color: var(--warning); }
+.status-list dd.danger { color: var(--danger); }
 .status-list.compact > div { padding: 8px 0; }
 
 .map-workspace { height: calc(100vh - 130px); min-height: 620px; display: grid; grid-template-columns: minmax(0, 7fr) minmax(340px, 3fr); gap: 14px; }

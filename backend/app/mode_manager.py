@@ -16,6 +16,16 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def env_flag(name: str, default: bool = False) -> bool:
+    fallback = "1" if default else "0"
+    return os.getenv(name, fallback).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class SystemModeManager:
     """Own the ROS launch process selected by the WebUI.
 
@@ -557,6 +567,7 @@ class SystemModeManager:
                 f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
                 f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
                 f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
+                *self._physical_patrol_feature_arguments(),
             ]
 
         common = [
@@ -600,6 +611,72 @@ class SystemModeManager:
             f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
             f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
         ]
+
+    @staticmethod
+    def _physical_patrol_feature_arguments() -> list[str]:
+        """Translate deployment settings into the physical patrol contract."""
+
+        values = {
+            "use_person_safety": (
+                "true"
+                if env_flag("HAZARD_GUARD_PERSON_SAFETY_ENABLED")
+                else "false"
+            ),
+            "start_person_camera": (
+                "true"
+                if env_flag("HAZARD_GUARD_PERSON_CAMERA_START", True)
+                else "false"
+            ),
+            "person_model_path": os.getenv(
+                "HAZARD_GUARD_PERSON_MODEL_PATH", "yolo11n.pt"
+            ),
+            "person_device": os.getenv("HAZARD_GUARD_PERSON_DEVICE", ""),
+            "person_confidence": os.getenv(
+                "HAZARD_GUARD_PERSON_CONFIDENCE", "0.4"
+            ),
+            "person_image_size": os.getenv(
+                "HAZARD_GUARD_PERSON_IMAGE_SIZE", "640"
+            ),
+            "person_inference_rate_hz": os.getenv(
+                "HAZARD_GUARD_PERSON_RATE_HZ", "10.0"
+            ),
+            "person_depth_registration_verified": (
+                "true"
+                if env_flag("HAZARD_GUARD_PERSON_DEPTH_REGISTERED")
+                else "false"
+            ),
+            "enable_thermal_pipeline": (
+                "true"
+                if env_flag("HAZARD_GUARD_THERMAL_PIPELINE_ENABLED")
+                else "false"
+            ),
+            "thermal_roi_config": os.getenv(
+                "HAZARD_GUARD_THERMAL_ROI_CONFIG", ""
+            ),
+            "thermal_history_path": os.getenv(
+                "HAZARD_GUARD_THERMAL_HISTORY_PATH",
+                "~/.local/share/hazard_guard/thermal_history.jsonl",
+            ),
+            "thermal_image_topic": os.getenv(
+                "HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"
+            ),
+            "thermal_info_topic": os.getenv(
+                "HAZARD_GUARD_THERMAL_INFO_TOPIC",
+                "/thermal_camera/camera_info",
+            ),
+            "thermal_depth_image_topic": os.getenv(
+                "HAZARD_GUARD_DEPTH_TOPIC", "/depth_camera/image_raw"
+            ),
+            "thermal_depth_info_topic": os.getenv(
+                "HAZARD_GUARD_DEPTH_INFO_TOPIC",
+                "/depth_camera/camera_info",
+            ),
+            "thermal_scale": os.getenv("HAZARD_GUARD_THERMAL_SCALE", "1.0"),
+            "thermal_offset_c": os.getenv(
+                "HAZARD_GUARD_THERMAL_OFFSET_C", "0.0"
+            ),
+        }
+        return [f"{name}:={value}" for name, value in values.items()]
 
     def _simulation_launch_arguments(self) -> list[str]:
         return [
