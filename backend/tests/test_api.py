@@ -114,10 +114,11 @@ def test_system_mode_switch_routes_validated_mode_to_manager(monkeypatch):
     monkeypatch.setattr(
         main_module.system_mode_manager,
         "switch_mode",
-        lambda mode, mapping_profile="toolbox": {
+        lambda mode, mapping_profile="toolbox", patrol_slam=False: {
             **expected,
             "mode": mode,
             "mapping_profile": mapping_profile,
+            "patrol_slam": patrol_slam,
         },
     )
 
@@ -615,3 +616,25 @@ def test_point_cloud_websocket_sends_binary_packet():
 
     assert packet[:4] == b"HGPC"
     assert len(packet) == 24 + POINT_RECORD.size
+
+
+def test_thermal_cloud_is_a_separate_stream_from_the_colour_one():
+    """The two 3D views must not be able to show each other's cloud."""
+    main_module.thermal_cloud_store.update(
+        POINT_RECORD.pack(0.5, 0.5, 1.0, 255, 0, 0, 255),
+        point_count=1,
+        color_available=True,
+        frame_id="map",
+        source="test:/thermal_cloud",
+    )
+
+    with client.websocket_connect("/ws/pointcloud/thermal") as websocket:
+        packet = websocket.receive_bytes()
+
+    assert packet[:4] == b"HGPC"
+    assert packet[24:] == POINT_RECORD.pack(0.5, 0.5, 1.0, 255, 0, 0, 255)
+
+    status = client.get("/api/v1/spatial/cloud/thermal/status").json()
+    assert status["source"] == "test:/thermal_cloud"
+    # The colour window the robot node paints with, so the legend can name it.
+    assert status["min_temp_c"] < status["max_temp_c"]

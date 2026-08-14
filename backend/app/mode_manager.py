@@ -51,6 +51,10 @@ class SystemModeManager:
         self._active_world = self._world_catalog.selected_world()
         self._current_session_id: str | None = None
         self._mapping_profile = "toolbox"
+        # Patrol normally localizes on a saved map. With this on, SLAM Toolbox
+        # runs instead of AMCL so manual driving keeps extending the map and it
+        # can be saved again from the patrol screen.
+        self._patrol_slam = False
         self._rtabmap_database_path: Path | None = None
         configured_map = Path(
             os.getenv("HAZARD_GUARD_MAP_PATH", "runtime/maps/facility.yaml")
@@ -120,6 +124,7 @@ class SystemModeManager:
             ),
             "mapping_session_id": None,
             "mapping_profile": self._mapping_profile,
+            "patrol_slam": self._patrol_slam,
             "rtabmap_database_path": None,
             "log_path": str(self._log_path),
             "simulation_log_path": str(self._simulation_log_path),
@@ -587,6 +592,9 @@ class SystemModeManager:
             "hazard_guard_simulation",
             "localization.launch.py",
             *common,
+            f"slam:={'true' if self._patrol_slam else 'false'}",
+            # SLAM Toolbox owns map->odom in that case; there is no AMCL to seed.
+            f"auto_initial_pose:={'false' if self._patrol_slam else 'true'}",
             f"map:={self._map_path}",
             f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
             f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
@@ -890,12 +898,23 @@ class SystemModeManager:
         self,
         mode: str,
         mapping_profile: str | None = None,
+        patrol_slam: bool = False,
     ) -> dict[str, Any]:
         if mode not in self.MODES:
             raise ValueError(f"Unsupported mode: {mode}")
         requested_profile = mapping_profile or self._mapping_profile
         if requested_profile not in self.MAPPING_PROFILES:
             raise ValueError(f"Unsupported mapping profile: {requested_profile}")
+        keep_mapping = bool(patrol_slam) and mode == "patrol"
+        if keep_mapping and self._deployment_target == "physical":
+            return {
+                **self.snapshot(detect_external=False),
+                "accepted": False,
+                "message": (
+                    "실물 로봇 순찰에서는 지도 갱신 옵션을 지원하지 않습니다. "
+                    "맵 생성 모드에서 지도를 작성하세요."
+                ),
+            }
         if not self._enabled:
             return {
                 **self.snapshot(detect_external=False),
@@ -916,6 +935,7 @@ class SystemModeManager:
             and current_mode == mode
             and current_state in {"starting", "running"}
             and (mode != "mapping" or self._mapping_profile == requested_profile)
+            and (mode != "patrol" or self._patrol_slam == keep_mapping)
         ):
             runtime_ready = self._ensure_runtime_environment()
             with self._lock:
@@ -944,14 +964,22 @@ class SystemModeManager:
                         ),
                     )
 
-        if mode == "patrol" and current_mode == "mapping" and current_process is not None:
+        # Anything that was building a map loses it on shutdown, so store it
+        # before the switch - that includes a patrol that was mapping.
+        if (
+            current_process is not None
+            and (
+                (mode == "patrol" and current_mode == "mapping")
+                or (current_mode == "patrol" and self._patrol_slam)
+            )
+        ):
             saved = self.save_map()
             if not saved["accepted"]:
                 return saved
 
         self._stop_managed_process()
 
-        if mode == "patrol" and not self._map_files_available():
+        if mode == "patrol" and not keep_mapping and not self._map_files_available():
             with self._lock:
                 return self._update_locked(
                     mode="idle",
@@ -986,6 +1014,15 @@ class SystemModeManager:
             pending_session = self._world_catalog.begin_session(
                 self._active_world["id"], requested_profile
             )
+        elif keep_mapping:
+            # A patrol that keeps mapping writes into its own session, so
+            # saving it does not overwrite the map it was started from. 2D
+            # only - RTAB-Map is not part of this launch.
+            requested_profile = "toolbox"
+            pending_session = self._world_catalog.begin_session(
+                self._active_world["id"], requested_profile
+            )
+        self._patrol_slam = keep_mapping
         command = self._launch_arguments(
             mode,
             mapping_profile=requested_profile,
@@ -1037,6 +1074,7 @@ class SystemModeManager:
                 map_path=str(self._map_path),
                 mapping_session_id=self._current_session_id,
                 mapping_profile=self._mapping_profile,
+                patrol_slam=self._patrol_slam,
                 rtabmap_database_path=(
                     str(self._rtabmap_database_path)
                     if mode == "mapping"
@@ -1046,7 +1084,12 @@ class SystemModeManager:
                 message=(
                     "SLAM 지도 생성 모드를 시작하고 있습니다."
                     if mode == "mapping"
-                    else "AMCL·Nav2 순찰 모드를 시작하고 있습니다."
+                    else (
+                        "지도 갱신 순찰 모드(SLAM·Nav2)를 시작하고 있습니다. "
+                        "WASD로 주행한 뒤 지도를 저장할 수 있습니다."
+                        if keep_mapping
+                        else "AMCL·Nav2 순찰 모드를 시작하고 있습니다."
+                    )
                 ),
             )
         threading.Thread(
@@ -1081,7 +1124,9 @@ class SystemModeManager:
         if self._deployment_target == "simulation":
             self._stop_managed_simulation()
         with self._lock:
+            self._patrol_slam = False
             return self._update_locked(
+                patrol_slam=False,
                 mode="idle",
                 state="disabled" if not self._enabled else "stopped",
                 accepted=True,

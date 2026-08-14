@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from .bridge import (
     sensor_diagnostics_store,
     spatial_store,
     telemetry_store,
+    thermal_cloud_store,
 )
 from .mode_manager import system_mode_manager
 from .models import (
@@ -140,15 +142,15 @@ def require_patrol_mode() -> None:
 
 
 def simulation_teleop_readiness() -> tuple[bool, str]:
-    """Allow browser teleop only for a WebUI-managed mapping simulation."""
+    """Allow browser teleop only for a WebUI-managed simulation."""
 
     status = system_mode_status()
     if status.get("deployment_target") == "physical":
         return False, "실물 로봇에서는 안전을 위해 WebUI 가상 조작기를 사용할 수 없습니다."
     if not status.get("control_enabled"):
         return False, "WebUI 시뮬레이션 제어가 비활성화되어 있습니다."
-    if status.get("mode") != "mapping":
-        return False, "가상 조작은 맵 생성 모드에서만 사용할 수 있습니다."
+    if status.get("mode") not in {"mapping", "patrol"}:
+        return False, "가상 조작은 맵 생성 또는 순찰 모드에서만 사용할 수 있습니다."
     if status.get("state") != "running" or not status.get("managed"):
         return False, "WebUI에서 시작한 SLAM 맵 생성 프로세스가 준비되지 않았습니다."
     if (
@@ -196,10 +198,16 @@ def update_system_mode(request: SystemModeRequest):
     result = system_mode_manager.switch_mode(
         request.mode,
         mapping_profile=request.mapping_profile,
+        patrol_slam=request.patrol_slam,
     )
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
-    if request.mode == "mapping" and result.get("mapping_session_id"):
+    # A patrol that keeps mapping starts from an empty SLAM map, so it needs the
+    # mapping reset rather than the localization one.
+    if (
+        result.get("mapping_session_id")
+        and (request.mode == "mapping" or result.get("patrol_slam"))
+    ):
         media_store.clear("map")
         session_id = result["mapping_session_id"]
         spatial_store.reset_for_mapping(
@@ -333,6 +341,17 @@ def point_cloud_status():
     return point_cloud_store.status()
 
 
+@app.get("/api/v1/spatial/cloud/thermal/status")
+def thermal_cloud_status():
+    # The colour window is the robot node's, and there is no channel back from
+    # it - so both sides read the same defaults, overridable in one place.
+    return {
+        **thermal_cloud_store.status(),
+        "min_temp_c": float(os.getenv("HAZARD_GUARD_THERMAL_MIN_C", "10.0")),
+        "max_temp_c": float(os.getenv("HAZARD_GUARD_THERMAL_MAX_C", "60.0")),
+    }
+
+
 @app.get("/api/v1/system/sensors")
 def sensor_diagnostics():
     return sensor_diagnostics_store.snapshot(ros_active=ros_bridge.active)
@@ -437,19 +456,28 @@ async def spatial(websocket: WebSocket):
         return
 
 
-@app.websocket("/ws/pointcloud")
-async def point_cloud(websocket: WebSocket):
+async def stream_cloud(websocket: WebSocket, store) -> None:
     await websocket.accept()
     sequence = None
     try:
         while True:
-            item = point_cloud_store.packet_after(sequence)
+            item = store.packet_after(sequence)
             if item is not None:
                 sequence, packet = item
                 await websocket.send_bytes(packet)
             await asyncio.sleep(0.2)
     except (WebSocketDisconnect, RuntimeError):
         return
+
+
+@app.websocket("/ws/pointcloud")
+async def point_cloud(websocket: WebSocket):
+    await stream_cloud(websocket, point_cloud_store)
+
+
+@app.websocket("/ws/pointcloud/thermal")
+async def thermal_point_cloud(websocket: WebSocket):
+    await stream_cloud(websocket, thermal_cloud_store)
 
 
 @app.websocket("/ws/teleop")
@@ -507,6 +535,15 @@ async def simulation_teleop(websocket: WebSocket):
                     }
                 )
                 continue
+            # In patrol mode Nav2 publishes to the same /cmd_vel. Hand the wheel
+            # over on the first key press instead of letting the two fight.
+            if (
+                direction != "stop"
+                and not moving
+                and system_mode_status().get("mode") == "patrol"
+            ):
+                ros_bridge.cancel_route()
+                ros_bridge.cancel_navigation()
             result = ros_bridge.publish_simulation_teleop(direction)
             moving = bool(result.get("accepted") and direction != "stop")
             await websocket.send_json(result)

@@ -1,6 +1,7 @@
 # HazardGuard Console
 
-산업 현장을 순찰하는 ROSMASTER-M1 기반 안전 로봇의 관제 WebUI 프로토타입입니다. React 대시보드와 FastAPI ROS bridge를 통해 로봇 상태, 2D SLAM 지도, RTAB-Map RGB-D 컬러 3D 지도, RGB·ThermoEye TMC160B 사양 기반 합성 열화상 영상, 위험 이벤트, Nav2 목적지와 열원 히트맵을 확인합니다.
+산업 현장을 순찰하는 ROSMASTER-M1 기반 안전 로봇의 관제 WebUI 프로토타입입니다. React 대시보드와 FastAPI ROS bridge를 통해 로봇 상태, 2D SLAM 지도, RTAB-Map RGB-D 컬러 3D 지도, 캘리브레이션으로 온도를 입힌 열화상 3D 지도,
+RGB·ThermoEye TMC160B 사양 기반 합성 열화상 영상, 위험 이벤트, Nav2 목적지와 열원 히트맵을 확인합니다.
 
 ## 구성
 

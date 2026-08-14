@@ -358,7 +358,7 @@ export default function MapPage({
   };
   const changeMapDimension = (dimension) => {
     setMapDimension(dimension);
-    if (dimension === "3d") {
+    if (dimension !== "2d") {
       setGoalMode(false);
       setGoalCandidate(null);
       setRepositionWaypointId(null);
@@ -367,13 +367,16 @@ export default function MapPage({
 
   return (
     <div className="detail-page map-page">
-      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="2D 점유 지도와 RTAB-Map RGB-D 컬러 포인트클라우드를 전환해 확인합니다.">
+      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="2D 점유 지도, RTAB-Map RGB-D 컬러 포인트클라우드, 캘리브레이션으로 온도를 입힌 열화상 3D 지도를 전환해 확인합니다.">
         <div className="map-dimension-switch" aria-label="지도 표시 방식">
           <button type="button" className={mapDimension === "2d" ? "active" : ""} aria-pressed={mapDimension === "2d"} onClick={() => changeMapDimension("2d")}>
             <MapTrifold size={16} />2D 지도
           </button>
           <button type="button" className={mapDimension === "3d" ? "active" : ""} aria-pressed={mapDimension === "3d"} onClick={() => changeMapDimension("3d")}>
             <Cube size={16} />3D RGB-D
+          </button>
+          <button type="button" className={mapDimension === "thermal" ? "active" : ""} aria-pressed={mapDimension === "thermal"} onClick={() => changeMapDimension("thermal")}>
+            <ThermometerHot size={16} />3D 열화상
           </button>
         </div>
         <span className={`api-status ${mapLive ? "online" : ""}`}><span />{
@@ -402,7 +405,11 @@ export default function MapPage({
           />
         ) : (
           <Suspense fallback={<div className="point-cloud-panel point-cloud-loading">3D 지도 뷰어를 불러오는 중입니다.</div>}>
-            <PointCloudPanel systemMode={systemMode} archivedSession={selected3dSession} />
+            <PointCloudPanel
+              systemMode={systemMode}
+              archivedSession={selected3dSession}
+              variant={mapDimension === "thermal" ? "thermal" : "rgb"}
+            />
           </Suspense>
         )}
         <aside className="map-side-panel">
@@ -454,7 +461,7 @@ export default function MapPage({
               <div><dt>현재 속도</dt><dd>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</dd></div>
               <div><dt>LiDAR</dt><dd className="healthy">{telemetry?.lidar_status === "error" ? "확인 필요" : "정상"}</dd></div>
               <div><dt>운용 대상</dt><dd>{physicalTarget ? "실물 ROSMASTER M1" : "Gazebo 시뮬레이션"}</dd></div>
-              <div><dt>지도 소스</dt><dd>{mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
+              <div><dt>지도 소스</dt><dd>{mapDimension === "thermal" ? "열화상 × Depth 캘리브레이션" : mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
               <div><dt>로봇 위치</dt><dd>{spatialState?.pose?.available ? `X ${spatialState.pose.x.toFixed(2)} · Y ${spatialState.pose.y.toFixed(2)}` : "확인 중"}</dd></div>
               <div><dt>Nav2 상태</dt><dd className={navigationStatus?.status === "executing" ? "healthy" : ""}>{navStatusLabels[navigationStatus?.status] || "확인 중"}</dd></div>
             </dl>

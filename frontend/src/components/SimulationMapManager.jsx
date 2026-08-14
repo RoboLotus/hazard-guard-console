@@ -64,6 +64,9 @@ export default function SimulationMapManager({
   const modeActive = ["starting", "running", "stopping", "external"].includes(
     systemMode?.state,
   );
+  // Both modes that run SLAM Toolbox have a live /map worth storing; plain
+  // AMCL patrol would only re-dump the map it was started from.
+  const mapping = systemMode?.mode === "mapping" || Boolean(systemMode?.patrol_slam);
   const externalSimulation = !physicalTarget
     && systemMode?.simulation_state === "external"
     && !systemMode?.simulation_managed;
@@ -408,7 +411,7 @@ export default function SimulationMapManager({
           type="button"
           className="button primary wide-button"
           onClick={saveRosMap}
-          disabled={busy || systemMode?.mode !== "mapping" || !systemMode?.control_enabled}
+          disabled={busy || !mapping || !systemMode?.control_enabled}
         >
           <FloppyDisk size={18} />
           {systemMode?.mapping_profile === "toolbox_rtabmap" ? "현재 2D + 3D 세션 저장" : "현재 SLAM 지도 저장"}
@@ -417,7 +420,7 @@ export default function SimulationMapManager({
           type="button"
           className="button secondary wide-button"
           onClick={saveAndStop}
-          disabled={busy || systemMode?.mode !== "mapping" || !systemMode?.control_enabled}
+          disabled={busy || !mapping || !systemMode?.control_enabled}
         >
           <Stop size={18} />지도 저장 후 종료
         </button>
@@ -426,7 +429,7 @@ export default function SimulationMapManager({
         </button>
       </div>
       <p className={`map-storage-status ${systemMode?.map_available ? "available" : ""}`}>
-        {systemMode?.mode === "mapping"
+        {mapping
           ? `${systemMode?.mapping_profile === "toolbox_rtabmap" ? "2D + 3D" : "2D"} 새 SLAM 세션 ${systemMode?.mapping_session_id || "준비 중"}`
           : systemMode?.map_available
             ? physicalTarget

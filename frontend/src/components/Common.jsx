@@ -159,10 +159,16 @@ export function SystemModeControl({ systemMode, busy, onChange, onInitializeLoca
   const activeMappingProfile = systemMode?.mapping_profile || "toolbox";
   const physicalTarget = systemMode?.deployment_target === "physical";
   const [mappingProfile, setMappingProfile] = useState(activeMappingProfile);
+  const activePatrolSlam = Boolean(systemMode?.patrol_slam);
+  const [patrolSlam, setPatrolSlam] = useState(activePatrolSlam);
 
   useEffect(() => {
     setMappingProfile(activeMappingProfile);
   }, [activeMappingProfile]);
+
+  useEffect(() => {
+    setPatrolSlam(activePatrolSlam);
+  }, [activePatrolSlam]);
 
   return (
     <CollapsibleCard
@@ -216,12 +222,30 @@ export function SystemModeControl({ systemMode, busy, onChange, onInitializeLoca
           className={mode === "patrol" ? "active" : ""}
           disabled={unavailable}
           aria-pressed={mode === "patrol"}
-          onClick={() => onChange("patrol", activeMappingProfile)}
+          onClick={() => onChange("patrol", activeMappingProfile, patrolSlam)}
         >
           <NavigationArrow size={18} weight={mode === "patrol" ? "fill" : "regular"} />
-          <span>순찰<small>AMCL · Nav2</small></span>
+          <span>순찰<small>{patrolSlam ? "SLAM · Nav2" : "AMCL · Nav2"}</small></span>
         </button>
       </div>
+      {!physicalTarget && (
+        <label className="patrol-slam-toggle">
+          <input
+            type="checkbox"
+            checked={patrolSlam}
+            disabled={unavailable}
+            onChange={(event) => setPatrolSlam(event.target.checked)}
+          />
+          <span>
+            순찰 중 지도 계속 갱신
+            <small>
+              AMCL 대신 SLAM Toolbox로 순찰합니다. WASD로 주행한 만큼 지도가
+              넓어지고 새 세션으로 저장할 수 있습니다. 저장된 지도는 불러오지
+              않고 빈 지도에서 시작합니다.
+            </small>
+          </span>
+        </label>
+      )}
       {physicalTarget ? (
         <div className="physical-operation-note">
           <Robot size={17} weight="fill" />

@@ -310,3 +310,60 @@ def test_mapping_commits_session_after_ros_launch_starts(monkeypatch, tmp_path):
     assert f"rtabmap_database_path:={manager._rtabmap_database_path}" in launched[
         "command"
     ]
+
+
+def test_patrol_with_slam_maps_without_a_saved_map(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: None)
+    monkeypatch.setattr(manager, "_ensure_simulation", lambda: True)
+
+    class FakeProcess:
+        pid = 321
+
+        @staticmethod
+        def poll():
+            return None
+
+    class NoopThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    launched = {}
+
+    def start_launch(command, _log_path):
+        launched["command"] = command
+        return FakeProcess()
+
+    monkeypatch.setattr(manager._process_controller, "start_logged", start_launch)
+    monkeypatch.setattr("app.mode_manager.threading.Thread", NoopThread)
+
+    # Without a saved map this request is refused; the SLAM variant builds its own.
+    assert manager.switch_mode("patrol")["accepted"] is False
+
+    result = manager.switch_mode("patrol", patrol_slam=True)
+    sessions = manager._world_catalog.sessions("facility_map")
+
+    assert result["accepted"] is True
+    assert result["patrol_slam"] is True
+    assert "slam:=true" in launched["command"]
+    assert "auto_initial_pose:=false" in launched["command"]
+    assert "localization.launch.py" in launched["command"]
+    # Saving must land in a session of its own, not over the map it started from.
+    assert len(sessions) == 1
+    assert result["mapping_session_id"] == sessions[0]["id"]
+
+
+def test_patrol_without_slam_keeps_amcl_launch_arguments(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+
+    patrol = manager._launch_arguments("patrol")
+
+    assert "slam:=false" in patrol
+    assert "auto_initial_pose:=true" in patrol

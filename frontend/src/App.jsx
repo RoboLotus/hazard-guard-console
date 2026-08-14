@@ -163,11 +163,13 @@ export function App() {
   const changeSystemMode = async (
     nextMode,
     mappingProfile = systemMode.mapping_profile || "toolbox",
+    patrolSlam = false,
   ) => {
     if (
       systemMode.mode === nextMode
       && ["starting", "running", "external"].includes(systemMode.state)
       && (nextMode !== "mapping" || systemMode.mapping_profile === mappingProfile)
+      && (nextMode !== "patrol" || Boolean(systemMode.patrol_slam) === patrolSlam)
     ) {
       notify(`이미 ${systemModeLabels[nextMode]}가 실행 중입니다.`, "info");
       return;
@@ -177,7 +179,9 @@ export function App() {
         ? mappingProfile === "toolbox_rtabmap"
           ? "현재 운용 모드를 중단하고 2D + RGB-D 3D 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
           : "현재 운용 모드를 중단하고 2D SLAM Toolbox 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
-        : "현재 SLAM 지도를 저장한 뒤 AMCL·Nav2 순찰 모드로 전환할까요?",
+        : patrolSlam
+          ? "현재 SLAM 지도를 저장한 뒤 지도 갱신 순찰(SLAM·Nav2)로 전환할까요? 빈 지도에서 새로 그립니다."
+          : "현재 SLAM 지도를 저장한 뒤 AMCL·Nav2 순찰 모드로 전환할까요?",
     );
     if (!confirmed) return;
     setModeBusy(true);
@@ -188,6 +192,7 @@ export function App() {
         body: JSON.stringify({
           mode: nextMode,
           mapping_profile: mappingProfile,
+          patrol_slam: patrolSlam,
         }),
       });
       const result = await response.json();

@@ -22,7 +22,10 @@ def utc_now() -> str:
 class PointCloudStore:
     """Thread-safe cache for a browser-ready colored point cloud packet."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        source: str = "ros:/hazard_guard/rtabmap/cloud_surface",
+    ) -> None:
         self._lock = threading.RLock()
         self._sequence = 0
         self._packet: bytes | None = None
@@ -31,7 +34,7 @@ class PointCloudStore:
             "point_count": 0,
             "color_available": False,
             "frame_id": "map",
-            "source": "ros:/hazard_guard/rtabmap/cloud_surface",
+            "source": source,
         }
 
     def update(
@@ -103,9 +106,13 @@ class PointCloudAdapter:
         self,
         store: PointCloudStore,
         on_error: Callable[[str], None],
+        source_env: str = "HAZARD_GUARD_POINT_CLOUD_TOPIC",
+        source_default: str = "/hazard_guard/rtabmap/cloud_surface",
     ) -> None:
         self.store = store
         self._on_error = on_error
+        self._source_env = source_env
+        self._source_default = source_default
         self._last_update = 0.0
         self._minimum_interval = float(
             os.getenv("HAZARD_GUARD_POINT_CLOUD_INTERVAL_SEC", "0.75")
@@ -218,10 +225,7 @@ class PointCloudAdapter:
                 point_count=point_count,
                 color_available=color_available,
                 frame_id=getattr(message.header, "frame_id", "map"),
-                source=os.getenv(
-                    "HAZARD_GUARD_POINT_CLOUD_TOPIC",
-                    "/hazard_guard/rtabmap/cloud_surface",
-                ),
+                source=os.getenv(self._source_env, self._source_default),
             )
         except Exception as exc:
             self._on_error(f"Point cloud conversion failed: {exc}")
