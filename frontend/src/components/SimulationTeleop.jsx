@@ -28,9 +28,9 @@ export default function SimulationTeleop({ systemMode }) {
   const activeDirectionRef = useRef("stop");
   const pressedKeyRef = useRef(null);
 
-  const mappingSelected = systemMode?.mode === "mapping";
+  const driveSelected = ["mapping", "patrol"].includes(systemMode?.mode);
   const simulatorReady = Boolean(
-    mappingSelected
+    driveSelected
     && systemMode?.state === "running"
     && systemMode?.managed
     && systemMode?.simulation_state === "running"
@@ -74,12 +74,12 @@ export default function SimulationTeleop({ systemMode }) {
   };
 
   useEffect(() => {
-    if (!mappingSelected || !simulatorReady) {
+    if (!driveSelected || !simulatorReady) {
       setConnection("waiting");
       setMessage(
-        mappingSelected
-          ? "맵 생성 환경이 실행되면 조작할 수 있습니다."
-          : "맵 생성 모드에서만 사용할 수 있습니다.",
+        driveSelected
+          ? "시뮬레이션 환경이 실행되면 조작할 수 있습니다."
+          : "맵 생성 또는 순찰 모드에서만 사용할 수 있습니다.",
       );
       return undefined;
     }
@@ -130,10 +130,10 @@ export default function SimulationTeleop({ systemMode }) {
       if (socketRef.current === socket) socketRef.current = null;
       activeDirectionRef.current = "stop";
     };
-  }, [mappingSelected, simulatorReady]);
+  }, [driveSelected, simulatorReady]);
 
   useEffect(() => {
-    if (!mappingSelected) return undefined;
+    if (!driveSelected) return undefined;
     const onKeyDown = (event) => {
       const direction = teleopDirectionForKey(event.code);
       if (!direction || isEditableKeyboardTarget(event.target)) return;
@@ -163,7 +163,7 @@ export default function SimulationTeleop({ systemMode }) {
     };
   });
 
-  if (!mappingSelected) return null;
+  if (!driveSelected) return null;
 
   const disabled = connection !== "connected";
   const button = (direction, label, Icon) => (
@@ -211,7 +211,10 @@ export default function SimulationTeleop({ systemMode }) {
         {button("right", "우회전", ArrowRight)}
         {button("backward", "후진", ArrowDown)}
       </div>
-      <small>버튼 또는 방향키/WASD를 누르고 있는 동안만 이동 · Space 정지</small>
+      <small>
+        버튼 또는 방향키/WASD를 누르고 있는 동안만 이동 · Space 정지
+        {systemMode?.mode === "patrol" && " · 조작을 시작하면 진행 중인 순찰이 취소됩니다"}
+      </small>
     </section>
   );
 }

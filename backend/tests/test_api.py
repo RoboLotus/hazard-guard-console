@@ -114,10 +114,11 @@ def test_system_mode_switch_routes_validated_mode_to_manager(monkeypatch):
     monkeypatch.setattr(
         main_module.system_mode_manager,
         "switch_mode",
-        lambda mode, mapping_profile="toolbox": {
+        lambda mode, mapping_profile="toolbox", patrol_slam=False: {
             **expected,
             "mode": mode,
             "mapping_profile": mapping_profile,
+            "patrol_slam": patrol_slam,
         },
     )
 
