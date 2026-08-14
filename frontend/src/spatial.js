@@ -88,6 +88,11 @@ export function resolveMapSpec(mediaStatus, spatialState) {
     origin_y: metadata?.origin_y ?? fallback.origin_y,
   };
 }
+export function matchesMapFrame(item, mapSpec) {
+  const itemFrame = item?.frame_id;
+  const mapFrame = mapSpec?.frame_id;
+  return !itemFrame || !mapFrame || itemFrame === mapFrame;
+}
 
 export function mapToGrid(x, y, mapSpec) {
   if (
@@ -158,6 +163,25 @@ export function temperatureColor(temperature) {
   return "#5ab89a";
 }
 
+export function detectionColor(detection) {
+  const status = detection?.trend_status;
+  if (status === "critical") return "#d8323c";
+  if (status === "warning") return "#ed7b2f";
+  if (status === "watch") return "#f2b63f";
+  if (status === "normal") return "#5ab89a";
+  return temperatureColor(detection?.temperature_c);
+}
+
+export function detectionLevel(detection) {
+  const labels = {
+    critical: "위험",
+    warning: "추세 경고",
+    watch: "관찰",
+    normal: "정상",
+  };
+  return labels[detection?.trend_status] || temperatureLevel(detection?.temperature_c);
+}
+
 export function temperatureLevel(temperature) {
   if (temperature >= 80) return "위험";
   if (temperature >= 60) return "주의";
@@ -169,4 +193,108 @@ export function detectionOpacity(detection) {
   const freshness = Math.max(0.28, 1 - age / 90);
   const confidence = Math.max(0.35, Math.min(1, Number(detection?.confidence) || 0));
   return Number((freshness * confidence).toFixed(3));
+}
+const EQUIPMENT_LABELS = {
+  primary_shredder_motor: "1차 파쇄기 모터",
+  secondary_processor_pump: "2차 처리기 펌프",
+  baler_hydraulic_tank: "압축기 유압 탱크",
+  bunker_waste_pile: "벙커 폐기물 더미",
+};
+
+function equipmentLabel(detection) {
+  const equipmentId = detection?.equipment_id || detection?.detection_id || "unknown";
+  return EQUIPMENT_LABELS[equipmentId]
+    || String(equipmentId).replace(/^thermal-/, "").replaceAll("_", " ");
+}
+
+function eventTimestamp(value) {
+  const parsed = new Date(value || Date.now());
+  const safe = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  return {
+    date: safe.toLocaleDateString("sv-SE"),
+    time: safe.toLocaleTimeString("ko-KR", { hour12: false }),
+  };
+}
+
+export function thermalDetectionsToEvents(detections = []) {
+  return detections
+    .filter((detection) => {
+      const status = String(detection?.trend_status || "").split(":")[0];
+      const temperature = Number(detection?.temperature_c);
+      return ["critical", "warning", "watch"].includes(status)
+        || temperature >= 60;
+    })
+    .map((detection) => {
+      const temperature = Number(detection.temperature_c);
+      const status = String(detection?.trend_status || "").split(":")[0];
+      const level = ["critical", "warning", "watch"].includes(status)
+        ? status
+        : temperature >= 80
+          ? "critical"
+          : temperature >= 60
+            ? "warning"
+            : "watch";
+      const critical = level === "critical";
+      const label = equipmentLabel(detection);
+      const timestamp = eventTimestamp(detection.updated_at);
+      const x = Number(detection.x);
+      const y = Number(detection.y);
+      const coordinate = Number.isFinite(x) && Number.isFinite(y)
+        ? `map (${x.toFixed(2)}, ${y.toFixed(2)})`
+        : "map 좌표 미확인";
+      const reason = detection.trend_reason
+        || String(detection.source || "").split(":")[3]
+        || "";
+      const trendLabel = status === "critical"
+        ? "즉시 고온 위험"
+        : reason === "persistent_trend_and_environment_adjusted_anomaly"
+          ? "장기 상승 추세 경고"
+          : reason === "persistent_trend_only"
+            ? "장기 상승 추세 관찰"
+            : reason === "environment_adjusted_anomaly_only"
+              ? "환경 대비 온도 이상 관찰"
+              : status === "warning"
+                ? "장기 상승 추세 경고"
+                : status === "watch"
+                  ? "온도 이상 관찰"
+                  : "온도 임계값 초과";
+      const baseDetectionId = detection.detection_id
+        || `thermal-${detection.equipment_id || `${x}-${y}`}`;
+      const detectionId = detection.visit_index == null
+        ? baseDetectionId
+        : `${baseDetectionId}-visit-${detection.visit_index}`;
+
+      return {
+        id: detectionId,
+        code: `THERM-${String(detection.equipment_id || detectionId).toUpperCase()}`,
+        level,
+        status: "new",
+        title: critical
+          ? "고온 위험 감지"
+          : level === "warning"
+            ? "온도 상승 경고"
+            : "온도 이상 관찰",
+        ...timestamp,
+        location: `${label} · ${coordinate}`,
+        temperature: Number.isFinite(temperature) ? `${temperature.toFixed(1)}°C` : null,
+        threshold: trendLabel,
+        detail: `${label}에서 ${trendLabel} 판정이 발생했습니다.`,
+        acknowledged: false,
+        assignee: "미지정",
+        note: detection.simulated
+          ? "시뮬레이션 열화상 카메라의 실측 프레임에서 생성된 이벤트입니다."
+          : "로봇 열화상 카메라의 실측 프레임에서 생성된 이벤트입니다.",
+        equipmentId: detection.equipment_id || null,
+        visitIndex: detection.visit_index ?? null,
+        source: detection.source || "thermal",
+        simulated: Boolean(detection.simulated),
+      };
+    })
+    .sort((left, right) => {
+      const severity = { watch: 1, warning: 2, critical: 3 };
+      if (left.level !== right.level) {
+        return (severity[right.level] || 0) - (severity[left.level] || 0);
+      }
+      return `${right.date} ${right.time}`.localeCompare(`${left.date} ${left.time}`);
+    });
 }

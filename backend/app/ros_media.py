@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
 import time
 from collections.abc import Callable
 from typing import Any
 
 from .stores import MediaStore, SpatialStore
+from .thermal import calibrated_thermal_u8
 
 
 class RosMediaAdapter:
@@ -25,6 +27,9 @@ class RosMediaAdapter:
         self._ros_time_type: Any | None = None
         self._thermal_stream_seen = False
         self._last_pose_update = 0.0
+        self._last_odom_update = 0.0
+        self._latest_thermal_detections: dict[str, dict[str, Any]] = {}
+        self._completed_thermal_trends: dict[str, dict[str, Any]] = {}
 
     def configure(
         self,
@@ -124,22 +129,226 @@ class RosMediaAdapter:
         except Exception:
             return
 
+    def on_odom(self, message: Any) -> None:
+        """Keep the browser pose live while SLAM is still stabilizing map TF."""
+        now = time.monotonic()
+        if now - self._last_pose_update < 0.5:
+            return
+        if now - self._last_odom_update < 0.08:
+            return
+        try:
+            pose = message.pose.pose
+            orientation = pose.orientation
+            yaw = math.atan2(
+                2.0 * (
+                    orientation.w * orientation.z
+                    + orientation.x * orientation.y
+                ),
+                1.0 - 2.0 * (orientation.y**2 + orientation.z**2),
+            )
+            source_frame = str(
+                getattr(getattr(message, "header", None), "frame_id", "")
+                or "odom"
+            )
+            x = float(pose.position.x)
+            y = float(pose.position.y)
+            frame_id = source_frame
+            if (
+                source_frame != "map"
+                and self._tf_buffer is not None
+                and self._ros_time_type is not None
+            ):
+                try:
+                    stamp = getattr(
+                        getattr(message, "header", None), "stamp", None
+                    )
+                    if stamp is not None and hasattr(
+                        self._ros_time_type, "from_msg"
+                    ):
+                        lookup_time = self._ros_time_type.from_msg(stamp)
+                    else:
+                        lookup_time = self._ros_time_type()
+                    transform = self._tf_buffer.lookup_transform(
+                        "map", source_frame, lookup_time
+                    ).transform
+                    q = transform.rotation
+                    transform_yaw = math.atan2(
+                        2.0 * (q.w * q.z + q.x * q.y),
+                        1.0 - 2.0 * (q.y**2 + q.z**2),
+                    )
+                    cos_yaw = math.cos(transform_yaw)
+                    sin_yaw = math.sin(transform_yaw)
+                    x, y = (
+                        float(transform.translation.x)
+                        + cos_yaw * x
+                        - sin_yaw * y,
+                        float(transform.translation.y)
+                        + sin_yaw * x
+                        + cos_yaw * y,
+                    )
+                    yaw += transform_yaw
+                    frame_id = "map"
+                except Exception:
+                    pass
+            self.spatial.update_pose(
+                x=x,
+                y=y,
+                yaw=yaw,
+                frame_id=frame_id,
+                mock=False,
+            )
+            self._last_odom_update = now
+        except Exception as exc:
+            self._on_error(f"Odometry conversion failed: {exc}")
+
     def on_thermal_detection(self, message: Any) -> None:
+        frame_id = message.frame_id or "map"
+        x = float(message.x)
+        y = float(message.y)
+        z = float(message.z)
+        if frame_id != "map" and self._tf_buffer is not None and self._ros_time_type is not None:
+            try:
+                transform = self._tf_buffer.lookup_transform(
+                    "map", frame_id, self._ros_time_type()
+                ).transform
+                q = transform.rotation
+                yaw = math.atan2(
+                    2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y**2 + q.z**2),
+                )
+                cos_yaw = math.cos(yaw)
+                sin_yaw = math.sin(yaw)
+                x, y = (
+                    float(transform.translation.x) + cos_yaw * x - sin_yaw * y,
+                    float(transform.translation.y) + sin_yaw * x + cos_yaw * y,
+                )
+                z += float(transform.translation.z)
+                frame_id = "map"
+            except Exception:
+                pass
+
+        source = str(message.source)
+        equipment_id = None
+        trend_status = None
+        trend_reason = None
+        visit_index = None
+        if source.startswith("thermal_trend:"):
+            parts = source.split(":")
+            if len(parts) >= 3:
+                equipment_id = parts[1]
+                trend_status = parts[2]
+                trend_reason = parts[3] if len(parts) >= 4 else None
+                if len(parts) >= 5 and parts[4].startswith("visit-"):
+                    try:
+                        visit_index = int(parts[4].removeprefix("visit-"))
+                    except ValueError:
+                        visit_index = None
+        detection = {
+            "detection_id": message.detection_id,
+            "frame_id": frame_id,
+            "x": x,
+            "y": y,
+            "z": z,
+            "temperature_c": message.temperature_c,
+            "confidence": message.confidence,
+            "radius_m": message.radius_m,
+            "source": source,
+            "equipment_id": equipment_id,
+            "trend_status": trend_status,
+            "trend_reason": trend_reason,
+            "visit_index": visit_index,
+            "simulated": message.simulated,
+        }
+        completed = None
+        if equipment_id:
+            self._latest_thermal_detections[equipment_id] = dict(detection)
+            completed = self._completed_thermal_trends.get(equipment_id)
+            if completed:
+                detection.update(completed)
         self.spatial.add_detection(
-            {
-                "detection_id": message.detection_id,
-                "frame_id": message.frame_id or "map",
-                "x": message.x,
-                "y": message.y,
-                "z": message.z,
-                "temperature_c": message.temperature_c,
-                "confidence": message.confidence,
-                "radius_m": message.radius_m,
-                "source": message.source,
-                "simulated": message.simulated,
-            },
+            detection,
             live=True,
+            completed_visit=completed is not None,
         )
+
+    def on_thermal_trend(self, message: Any) -> None:
+        """Attach one completed-visit decision to each live map detection."""
+
+        try:
+            payload = json.loads(message.data)
+        except (AttributeError, json.JSONDecodeError, TypeError):
+            return
+        trend = payload.get("trend_analysis", {})
+        visit_index = trend.get("visit_index")
+        if not isinstance(visit_index, int):
+            return
+        severity = {"normal": 0, "watch": 1, "warning": 2, "critical": 3}
+        for equipment in payload.get("equipment", []):
+            if not isinstance(equipment, dict):
+                continue
+            equipment_id = str(equipment.get("equipment_id", ""))
+            live = self._latest_thermal_detections.get(equipment_id)
+            completed = dict(live) if live else {
+                "detection_id": f"thermal-{equipment_id}",
+                "frame_id": str(payload.get("frame_id") or "map"),
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "temperature_c": 0.0,
+                "confidence": 0.0,
+                "radius_m": 0.04,
+                "equipment_id": equipment_id,
+                "simulated": True,
+            }
+            status = str(equipment.get("trend_status", "normal"))
+            decisions = []
+            candidates = []
+            for voxel in equipment.get("voxels", []):
+                if not isinstance(voxel, dict):
+                    continue
+                decision = voxel.get("trend_analysis", {})
+                if not isinstance(decision, dict):
+                    continue
+                reason = str(decision.get("reason", "within_expected_range"))
+                voxel_status = str(decision.get("status", "normal"))
+                decisions.append((voxel_status, reason))
+                p95 = float(voxel.get("p95_temperature_c", 0.0))
+                peak = float(voxel.get("max_temperature_c", p95))
+                reported_temperature = (
+                    peak if bool(decision.get("critical_max")) else p95
+                )
+                candidates.append((
+                    severity.get(voxel_status, 0),
+                    reported_temperature,
+                    voxel,
+                ))
+            if candidates:
+                _severity, temperature, hottest = max(
+                    candidates, key=lambda item: (item[0], item[1])
+                )
+                completed["temperature_c"] = temperature
+                center = hottest.get("center", [])
+                if len(center) >= 3:
+                    completed.update(x=center[0], y=center[1], z=center[2])
+            reason = "within_expected_range"
+            matching = [item for item in decisions if item[0] == status]
+            if matching:
+                reason = matching[0][1]
+            completed.update(
+                detection_id=f"thermal-{equipment_id}",
+                trend_status=status,
+                trend_reason=reason,
+                visit_index=visit_index,
+                source=(
+                    f"thermal_trend:{equipment_id}:{status}:{reason}:"
+                    f"visit-{visit_index}"
+                ),
+            )
+            self._completed_thermal_trends[equipment_id] = dict(completed)
+            if live:
+                self.spatial.add_detection(
+                    completed, live=True, completed_visit=True
+                )
 
     def on_rgb_image(self, message: Any) -> None:
         if self._cv_bridge is None:
@@ -179,21 +388,13 @@ class RosMediaAdapter:
             return
         try:
             import cv2
-            import numpy as np
-
             raw = self._cv_bridge.imgmsg_to_cv2(
                 message,
                 desired_encoding="passthrough",
             )
             if raw.ndim == 3:
                 raw = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
-            normalized = cv2.normalize(
-                raw.astype(np.float32),
-                None,
-                0,
-                255,
-                cv2.NORM_MINMAX,
-            ).astype(np.uint8)
+            normalized = calibrated_thermal_u8(raw, message.encoding)
             thermal = cv2.applyColorMap(
                 normalized,
                 cv2.COLORMAP_INFERNO,

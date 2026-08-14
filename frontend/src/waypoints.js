@@ -11,6 +11,7 @@ export function createWaypoint(candidate, index, values = {}) {
   return {
     id,
     name: values.name?.trim() || `WP-${String(index + 1).padStart(2, "0")}`,
+    equipment_id: values.equipment_id?.trim() || null,
     x: Number(candidate.mapX ?? candidate.x),
     y: Number(candidate.mapY ?? candidate.y),
     yaw: Number(values.yaw ?? candidate.yaw ?? 0),

@@ -8,13 +8,14 @@ import slamMap from "../assets/slam-map.webp";
 import {
   buildFootprintPolygon,
   buildFovPolygon,
+  detectionColor,
+  detectionLevel,
   detectionOpacity,
   fallbackSpatialState,
   mapToGrid,
+  matchesMapFrame,
   resolveMapSpec,
   sensorLegend,
-  temperatureColor,
-  temperatureLevel,
 } from "../spatial.js";
 import {
   CurrentTime,
@@ -32,15 +33,18 @@ function SpatialMapOverlay({
   onWaypointSelect,
 }) {
   const pose = spatialState?.pose;
+  const poseMatchesMap = pose?.available && matchesMapFrame(pose, mapSpec);
   const trail = (spatialState?.trail || [])
+    .filter((point) => matchesMapFrame(point, mapSpec))
     .map((point) => mapToGrid(point.x, point.y, mapSpec))
     .filter(Boolean);
   const sensors = spatialState?.sensors || [];
-  const detections = spatialState?.heatmap?.detections || [];
-  const posePoint = pose?.available ? mapToGrid(pose.x, pose.y, mapSpec) : null;
+  const detections = (spatialState?.heatmap?.detections || [])
+    .filter((item) => matchesMapFrame(item, mapSpec));
+  const posePoint = poseMatchesMap ? mapToGrid(pose.x, pose.y, mapSpec) : null;
   const robotLength = Math.max(3.2, Math.min(5, 0.22 / mapSpec.resolution));
   const robotWidth = robotLength * 0.72;
-  const robotAngle = pose?.available ? (-pose.yaw * 180) / Math.PI : 0;
+  const robotAngle = poseMatchesMap ? (-pose.yaw * 180) / Math.PI : 0;
   const waypointPoints = waypoints
     .map((waypoint) => ({ waypoint, point: mapToGrid(waypoint.x, waypoint.y, mapSpec) }))
     .filter((item) => item.point);
@@ -76,7 +80,7 @@ function SpatialMapOverlay({
         />
       )}
 
-      {pose?.available && sensors.map((sensor) => (
+      {poseMatchesMap && sensors.map((sensor) => (
         layers[sensor.id] ? (
           <polygon
             key={sensor.id}
@@ -90,7 +94,7 @@ function SpatialMapOverlay({
         const point = mapToGrid(detection.x, detection.y, mapSpec);
         if (!point) return null;
         const radius = Math.max(4, detection.radius_m / mapSpec.resolution);
-        const color = temperatureColor(detection.temperature_c);
+        const color = detectionColor(detection);
         const opacity = detectionOpacity(detection);
         return (
           <g key={detection.detection_id} className="heat-detection">
@@ -123,7 +127,7 @@ function SpatialMapOverlay({
               <g className="heat-label" transform={`translate(${point.x + radius * 0.72} ${point.y - radius * 0.72})`}>
                 <rect x="0" y="-7.5" width="27" height="11" rx="2.5" />
                 <text x="3.2" y="-2.3">{detection.temperature_c.toFixed(1)}°C</text>
-                <text className="heat-label-level" x="3.2" y="1.2">{temperatureLevel(detection.temperature_c)}</text>
+                <text className="heat-label-level" x="3.2" y="1.2">{detectionLevel(detection)}</text>
               </g>
             )}
           </g>

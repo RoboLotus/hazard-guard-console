@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { CheckCircle } from "@phosphor-icons/react";
-import { fallbackSpatialState } from "./spatial.js";
+import { useEffect, useRef, useState } from "react";
+import { CheckCircle, Warning } from "@phosphor-icons/react";
+import { fallbackSpatialState, thermalDetectionsToEvents } from "./spatial.js";
 import { systemModeLabels } from "./components/Common.jsx";
 import Sidebar from "./components/Sidebar.jsx";
-import { initialEvents, navigationLabels } from "./data/dashboardData.js";
+import { navigationLabels } from "./data/dashboardData.js";
 import EventsPage from "./pages/EventsPage.jsx";
 import HelpPage from "./pages/HelpPage.jsx";
 import MapPage from "./pages/MapPage.jsx";
@@ -14,7 +14,7 @@ import VideoPage from "./pages/VideoPage.jsx";
 
 export function App() {
   const [active, setActive] = useState("overview");
-  const [events, setEvents] = useState(initialEvents);
+  const [events, setEvents] = useState([]);
   const [toast, setToast] = useState(null);
   const [apiOnline, setApiOnline] = useState(false);
   const [telemetry, setTelemetry] = useState(null);
@@ -27,6 +27,7 @@ export function App() {
     map_available: false,
   });
   const [modeBusy, setModeBusy] = useState(false);
+  const announcedThermalLevels = useRef(new Map());
 
   const notify = (message, tone = "success") => {
     setToast({ message, tone, id: Date.now() });
@@ -92,6 +93,37 @@ export function App() {
       socket?.close();
     };
   }, []);
+  useEffect(() => {
+    if (spatialState?.source !== "ros" || spatialState?.mock) return;
+    const nextEvents = thermalDetectionsToEvents(spatialState?.heatmap?.detections);
+    setEvents((current) => nextEvents.map((nextEvent) => {
+      const previous = current.find((event) => event.id === nextEvent.id);
+      if (!previous || previous.level !== nextEvent.level) return nextEvent;
+      return {
+        ...nextEvent,
+        status: previous.status,
+        acknowledged: previous.acknowledged,
+        assignee: previous.assignee,
+      };
+    }));
+
+    const newlyRaised = nextEvents.filter((event) => {
+      const previousLevel = announcedThermalLevels.current.get(event.id);
+      announcedThermalLevels.current.set(event.id, event.level);
+      return previousLevel !== event.level;
+    });
+    if (newlyRaised.length > 0) {
+      const criticalCount = newlyRaised.filter((event) => event.level === "critical").length;
+      const warningCount = newlyRaised.filter((event) => event.level === "warning").length;
+      const watchCount = newlyRaised.filter((event) => event.level === "watch").length;
+      const summary = [
+        criticalCount ? `위험 ${criticalCount}건` : null,
+        warningCount ? `경고 ${warningCount}건` : null,
+        watchCount ? `관찰 ${watchCount}건` : null,
+      ].filter(Boolean).join(" · ");
+      notify(`열화상 위험 이벤트가 발생했습니다: ${summary}`, criticalCount ? "warning" : "info");
+    }
+  }, [spatialState]);
   useEffect(() => {
     let disposed = false;
     const checkMedia = async () => {
@@ -163,11 +195,13 @@ export function App() {
   const changeSystemMode = async (
     nextMode,
     mappingProfile = systemMode.mapping_profile || "toolbox",
+    patrolSlam = false,
   ) => {
     if (
       systemMode.mode === nextMode
       && ["starting", "running", "external"].includes(systemMode.state)
       && (nextMode !== "mapping" || systemMode.mapping_profile === mappingProfile)
+      && (nextMode !== "patrol" || Boolean(systemMode.patrol_slam) === patrolSlam)
     ) {
       notify(`이미 ${systemModeLabels[nextMode]}가 실행 중입니다.`, "info");
       return;
@@ -177,7 +211,9 @@ export function App() {
         ? mappingProfile === "toolbox_rtabmap"
           ? "현재 운용 모드를 중단하고 2D + RGB-D 3D 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
           : "현재 운용 모드를 중단하고 2D SLAM Toolbox 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
-        : "현재 SLAM 지도를 저장한 뒤 AMCL·Nav2 순찰 모드로 전환할까요?",
+        : patrolSlam
+          ? "현재 SLAM 지도를 저장한 뒤 지도 갱신 순찰(SLAM·Nav2)로 전환할까요? 빈 지도에서 새로 그립니다."
+          : "현재 SLAM 지도를 저장한 뒤 AMCL·Nav2 순찰 모드로 전환할까요?",
     );
     if (!confirmed) return;
     setModeBusy(true);
@@ -188,6 +224,7 @@ export function App() {
         body: JSON.stringify({
           mode: nextMode,
           mapping_profile: mappingProfile,
+          patrol_slam: patrolSlam,
         }),
       });
       const result = await response.json();
@@ -272,7 +309,7 @@ export function App() {
         {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} />}
         {active === "help" && <HelpPage onNavigate={navigate} />}
       </main>
-      {toast && <div className={`toast ${toast.tone}`} role="status"><CheckCircle size={19} weight="fill" /><span>{toast.message}</span></div>}
+      {toast && <div className={`toast ${toast.tone}`} role="status">{toast.tone === "warning" ? <Warning size={19} weight="fill" /> : <CheckCircle size={19} weight="fill" />}<span>{toast.message}</span></div>}
     </div>
   );
 }

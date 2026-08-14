@@ -39,6 +39,9 @@ class CommandRequest(BaseModel):
 class SystemModeRequest(BaseModel):
     mode: Literal["mapping", "patrol"]
     mapping_profile: Literal["toolbox", "toolbox_rtabmap"] = "toolbox"
+    # Patrol with SLAM Toolbox instead of AMCL, so manual driving keeps
+    # extending the map and it can be saved from the patrol screen.
+    patrol_slam: bool = False
 
 
 class LocalizationPoseRequest(BaseModel):
@@ -95,6 +98,11 @@ class RouteWaypoint(BaseModel):
         pattern=r"^[A-Za-z0-9_.:-]+$",
     )
     name: str = Field(..., min_length=1, max_length=40)
+    equipment_id: str | None = Field(
+        None,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
     x: float = Field(..., ge=-1000, le=1000)
     y: float = Field(..., ge=-1000, le=1000)
     yaw: float = Field(0, ge=-3.141593, le=3.141593)
@@ -154,6 +162,17 @@ class ThermalDetection(BaseModel):
     simulated: bool = True
 
 
+class PersonSafetyStatus(BaseModel):
+    state: int = Field(0, ge=0, le=4)
+    state_name: str = "CLEAR"
+    person_count: int = Field(0, ge=0)
+    nearest_distance_m: float | None = Field(None, ge=0)
+    distance_valid: bool = False
+    detector_stale: bool = False
+    reason: str = ""
+    updated_at: str | None = None
+
+
 class RobotTelemetry(BaseModel):
     timestamp: str
     robot_id: str
@@ -168,3 +187,6 @@ class RobotTelemetry(BaseModel):
     alert_level: str
     controller_enabled: bool
     mock: bool
+    person_safety: PersonSafetyStatus = Field(
+        default_factory=PersonSafetyStatus
+    )

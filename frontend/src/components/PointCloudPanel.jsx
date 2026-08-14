@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowsClockwise, Crosshair, Cube } from "@phosphor-icons/react";
+import { ArrowsClockwise, Crosshair, Cube, ThermometerHot } from "@phosphor-icons/react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
@@ -12,6 +12,39 @@ const INITIAL_STATUS = {
   colorAvailable: false,
   updatedAt: null,
   error: null,
+};
+
+// Both variants are the same viewer over the same packet format; only the
+// stream and the words around it change. The thermal cloud is built on the
+// robot by projecting depth through the calibrated thermal extrinsic.
+const VARIANTS = {
+  rgb: {
+    socketPath: "/ws/pointcloud",
+    eyebrow: "RGB-D MAP",
+    title: "3D 컬러 포인트클라우드",
+    ariaLabel: "RTAB-Map 컬러 3D 포인트클라우드",
+    icon: Cube,
+    liveLabel: "RTAB-Map 실시간",
+    idleLabel: "최근 3D 지도",
+    emptyTitle: "컬러 3D 지도 데이터를 기다리고 있습니다",
+    emptyBody: "맵 생성 모드에서 로봇을 조작하면 관측한 RGB-D 표면이 누적됩니다.",
+    footnote: "관측 표면 · map 좌표계 · Z축 높이",
+    supportsArchive: true,
+  },
+  thermal: {
+    socketPath: "/ws/pointcloud/thermal",
+    eyebrow: "THERMAL MAP",
+    title: "3D 열화상 포인트클라우드",
+    ariaLabel: "열화상 3D 포인트클라우드",
+    icon: ThermometerHot,
+    liveLabel: "열화상 실시간",
+    idleLabel: "최근 열화상 지도",
+    emptyTitle: "열화상 3D 지도 데이터를 기다리고 있습니다",
+    emptyBody:
+      "캘리브레이션된 열화상-Depth 외부 파라미터로 Depth 표면에 온도를 입힙니다. 로봇을 움직이면 관측한 면부터 채워집니다.",
+    footnote: "온도 복셀 5cm · map 좌표계 · 이동평균",
+    supportsArchive: false,
+  },
 };
 
 function fitCameraToCloud(camera, controls, geometry) {
@@ -33,13 +66,16 @@ function fitCameraToCloud(camera, controls, geometry) {
   controls.update();
 }
 
-export default function PointCloudPanel({ systemMode, archivedSession }) {
+export default function PointCloudPanel({ systemMode, archivedSession, variant = "rgb" }) {
+  const spec = VARIANTS[variant] || VARIANTS.rgb;
+  const archived = spec.supportsArchive ? archivedSession : null;
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const fitRef = useRef(() => {});
   const firstCloudRef = useRef(true);
   const [status, setStatus] = useState(INITIAL_STATUS);
   const [clockTick, setClockTick] = useState(Date.now());
+  const [temperatureWindow, setTemperatureWindow] = useState(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockTick(Date.now()), 1000);
@@ -59,7 +95,7 @@ export default function PointCloudPanel({ systemMode, archivedSession }) {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.domElement.setAttribute("aria-label", "RTAB-Map 컬러 3D 포인트클라우드");
+    renderer.domElement.setAttribute("aria-label", spec.ariaLabel);
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -118,14 +154,28 @@ export default function PointCloudPanel({ systemMode, archivedSession }) {
   }, []);
 
   useEffect(() => {
-    if (archivedSession) return undefined;
+    if (variant !== "thermal") return undefined;
+    let disposed = false;
+    fetch("/api/v1/spatial/cloud/thermal/status", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body) => {
+        if (!disposed && body) {
+          setTemperatureWindow([body.min_temp_c, body.max_temp_c]);
+        }
+      })
+      .catch(() => {});
+    return () => { disposed = true; };
+  }, [variant]);
+
+  useEffect(() => {
+    if (archived) return undefined;
     let disposed = false;
     let socket;
     let reconnectTimer;
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       setStatus((current) => ({ ...current, connection: "connecting", error: null }));
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/pointcloud`);
+      socket = new WebSocket(`${protocol}//${window.location.host}${spec.socketPath}`);
       socket.binaryType = "arraybuffer";
       socket.onopen = () => {
         setStatus((current) => ({ ...current, connection: "connected", error: null }));
@@ -175,10 +225,10 @@ export default function PointCloudPanel({ systemMode, archivedSession }) {
       window.clearTimeout(reconnectTimer);
       socket?.close();
     };
-  }, [archivedSession?.id]);
+  }, [archived?.id, spec.socketPath]);
 
   useEffect(() => {
-    if (!archivedSession) return undefined;
+    if (!archived) return undefined;
     const controller = new AbortController();
     const load = async () => {
       const currentScene = sceneRef.current;
@@ -190,7 +240,7 @@ export default function PointCloudPanel({ systemMode, archivedSession }) {
       });
       try {
         const response = await fetch(
-          `/api/v1/system/maps/${encodeURIComponent(archivedSession.world_id)}/${encodeURIComponent(archivedSession.id)}/cloud.ply`,
+          `/api/v1/system/maps/${encodeURIComponent(archived.world_id)}/${encodeURIComponent(archived.id)}/cloud.ply`,
           { cache: "no-store", signal: controller.signal },
         );
         if (!response.ok) {
@@ -221,7 +271,7 @@ export default function PointCloudPanel({ systemMode, archivedSession }) {
           connection: "connected",
           pointCount: position.count,
           colorAvailable: Boolean(sourceColor),
-          updatedAt: new Date(archivedSession.updated_at || archivedSession.created_at),
+          updatedAt: new Date(archived.updated_at || archived.created_at),
           error: null,
         });
       } catch (error) {
@@ -235,27 +285,28 @@ export default function PointCloudPanel({ systemMode, archivedSession }) {
     };
     void load();
     return () => controller.abort();
-  }, [archivedSession?.id]);
+  }, [archived?.id]);
 
   const cloudFresh = Boolean(
     status.updatedAt && clockTick - status.updatedAt.getTime() < 5000,
   );
   const hybridProfile = systemMode?.mapping_profile === "toolbox_rtabmap";
-  const connectionLabel = archivedSession
+  const connectionLabel = archived
     ? status.connection === "connected" && status.pointCount
       ? "저장된 3D 세션"
       : status.connection === "connecting" ? "저장 지도 변환 중" : "저장 지도 오류"
     : ({
     connecting: "연결 중",
     connected: status.pointCount
-      ? (cloudFresh ? "RTAB-Map 실시간" : "최근 3D 지도")
+      ? (cloudFresh ? spec.liveLabel : spec.idleLabel)
       : "포인트 대기 중",
     disconnected: "연결 끊김",
   }[status.connection]);
+  const EmptyIcon = spec.icon;
 
   return (
     <section className="panel map-panel map-panel-detail point-cloud-panel">
-      <PanelHeader eyebrow="RGB-D MAP" title="3D 컬러 포인트클라우드" action={(
+      <PanelHeader eyebrow={spec.eyebrow} title={spec.title} action={(
         <div className="panel-actions">
           <CurrentTime />
           <button type="button" className="icon-action" aria-label="3D 지도 화면 맞춤" title="3D 지도 화면 맞춤" onClick={() => fitRef.current()}>
@@ -265,18 +316,18 @@ export default function PointCloudPanel({ systemMode, archivedSession }) {
       )} />
       <div className="point-cloud-stage">
         <div ref={mountRef} className="point-cloud-canvas" />
-        <div className={`map-live-badge ${status.connection === "connected" && status.pointCount && (archivedSession || cloudFresh) ? "" : "mock"}`}>
+        <div className={`map-live-badge ${status.connection === "connected" && status.pointCount && (archived || cloudFresh) ? "" : "mock"}`}>
           <span />{connectionLabel}
         </div>
         {!status.pointCount && (
           <div className="point-cloud-empty">
-            <Cube size={38} weight="duotone" />
-            <strong>{archivedSession ? "저장된 3D 지도를 준비하고 있습니다" : hybridProfile ? "컬러 3D 지도 데이터를 기다리고 있습니다" : "2D + RGB-D 3D 프로파일이 필요합니다"}</strong>
+            <EmptyIcon size={38} weight="duotone" />
+            <strong>{archived ? "저장된 3D 지도를 준비하고 있습니다" : hybridProfile ? spec.emptyTitle : "2D + RGB-D 3D 프로파일이 필요합니다"}</strong>
             <span>
-              {archivedSession
+              {archived
                 ? "RTAB-Map DB에서 브라우저용 컬러 PLY를 생성하고 있습니다."
                 : hybridProfile
-                ? "맵 생성 모드에서 로봇을 조작하면 관측한 RGB-D 표면이 누적됩니다."
+                ? spec.emptyBody
                 : "지도 운용 모드에서 생성 방식을 2D + RGB-D 3D로 선택하고 새 세션을 시작하세요."}
             </span>
           </div>
@@ -287,8 +338,17 @@ export default function PointCloudPanel({ systemMode, archivedSession }) {
         </div>
       </div>
       <footer className="map-footer point-cloud-footer">
-        <span><i className="point-cloud-color-dot" />{status.colorAvailable ? "RGB 색상 포함" : "기본 색상"}</span>
-        <span>{archivedSession ? `저장 세션 · ${archivedSession.name || archivedSession.id}` : "관측 표면 · map 좌표계 · Z축 높이"}</span>
+        {variant === "thermal" ? (
+          <span className="thermal-scale">
+            <i />
+            {temperatureWindow
+              ? `${temperatureWindow[0].toFixed(0)} ~ ${temperatureWindow[1].toFixed(0)}°C`
+              : "온도 색상"}
+          </span>
+        ) : (
+          <span><i className="point-cloud-color-dot" />{status.colorAvailable ? "RGB 색상 포함" : "기본 색상"}</span>
+        )}
+        <span>{archived ? `저장 세션 · ${archived.name || archived.id}` : spec.footnote}</span>
         <strong>{status.pointCount.toLocaleString("ko-KR")} points{status.updatedAt ? ` · ${status.updatedAt.toLocaleTimeString("ko-KR", { hour12: false })}` : ""}</strong>
       </footer>
     </section>

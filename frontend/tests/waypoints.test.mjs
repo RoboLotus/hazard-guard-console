@@ -21,11 +21,18 @@ test("creates a named waypoint from a map click", () => {
   const waypoint = createWaypoint(
     { mapX: 1.25, mapY: -0.75 },
     2,
-    { id: "pump", name: " 펌프 구역 ", yaw: 1.2, dwell_seconds: 4 },
+    {
+      id: "pump",
+      name: " 펌프 구역 ",
+      equipment_id: " secondary_processor_pump ",
+      yaw: 1.2,
+      dwell_seconds: 4,
+    },
   );
   assert.deepEqual(waypoint, {
     id: "pump",
     name: "펌프 구역",
+    equipment_id: "secondary_processor_pump",
     x: 1.25,
     y: -0.75,
     yaw: 1.2,

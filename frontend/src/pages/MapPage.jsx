@@ -40,6 +40,14 @@ import {
 
 const PointCloudPanel = lazy(() => import("../components/PointCloudPanel.jsx"));
 
+const personSafetyLabels = {
+  CLEAR: "정상",
+  CAUTION: "사람 감지 · 거리 확인",
+  SLOW: "사람 감지 · 감속",
+  STOP: "사람 감지 · 정지",
+  SENSOR_FAULT: "센서 확인 필요",
+};
+
 export default function MapPage({
   mediaStatus,
   telemetry,
@@ -80,6 +88,18 @@ export default function MapPage({
     footprint: true,
   });
   const mapLive = Boolean(mediaStatus?.map?.available);
+  const personSafety = telemetry?.person_safety;
+  const personSafetyConnected = Boolean(personSafety?.updated_at);
+  const personSafetyName = personSafetyConnected
+    ? personSafety.state_name
+    : "DISABLED";
+  const personSafetyClass = personSafetyName === "CLEAR"
+    ? "healthy"
+    : ["STOP", "SENSOR_FAULT"].includes(personSafetyName)
+      ? "danger"
+      : personSafetyName === "DISABLED" ? "" : "warning";
+  const personSafetyLabel = personSafetyLabels[personSafetyName]
+    || (physicalTarget ? "기능 대기" : "시뮬레이션 비활성");
   const mapSpatialState = physicalTarget
     ? {
         ...spatialState,
@@ -104,6 +124,8 @@ export default function MapPage({
   const modeTransitioning = ["starting", "stopping"].includes(systemMode?.state);
   const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
   const heatDetections = spatialState?.heatmap?.detections || [];
+  const trendWarnings = heatDetections.filter((item) => ["warning", "critical"].includes(item.trend_status)).length;
+  const trendWatches = heatDetections.filter((item) => item.trend_status === "watch").length;
   const navStatusLabels = {
     idle: "대기",
     mock: "Nav2 미연결",
@@ -358,7 +380,7 @@ export default function MapPage({
   };
   const changeMapDimension = (dimension) => {
     setMapDimension(dimension);
-    if (dimension === "3d") {
+    if (dimension !== "2d") {
       setGoalMode(false);
       setGoalCandidate(null);
       setRepositionWaypointId(null);
@@ -367,13 +389,16 @@ export default function MapPage({
 
   return (
     <div className="detail-page map-page">
-      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="2D 점유 지도와 RTAB-Map RGB-D 컬러 포인트클라우드를 전환해 확인합니다.">
+      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="2D 점유 지도, RTAB-Map RGB-D 컬러 포인트클라우드, 캘리브레이션으로 온도를 입힌 열화상 3D 지도를 전환해 확인합니다.">
         <div className="map-dimension-switch" aria-label="지도 표시 방식">
           <button type="button" className={mapDimension === "2d" ? "active" : ""} aria-pressed={mapDimension === "2d"} onClick={() => changeMapDimension("2d")}>
             <MapTrifold size={16} />2D 지도
           </button>
           <button type="button" className={mapDimension === "3d" ? "active" : ""} aria-pressed={mapDimension === "3d"} onClick={() => changeMapDimension("3d")}>
             <Cube size={16} />3D RGB-D
+          </button>
+          <button type="button" className={mapDimension === "thermal" ? "active" : ""} aria-pressed={mapDimension === "thermal"} onClick={() => changeMapDimension("thermal")}>
+            <ThermometerHot size={16} />3D 열화상
           </button>
         </div>
         <span className={`api-status ${mapLive ? "online" : ""}`}><span />{
@@ -402,7 +427,11 @@ export default function MapPage({
           />
         ) : (
           <Suspense fallback={<div className="point-cloud-panel point-cloud-loading">3D 지도 뷰어를 불러오는 중입니다.</div>}>
-            <PointCloudPanel systemMode={systemMode} archivedSession={selected3dSession} />
+            <PointCloudPanel
+              systemMode={systemMode}
+              archivedSession={selected3dSession}
+              variant={mapDimension === "thermal" ? "thermal" : "rgb"}
+            />
           </Suspense>
         )}
         <aside className="map-side-panel">
@@ -453,8 +482,9 @@ export default function MapPage({
               <div><dt>운행 모드</dt><dd>{telemetry?.mode === "paused" ? "일시정지" : telemetry?.mode === "stopped" ? "정지" : "자율 순찰"}</dd></div>
               <div><dt>현재 속도</dt><dd>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</dd></div>
               <div><dt>LiDAR</dt><dd className="healthy">{telemetry?.lidar_status === "error" ? "확인 필요" : "정상"}</dd></div>
+              <div><dt>사람 안전</dt><dd className={personSafetyClass}>{personSafetyLabel}{personSafety?.distance_valid ? ` · ${personSafety.nearest_distance_m.toFixed(1)}m` : ""}</dd></div>
               <div><dt>운용 대상</dt><dd>{physicalTarget ? "실물 ROSMASTER M1" : "Gazebo 시뮬레이션"}</dd></div>
-              <div><dt>지도 소스</dt><dd>{mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
+              <div><dt>지도 소스</dt><dd>{mapDimension === "thermal" ? "열화상 × Depth 캘리브레이션" : mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
               <div><dt>로봇 위치</dt><dd>{spatialState?.pose?.available ? `X ${spatialState.pose.x.toFixed(2)} · Y ${spatialState.pose.y.toFixed(2)}` : "확인 중"}</dd></div>
               <div><dt>Nav2 상태</dt><dd className={navigationStatus?.status === "executing" ? "healthy" : ""}>{navStatusLabels[navigationStatus?.status] || "확인 중"}</dd></div>
             </dl>
@@ -485,7 +515,7 @@ export default function MapPage({
                   </span>
                 </div>
               ))}
-              <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
+              <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · 장기판정 경고 {trendWarnings} / 관찰 {trendWatches} · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
             </div>
           </CollapsibleCard>
           <SimulationMapManager

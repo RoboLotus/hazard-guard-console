@@ -19,6 +19,7 @@ import {
   Pulse,
   ShieldWarning,
   SlidersHorizontal,
+  ThermometerHot,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { DetailHeading } from "../components/Common.jsx";
@@ -220,6 +221,12 @@ export default function HelpPage({ onNavigate }) {
                 <strong>3D RGB-D</strong>
                 <p>RTAB-Map의 라이브 컬러 포인트클라우드와 세션 DB에서 다시 만든 과거 3D 지도를 표시합니다.</p>
                 <ul><li>저장 세션의 눈 아이콘: 3D 다시 보기</li><li>다운로드 아이콘: 컬러 PLY 저장</li><li>실물에서는 카메라 토픽·CameraInfo·TF 정합 필요</li></ul>
+              </article>
+              <article>
+                <ThermometerHot size={21} weight="fill" />
+                <strong>3D 열화상</strong>
+                <p>열화상-Depth 캘리브레이션으로 구한 외부 파라미터를 써서 Depth 표면에 온도를 입힌 라이브 3D 지도입니다. 색은 고정된 온도 구간(기본 10~60°C)이라 프레임이 달라도 같은 온도는 같은 색입니다.</p>
+                <ul><li>파랑이 차갑고 빨강이 뜨겁습니다</li><li>5cm 복셀에 이동평균으로 누적합니다</li><li>저장 세션 다시 보기는 아직 없습니다</li></ul>
               </article>
             </div>
           </HelpSection>
