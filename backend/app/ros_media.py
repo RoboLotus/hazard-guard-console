@@ -121,6 +121,7 @@ class RosMediaAdapter:
             self.spatial.update_pose(
                 x=float(position.x),
                 y=float(position.y),
+                z=float(getattr(position, "z", 0.0)),
                 yaw=yaw,
                 frame_id="map",
                 mock=False,
@@ -132,8 +133,6 @@ class RosMediaAdapter:
     def on_odom(self, message: Any) -> None:
         """Keep the browser pose live while SLAM is still stabilizing map TF."""
         now = time.monotonic()
-        if now - self._last_pose_update < 0.5:
-            return
         if now - self._last_odom_update < 0.08:
             return
         try:
@@ -152,6 +151,18 @@ class RosMediaAdapter:
             )
             x = float(pose.position.x)
             y = float(pose.position.y)
+            z = float(getattr(pose.position, "z", 0.0))
+            self.spatial.update_frame_pose(
+                x=x,
+                y=y,
+                z=z,
+                yaw=yaw,
+                frame_id=source_frame,
+                mock=False,
+            )
+            self._last_odom_update = now
+            if now - self._last_pose_update < 0.5:
+                return
             frame_id = source_frame
             if (
                 source_frame != "map"
@@ -186,6 +197,7 @@ class RosMediaAdapter:
                         + sin_yaw * x
                         + cos_yaw * y,
                     )
+                    z += float(transform.translation.z)
                     yaw += transform_yaw
                     frame_id = "map"
                 except Exception:
@@ -193,11 +205,11 @@ class RosMediaAdapter:
             self.spatial.update_pose(
                 x=x,
                 y=y,
+                z=z,
                 yaw=yaw,
                 frame_id=frame_id,
                 mock=False,
             )
-            self._last_odom_update = now
         except Exception as exc:
             self._on_error(f"Odometry conversion failed: {exc}")
 

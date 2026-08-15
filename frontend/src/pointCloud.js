@@ -2,6 +2,7 @@ export const POINT_CLOUD_HEADER_BYTES = 24;
 export const POINT_CLOUD_RECORD_BYTES = 16;
 
 const textDecoder = new TextDecoder("ascii");
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 export function parsePointCloudPacket(payload) {
   const buffer = payload instanceof ArrayBuffer ? payload : payload.buffer;
@@ -16,19 +17,34 @@ export function parsePointCloudPacket(payload) {
   if (magic !== "HGPC") throw new Error("지원하지 않는 3D 지도 패킷입니다.");
 
   const version = view.getUint8(4);
-  if (version !== 1) throw new Error(`지원하지 않는 3D 지도 버전입니다: ${version}`);
+  if (version !== 1 && version !== 2) {
+    throw new Error(`지원하지 않는 3D 지도 버전입니다: ${version}`);
+  }
   const flags = view.getUint8(5);
+  const frameIdBytes = version === 2 ? view.getUint16(6, true) : 0;
   const sequence = view.getUint32(8, true);
   const pointCount = view.getUint32(12, true);
   const timestampMs = Number(view.getBigUint64(16, true));
-  const requiredBytes = POINT_CLOUD_HEADER_BYTES + pointCount * POINT_CLOUD_RECORD_BYTES;
+  const recordStart = POINT_CLOUD_HEADER_BYTES + frameIdBytes;
+  const requiredBytes = recordStart + pointCount * POINT_CLOUD_RECORD_BYTES;
   if (byteLength < requiredBytes) {
     throw new Error("3D 지도 포인트 데이터가 완전하지 않습니다.");
   }
 
+  let frameId = null;
+  if (frameIdBytes) {
+    try {
+      frameId = utf8Decoder.decode(
+        new Uint8Array(buffer, byteOffset + POINT_CLOUD_HEADER_BYTES, frameIdBytes),
+      );
+    } catch {
+      throw new Error("3D 지도 좌표계 정보를 해석하지 못했습니다.");
+    }
+  }
+
   const positions = new Float32Array(pointCount * 3);
   const colors = new Float32Array(pointCount * 3);
-  let recordOffset = POINT_CLOUD_HEADER_BYTES;
+  let recordOffset = recordStart;
   for (let index = 0; index < pointCount; index += 1) {
     const target = index * 3;
     positions[target] = view.getFloat32(recordOffset, true);
@@ -41,9 +57,11 @@ export function parsePointCloudPacket(payload) {
   }
 
   return {
+    version,
     sequence,
     pointCount,
     timestampMs,
+    frameId,
     colorAvailable: Boolean(flags & 1),
     positions,
     colors,

@@ -430,6 +430,7 @@ export default function MapPage({
             <PointCloudPanel
               systemMode={systemMode}
               archivedSession={selected3dSession}
+              spatialState={spatialState}
               variant={mapDimension === "thermal" ? "thermal" : "rgb"}
             />
           </Suspense>

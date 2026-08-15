@@ -16,6 +16,7 @@ export const fallbackSpatialState = {
     frame_id: "map",
     x: -2.4,
     y: -2.55,
+    z: 0,
     yaw: 0.12,
     mock: true,
   },

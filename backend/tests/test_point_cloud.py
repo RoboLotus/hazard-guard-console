@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from app.point_cloud import (
     PACKET_HEADER,
     PACKET_MAGIC,
+    PACKET_VERSION,
     POINT_RECORD,
     PointCloudAdapter,
     PointCloudStore,
@@ -44,15 +45,18 @@ def test_rgb_point_cloud_is_packed_for_the_browser():
 
     assert errors == []
     sequence, packet = store.packet_after(None)
-    magic, version, flags, _, packet_sequence, point_count, _ = (
+    magic, version, flags, frame_id_bytes, packet_sequence, point_count, _ = (
         PACKET_HEADER.unpack_from(packet)
     )
     assert magic == PACKET_MAGIC
-    assert version == 1
+    assert version == PACKET_VERSION == 2
+    assert packet[PACKET_HEADER.size:PACKET_HEADER.size + frame_id_bytes] == b"map"
     assert flags & 1
     assert packet_sequence == sequence
     assert point_count == 2
-    assert POINT_RECORD.unpack_from(packet, PACKET_HEADER.size) == (
+    assert POINT_RECORD.unpack_from(
+        packet, PACKET_HEADER.size + frame_id_bytes
+    ) == (
         1.0,
         2.0,
         0.5,
@@ -82,6 +86,26 @@ def test_cloud_without_rgb_uses_a_clear_fallback_color():
     adapter.on_cloud(message)
 
     _, packet = store.packet_after(None)
-    point = POINT_RECORD.unpack_from(packet, PACKET_HEADER.size)
+    frame_id_bytes = PACKET_HEADER.unpack_from(packet)[3]
+    point = POINT_RECORD.unpack_from(
+        packet, PACKET_HEADER.size + frame_id_bytes
+    )
     assert point[3:6] == (75, 145, 220)
     assert store.status()["color_available"] is False
+
+
+def test_packet_rejects_an_unbounded_frame_id():
+    store = PointCloudStore()
+
+    try:
+        store.update(
+            b"",
+            point_count=0,
+            color_available=False,
+            frame_id="m" * 256,
+            source="test:/cloud",
+        )
+    except ValueError as error:
+        assert "frame_id" in str(error)
+    else:
+        raise AssertionError("oversized frame_id must be rejected")

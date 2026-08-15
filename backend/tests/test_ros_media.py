@@ -82,12 +82,15 @@ def test_odometry_updates_live_browser_pose_without_tf():
 
     adapter.on_odom(message)
 
-    pose = spatial.snapshot()["pose"]
+    snapshot = spatial.snapshot()
+    pose = snapshot["pose"]
     assert pose["mock"] is False
     assert pose["frame_id"] == "odom"
     assert pose["x"] == 1.25
     assert pose["y"] == -0.75
+    assert pose["z"] == 0.0
     assert pose["yaw"] == 0.0
+    assert snapshot["poses"]["odom"] == pose
 
 
 
@@ -122,11 +125,14 @@ def test_odometry_is_transformed_from_odom_to_map():
 
     adapter.on_odom(message)
 
-    pose = spatial.snapshot()["pose"]
+    snapshot = spatial.snapshot()
+    pose = snapshot["pose"]
     assert pose["frame_id"] == "map"
     assert abs(pose["x"] - 10.0) < 1e-6
     assert abs(pose["y"] + 1.0) < 1e-6
     assert abs(pose["yaw"] - math.pi / 2.0) < 1e-4
+    assert snapshot["poses"]["odom"]["x"] == 1.0
+    assert snapshot["poses"]["map"] == pose
 
 def test_recent_map_tf_pose_is_not_overwritten_by_raw_odometry():
     spatial = SpatialStore()
@@ -146,10 +152,12 @@ def test_recent_map_tf_pose_is_not_overwritten_by_raw_odometry():
 
     adapter.on_odom(message)
 
-    pose = spatial.snapshot()["pose"]
+    snapshot = spatial.snapshot()
+    pose = snapshot["pose"]
     assert pose["x"] == 4.0
     assert pose["y"] == 5.0
     assert pose["yaw"] == 0.25
+    assert snapshot["poses"]["odom"]["x"] == 1.25
 
 
 def test_trend_metadata_is_forwarded_to_browser():

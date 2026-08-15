@@ -5,11 +5,16 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { CurrentTime, PanelHeader } from "./Common.jsx";
 import { parsePointCloudPacket } from "../pointCloud.js";
+import {
+  resolvePointCloudRobotState,
+  selectPointCloudPose,
+} from "../pointCloudRobot.js";
 
 const INITIAL_STATUS = {
   connection: "connecting",
   pointCount: 0,
   colorAvailable: false,
+  frameId: null,
   updatedAt: null,
   error: null,
 };
@@ -66,7 +71,60 @@ function fitCameraToCloud(camera, controls, geometry) {
   controls.update();
 }
 
-export default function PointCloudPanel({ systemMode, archivedSession, variant = "rgb" }) {
+function createRobotMarker() {
+  const group = new THREE.Group();
+  group.name = "hazard-guard-robot-marker";
+  group.visible = false;
+
+  const chassisMaterial = new THREE.MeshBasicMaterial({ color: 0x2f80ed });
+  const frontMaterial = new THREE.MeshBasicMaterial({ color: 0xe9f4ff });
+  const ringMaterial = new THREE.MeshBasicMaterial({
+    color: 0x66b6ff,
+    transparent: true,
+    opacity: 0.72,
+    side: THREE.DoubleSide,
+  });
+  const chassisGeometry = new THREE.BoxGeometry(0.34, 0.26, 0.12);
+  const frontGeometry = new THREE.ConeGeometry(0.075, 0.18, 3);
+  const ringGeometry = new THREE.RingGeometry(0.22, 0.25, 40);
+
+  const chassis = new THREE.Mesh(chassisGeometry, chassisMaterial);
+  chassis.position.z = 0.07;
+  group.add(chassis);
+
+  const front = new THREE.Mesh(frontGeometry, frontMaterial);
+  front.rotation.z = -Math.PI / 2;
+  front.position.set(0.25, 0, 0.08);
+  group.add(front);
+
+  const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+  ring.position.z = 0.006;
+  group.add(ring);
+
+  return {
+    group,
+    setStale(stale) {
+      chassisMaterial.color.setHex(stale ? 0x748190 : 0x2f80ed);
+      frontMaterial.color.setHex(stale ? 0xb8c0c8 : 0xe9f4ff);
+      ringMaterial.color.setHex(stale ? 0x8a949f : 0x66b6ff);
+    },
+    dispose() {
+      chassisGeometry.dispose();
+      frontGeometry.dispose();
+      ringGeometry.dispose();
+      chassisMaterial.dispose();
+      frontMaterial.dispose();
+      ringMaterial.dispose();
+    },
+  };
+}
+
+export default function PointCloudPanel({
+  systemMode,
+  archivedSession,
+  spatialState,
+  variant = "rgb",
+}) {
   const spec = VARIANTS[variant] || VARIANTS.rgb;
   const archived = spec.supportsArchive ? archivedSession : null;
   const mountRef = useRef(null);
@@ -119,7 +177,17 @@ export default function PointCloudPanel({ systemMode, archivedSession, variant =
     });
     const points = new THREE.Points(geometry, material);
     scene.add(points);
-    sceneRef.current = { camera, controls, geometry, material, points, renderer };
+    const robotMarker = createRobotMarker();
+    scene.add(robotMarker.group);
+    sceneRef.current = {
+      camera,
+      controls,
+      geometry,
+      material,
+      points,
+      renderer,
+      robotMarker,
+    };
     fitRef.current = () => fitCameraToCloud(camera, controls, geometry);
 
     const resize = () => {
@@ -147,6 +215,7 @@ export default function PointCloudPanel({ systemMode, archivedSession, variant =
       controls.dispose();
       geometry.dispose();
       material.dispose();
+      robotMarker.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       sceneRef.current = null;
@@ -202,6 +271,7 @@ export default function PointCloudPanel({ systemMode, archivedSession, variant =
             connection: "connected",
             pointCount: cloud.pointCount,
             colorAvailable: cloud.colorAvailable,
+            frameId: cloud.frameId,
             updatedAt: new Date(cloud.timestampMs),
             error: null,
           });
@@ -271,6 +341,7 @@ export default function PointCloudPanel({ systemMode, archivedSession, variant =
           connection: "connected",
           pointCount: position.count,
           colorAvailable: Boolean(sourceColor),
+          frameId: archived.cloud_frame_id || archived.frame_id || null,
           updatedAt: new Date(archived.updated_at || archived.created_at),
           error: null,
         });
@@ -287,6 +358,32 @@ export default function PointCloudPanel({ systemMode, archivedSession, variant =
     return () => controller.abort();
   }, [archived?.id]);
 
+  const cloudPose = selectPointCloudPose(spatialState, status.frameId);
+  const robotState = resolvePointCloudRobotState(
+    cloudPose,
+    status.frameId,
+    clockTick,
+  );
+
+  useEffect(() => {
+    const marker = sceneRef.current?.robotMarker;
+    if (!marker) return;
+    const visible = Boolean(status.pointCount && robotState.visible);
+    marker.group.visible = visible;
+    if (!visible) return;
+    marker.group.position.set(robotState.x, robotState.y, Math.max(0, robotState.z));
+    marker.group.rotation.set(0, 0, robotState.yaw);
+    marker.setStale(robotState.stale);
+  }, [
+    robotState.stale,
+    robotState.visible,
+    robotState.x,
+    robotState.y,
+    robotState.yaw,
+    robotState.z,
+    status.pointCount,
+  ]);
+
   const cloudFresh = Boolean(
     status.updatedAt && clockTick - status.updatedAt.getTime() < 5000,
   );
@@ -302,6 +399,9 @@ export default function PointCloudPanel({ systemMode, archivedSession, variant =
       : "포인트 대기 중",
     disconnected: "연결 끊김",
   }[status.connection]);
+  const robotStatusClass = robotState.visible
+    ? (robotState.stale ? "stale" : "live")
+    : "unavailable";
   const EmptyIcon = spec.icon;
 
   return (
@@ -319,6 +419,17 @@ export default function PointCloudPanel({ systemMode, archivedSession, variant =
         <div className={`map-live-badge ${status.connection === "connected" && status.pointCount && (archived || cloudFresh) ? "" : "mock"}`}>
           <span />{connectionLabel}
         </div>
+        {Boolean(status.pointCount) && (
+          <div className={`point-cloud-robot-status ${robotStatusClass}`}>
+            <span />
+            <strong>{robotState.reason}</strong>
+            {robotState.visible && (
+              <small>
+                {status.frameId} · {robotState.x.toFixed(2)}, {robotState.y.toFixed(2)} m
+              </small>
+            )}
+          </div>
+        )}
         {!status.pointCount && (
           <div className="point-cloud-empty">
             <EmptyIcon size={38} weight="duotone" />
@@ -348,7 +459,11 @@ export default function PointCloudPanel({ systemMode, archivedSession, variant =
         ) : (
           <span><i className="point-cloud-color-dot" />{status.colorAvailable ? "RGB 색상 포함" : "기본 색상"}</span>
         )}
-        <span>{archived ? `저장 세션 · ${archived.name || archived.id}` : spec.footnote}</span>
+        <span>
+          {archived
+            ? `저장 세션 · ${archived.name || archived.id}`
+            : `${status.frameId || "좌표계 미확인"} 좌표계 · Z축 높이`}
+        </span>
         <strong>{status.pointCount.toLocaleString("ko-KR")} points{status.updatedAt ? ` · ${status.updatedAt.toLocaleTimeString("ko-KR", { hour12: false })}` : ""}</strong>
       </footer>
     </section>

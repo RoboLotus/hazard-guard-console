@@ -220,7 +220,7 @@ export default function HelpPage({ onNavigate }) {
                 <Cube size={21} weight="fill" />
                 <strong>3D RGB-D</strong>
                 <p>RTAB-Map의 라이브 컬러 포인트클라우드와 세션 DB에서 다시 만든 과거 3D 지도를 표시합니다.</p>
-                <ul><li>저장 세션의 눈 아이콘: 3D 다시 보기</li><li>다운로드 아이콘: 컬러 PLY 저장</li><li>실물에서는 카메라 토픽·CameraInfo·TF 정합 필요</li></ul>
+                <ul><li>파란 로봇 마커: 현재 위치와 전면 방향</li><li>회색 마커: 위치 갱신 지연, 빨간 상태: 좌표계 불일치·수신 끊김</li><li>저장 세션의 눈 아이콘: 3D 다시 보기</li><li>다운로드 아이콘: 컬러 PLY 저장</li><li>실물에서는 카메라 토픽·CameraInfo·TF 정합 필요</li></ul>
               </article>
               <article>
                 <ThermometerHot size={21} weight="fill" />
