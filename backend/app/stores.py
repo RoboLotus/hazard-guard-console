@@ -323,9 +323,13 @@ class SpatialStore:
             "frame_id": "map",
             "x": self.MOCK_ROUTE[0][0],
             "y": self.MOCK_ROUTE[0][1],
+            "z": 0.0,
             "yaw": 0.0,
             "mock": self._mock_enabled,
             "updated_at": utc_now(),
+        }
+        self._poses: dict[str, dict[str, Any]] = {
+            "map": dict(self._pose),
         }
         self._trail: list[dict[str, Any]] = []
         self._detections: dict[str, dict[str, Any]] = {}
@@ -379,6 +383,7 @@ class SpatialStore:
         *,
         x: float,
         y: float,
+        z: float = 0.0,
         yaw: float,
         frame_id: str = "map",
         mock: bool = False,
@@ -391,12 +396,41 @@ class SpatialStore:
                 "frame_id": frame_id,
                 "x": round(float(x), 4),
                 "y": round(float(y), 4),
+                "z": round(float(z), 4),
                 "yaw": round(float(yaw), 5),
                 "mock": bool(mock),
                 "updated_at": utc_now(),
             }
             self._pose = pose
+            self._poses[str(frame_id).lstrip("/") or "map"] = dict(pose)
             self._append_trail_locked(pose)
+
+    def update_frame_pose(
+        self,
+        *,
+        x: float,
+        y: float,
+        z: float = 0.0,
+        yaw: float,
+        frame_id: str,
+        mock: bool = False,
+    ) -> None:
+        """Store a pose for 3D overlays without replacing the canonical map pose."""
+
+        with self._lock:
+            if not mock:
+                self._activate_live_locked()
+            normalized_frame = str(frame_id).lstrip("/") or "odom"
+            self._poses[normalized_frame] = {
+                "available": True,
+                "frame_id": normalized_frame,
+                "x": round(float(x), 4),
+                "y": round(float(y), 4),
+                "z": round(float(z), 4),
+                "yaw": round(float(yaw), 5),
+                "mock": bool(mock),
+                "updated_at": utc_now(),
+            }
 
     def clear_trail(self) -> None:
         with self._lock:
@@ -417,10 +451,12 @@ class SpatialStore:
                 "frame_id": "map",
                 "x": 0.0,
                 "y": 0.0,
+                "z": 0.0,
                 "yaw": 0.0,
                 "mock": False,
                 "updated_at": utc_now(),
             }
+            self._poses.clear()
             self._trail.clear()
             self._detections.clear()
             self._live_initialized = False
@@ -434,10 +470,12 @@ class SpatialStore:
                 "frame_id": "map",
                 "x": 0.0,
                 "y": 0.0,
+                "z": 0.0,
                 "yaw": 0.0,
                 "mock": False,
                 "updated_at": utc_now(),
             }
+            self._poses.clear()
             self._trail.clear()
 
     def _append_trail_locked(self, pose: dict[str, Any]) -> None:
@@ -552,6 +590,7 @@ class SpatialStore:
             "frame_id": "map",
             "x": round(x, 4),
             "y": round(y, 4),
+            "z": 0.0,
             "yaw": round(yaw, 5),
             "mock": True,
             "updated_at": utc_now(),
@@ -562,6 +601,9 @@ class SpatialStore:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             self._advance_mock_locked()
+            poses = {key: dict(value) for key, value in self._poses.items()}
+            pose_frame = str(self._pose.get("frame_id") or "map").lstrip("/")
+            poses[pose_frame] = dict(self._pose)
             now = time.monotonic()
             detections = []
             for item in self._detections.values():
@@ -578,6 +620,7 @@ class SpatialStore:
                 "mock": self._source == "mock",
                 "map": dict(self._map),
                 "pose": dict(self._pose),
+                "poses": poses,
                 "trail": [dict(point) for point in self._trail],
                 "sensors": [dict(sensor) for sensor in self.SENSOR_SPECS],
                 "heatmap": {

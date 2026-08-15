@@ -12,7 +12,8 @@ from typing import Any, Callable
 PACKET_HEADER = struct.Struct("<4sBBHIIQ")
 POINT_RECORD = struct.Struct("<fffBBBB")
 PACKET_MAGIC = b"HGPC"
-PACKET_VERSION = 1
+PACKET_VERSION = 2
+MAX_FRAME_ID_BYTES = 255
 
 
 def utc_now() -> str:
@@ -47,6 +48,12 @@ class PointCloudStore:
         source: str,
     ) -> None:
         timestamp_ms = int(time.time() * 1000)
+        normalized_frame_id = str(frame_id or "map").strip() or "map"
+        encoded_frame_id = normalized_frame_id.encode("utf-8")
+        if len(encoded_frame_id) > MAX_FRAME_ID_BYTES:
+            raise ValueError(
+                f"Point cloud frame_id exceeds {MAX_FRAME_ID_BYTES} UTF-8 bytes"
+            )
         with self._lock:
             self._sequence = (self._sequence + 1) & 0xFFFFFFFF
             flags = 1 if color_available else 0
@@ -54,17 +61,17 @@ class PointCloudStore:
                 PACKET_MAGIC,
                 PACKET_VERSION,
                 flags,
-                0,
+                len(encoded_frame_id),
                 self._sequence,
                 int(point_count),
                 timestamp_ms,
-            ) + records
+            ) + encoded_frame_id + records
             self._metadata = {
                 "available": point_count > 0,
                 "sequence": self._sequence,
                 "point_count": int(point_count),
                 "color_available": bool(color_available),
-                "frame_id": frame_id or "map",
+                "frame_id": normalized_frame_id,
                 "source": source,
                 "updated_at": utc_now(),
                 "updated_monotonic": time.monotonic(),

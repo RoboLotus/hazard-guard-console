@@ -351,6 +351,14 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .point-cloud-empty span { font-size: 9px; line-height: 1.5; }
 .point-cloud-controls-hint { position: absolute; right: 13px; bottom: 12px; padding: 7px 9px; display: flex; align-items: center; gap: 5px; color: #b7c7d8; background: rgba(12,21,31,.78); border: 1px solid rgba(126,158,191,.24); border-radius: 7px; font-size: 8px; pointer-events: none; }
 .point-cloud-error { position: absolute; left: 50%; top: 70px; max-width: 70%; padding: 8px 11px; color: #ffd9dc; background: rgba(142,39,49,.88); border-radius: 7px; font-size: 9px; transform: translateX(-50%); }
+.point-cloud-robot-status { position: absolute; left: 13px; bottom: 12px; min-width: 132px; padding: 7px 9px; display: grid; grid-template-columns: 7px 1fr; column-gap: 7px; color: #dceafb; background: rgba(12,21,31,.82); border: 1px solid rgba(102,182,255,.34); border-radius: 7px; pointer-events: none; }
+.point-cloud-robot-status > span { width: 7px; height: 7px; margin-top: 3px; background: #5db0ff; border-radius: 50%; box-shadow: 0 0 0 3px rgba(93,176,255,.14); }
+.point-cloud-robot-status strong { font-size: 9px; line-height: 1.35; }
+.point-cloud-robot-status small { grid-column: 2; margin-top: 1px; color: #8fa6bc; font-size: 8px; }
+.point-cloud-robot-status.stale { border-color: rgba(190,198,207,.28); }
+.point-cloud-robot-status.stale > span { background: #96a2ae; box-shadow: 0 0 0 3px rgba(150,162,174,.12); }
+.point-cloud-robot-status.unavailable { color: #d9bfc1; border-color: rgba(202,118,125,.28); }
+.point-cloud-robot-status.unavailable > span { background: #ca767d; box-shadow: 0 0 0 3px rgba(202,118,125,.12); }
 .point-cloud-footer { gap: 18px; }
 .point-cloud-footer strong { margin-left: auto; }
 .point-cloud-color-dot { width: 9px !important; height: 9px !important; background: conic-gradient(#e95e55, #f0c34b, #54b97c, #4f8fe8, #b66bd8, #e95e55) !important; border-radius: 50%; }

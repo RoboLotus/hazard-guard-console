@@ -567,6 +567,7 @@ def test_spatial_status_exposes_pose_sensor_specs_and_heatmap():
     assert response.status_code == 200
     payload = response.json()
     assert payload["pose"]["available"] is True
+    assert payload["poses"]["map"]["available"] is True
     assert payload["map"]["frame_id"] == "map"
     assert payload["heatmap"]["available"] is True
 
@@ -640,7 +641,9 @@ def test_point_cloud_websocket_sends_binary_packet():
         packet = websocket.receive_bytes()
 
     assert packet[:4] == b"HGPC"
-    assert len(packet) == 24 + POINT_RECORD.size
+    frame_id_bytes = int.from_bytes(packet[6:8], "little")
+    assert packet[24:24 + frame_id_bytes] == b"map"
+    assert len(packet) == 24 + frame_id_bytes + POINT_RECORD.size
 
 
 def test_thermal_cloud_is_a_separate_stream_from_the_colour_one():
@@ -657,7 +660,10 @@ def test_thermal_cloud_is_a_separate_stream_from_the_colour_one():
         packet = websocket.receive_bytes()
 
     assert packet[:4] == b"HGPC"
-    assert packet[24:] == POINT_RECORD.pack(0.5, 0.5, 1.0, 255, 0, 0, 255)
+    frame_id_bytes = int.from_bytes(packet[6:8], "little")
+    assert packet[24 + frame_id_bytes:] == POINT_RECORD.pack(
+        0.5, 0.5, 1.0, 255, 0, 0, 255
+    )
 
     status = client.get("/api/v1/spatial/cloud/thermal/status").json()
     assert status["source"] == "test:/thermal_cloud"
