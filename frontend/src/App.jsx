@@ -208,9 +208,9 @@ export function App() {
     }
     const confirmed = window.confirm(
       nextMode === "mapping"
-        ? mappingProfile === "toolbox_rtabmap"
-          ? "현재 운용 모드를 중단하고 2D + RGB-D 3D 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
-          : "현재 운용 모드를 중단하고 2D SLAM Toolbox 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
+        ? "현재 운용 모드를 중단하고 2D SLAM Toolbox 새 지도 세션을 시작할까요? 기존 결과는 덮어쓰지 않습니다."
+        : nextMode === "rgbd_mapping"
+          ? "현재 2D 지도를 저장한 뒤, 선택된 저장 지도에서 RGB-D 3D 수집을 시작할까요? RTAB-Map은 주행 좌표계를 변경하지 않습니다."
         : patrolSlam
           ? "현재 SLAM 지도를 저장한 뒤 지도 갱신 순찰(SLAM·Nav2)로 전환할까요? 빈 지도에서 새로 그립니다."
           : "현재 SLAM 지도를 저장한 뒤 AMCL·Nav2 순찰 모드로 전환할까요?",
@@ -271,6 +271,22 @@ export function App() {
       setModeBusy(false);
     }
   };
+  const stopSystemMode = async () => {
+    setModeBusy(true);
+    try {
+      const response = await fetch("/api/v1/system/mode", { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "운용 모드를 종료하지 못했습니다.");
+      setSystemMode(result);
+      notify(result.message || "운용 모드를 종료했습니다.");
+      return result;
+    } catch (error) {
+      notify(error.message || "운용 모드 종료 API에 연결하지 못했습니다.", "warning");
+      return null;
+    } finally {
+      setModeBusy(false);
+    }
+  };
   const initializeLocalization = async () => {
     const pose = systemMode?.localization_pose;
     if (!pose) {
@@ -302,7 +318,7 @@ export function App() {
       />
       <main className="main-content">
         {active === "overview" && <Overview events={events} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} />}
-        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} notify={notify} />}
+        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} />}
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
         {active === "report" && <ReportsPage events={events} notify={notify} />}

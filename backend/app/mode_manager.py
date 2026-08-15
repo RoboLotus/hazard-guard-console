@@ -33,7 +33,7 @@ class SystemModeManager:
     started itself; terminal-launched ROS stacks are detected and left untouched.
     """
 
-    MODES = {"mapping", "patrol"}
+    MODES = {"mapping", "rgbd_mapping", "patrol"}
     MAPPING_PROFILES = {"toolbox", "toolbox_rtabmap"}
     DEPLOYMENT_TARGETS = {"simulation", "physical"}
 
@@ -97,6 +97,10 @@ class SystemModeManager:
             self._localization_pose = self._validated_pose(
                 active_session.get("localization_pose")
             )
+        self._active_map_session_id = (
+            active_session.get("id") if active_session is not None else None
+        )
+        self._rgbd_session_id: str | None = None
         self._gui = os.getenv("HAZARD_GUARD_SIMULATION_GUI", "true").lower() in {
             "1",
             "true",
@@ -133,6 +137,8 @@ class SystemModeManager:
                 else "실물 로봇 현장"
             ),
             "mapping_session_id": None,
+            "active_map_session_id": self._active_map_session_id,
+            "rgbd_session_id": None,
             "mapping_profile": self._mapping_profile,
             "patrol_slam": self._patrol_slam,
             "rtabmap_database_path": None,
@@ -233,6 +239,18 @@ class SystemModeManager:
             "sessions": self._world_catalog.sessions(selected_id),
         }
 
+    def _active_map_session(self) -> dict[str, Any] | None:
+        return next(
+            (
+                session
+                for session in self._world_catalog.sessions(
+                    self._active_world["id"]
+                )
+                if session.get("active") and session.get("available")
+            ),
+            None,
+        )
+
     def edit_map_session(
         self,
         world_id: str,
@@ -262,7 +280,7 @@ class SystemModeManager:
     def export_map_cloud(self, world_id: str, session_id: str) -> dict[str, Any]:
         with self._lock:
             current_mapping = (
-                self._data.get("mode") == "mapping"
+                self._data.get("mode") in {"mapping", "rgbd_mapping"}
                 and self._data.get("state") in {"starting", "running", "stopping"}
                 and self._current_session_id == session_id
             )
@@ -377,6 +395,8 @@ class SystemModeManager:
         world = self._world_catalog.select_world(world_id)
         self._active_world = world
         self._current_session_id = None
+        self._active_map_session_id = None
+        self._rgbd_session_id = None
         self._map_path = (
             self._world_catalog.active_map_path(world_id)
             or self._workspace / "runtime" / "maps" / world_id / "unavailable.yaml"
@@ -395,6 +415,8 @@ class SystemModeManager:
                 active_world_label=world["label"],
                 map_path=str(self._map_path),
                 mapping_session_id=None,
+                active_map_session_id=None,
+                rgbd_session_id=None,
                 message=f"시뮬레이션 환경을 '{world['label']}'로 변경했습니다.",
             )
 
@@ -430,10 +452,14 @@ class SystemModeManager:
         self._localization_pose = self._validated_pose(
             selected_session.get("localization_pose") if selected_session else None
         )
+        self._active_map_session_id = session_id
+        self._rgbd_session_id = None
         with self._lock:
             return self._update_locked(
                 accepted=True,
                 map_path=str(self._map_path),
+                active_map_session_id=session_id,
+                rgbd_session_id=None,
                 message="선택한 SLAM 결과를 순찰용 지도로 지정했습니다.",
             )
 
@@ -558,6 +584,28 @@ class SystemModeManager:
                     ),
                 ]
             initial_pose = self._localization_pose or {"x": 0.0, "y": 0.0, "yaw": 0.0}
+            if mode == "rgbd_mapping":
+                selected_database = (
+                    database_path
+                    or self._map_path.parent / "rtabmap.db"
+                )
+                return [
+                    "ros2",
+                    "launch",
+                    "hazard_guard_simulation",
+                    "physical_rgbd_mapping.launch.py",
+                    f"map:={self._map_path}",
+                    f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
+                    f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
+                    f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
+                    f"rtabmap_database_path:={selected_database}",
+                    f"rtabmap_storage_path:={selected_database.parent}",
+                    "rgbd_cloud_stamp_mode:="
+                    + os.getenv("HAZARD_GUARD_RGBD_STAMP_MODE", "offset"),
+                    "rgbd_cloud_stamp_offset_sec:="
+                    + os.getenv("HAZARD_GUARD_RGBD_STAMP_OFFSET_SEC", "0.0"),
+                    *self._physical_patrol_feature_arguments(),
+                ]
             return [
                 "ros2",
                 "launch",
@@ -576,6 +624,12 @@ class SystemModeManager:
             "start_simulation:=false",
             *self._world_launch_arguments(),
         ]
+        spawn = self._active_world["spawn"]
+        initial_pose = self._localization_pose or {
+            "x": float(spawn["x"]),
+            "y": float(spawn["y"]),
+            "yaw": float(spawn["yaw"]),
+        }
         if mode == "mapping":
             enable_rtabmap = selected_profile == "toolbox_rtabmap"
             return [
@@ -591,12 +645,24 @@ class SystemModeManager:
                     or Path("/tmp/hazard_guard_rtabmap_sim.db")
                 ),
             ]
-        spawn = self._active_world["spawn"]
-        initial_pose = self._localization_pose or {
-            "x": float(spawn["x"]),
-            "y": float(spawn["y"]),
-            "yaw": float(spawn["yaw"]),
-        }
+        if mode == "rgbd_mapping":
+            selected_database = (
+                database_path or self._map_path.parent / "rtabmap.db"
+            )
+            return [
+                "ros2",
+                "launch",
+                "hazard_guard_simulation",
+                "rgbd_mapping.launch.py",
+                *common,
+                f"map:={self._map_path}",
+                f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
+                f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
+                f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
+                f"rtabmap_database_path:={selected_database}",
+                "rtabmap_reset_database:="
+                + ("false" if selected_database.is_file() else "true"),
+            ]
         return [
             "ros2",
             "launch",
@@ -818,7 +884,11 @@ class SystemModeManager:
                     message=(
                         "SLAM 지도 생성 모드가 실행 중입니다."
                         if mode == "mapping"
-                        else "AMCL·Nav2 순찰 모드가 실행 중입니다."
+                        else (
+                            "저장 2D 지도 기반 RGB-D 3D 수집 모드가 실행 중입니다."
+                            if mode == "rgbd_mapping"
+                            else "AMCL·Nav2 순찰 모드가 실행 중입니다."
+                        )
                     ),
                 )
         exit_code = process.wait()
@@ -829,6 +899,8 @@ class SystemModeManager:
             process,
             process_group_id=process.pid,
         )
+        if mode == "rgbd_mapping":
+            self._finalize_rgbd_session()
         with self._lock:
             if self._generation != generation or self._process is not process:
                 return
@@ -855,6 +927,19 @@ class SystemModeManager:
                 **self.snapshot(detect_external=False),
                 "accepted": False,
                 "message": "WebUI 모드 제어가 비활성화되어 지도를 저장할 수 없습니다.",
+            }
+        with self._lock:
+            map_source_running = self._data.get("mode") == "mapping" or (
+                self._data.get("mode") == "patrol" and self._patrol_slam
+            )
+        if not map_source_running:
+            return {
+                **self.snapshot(detect_external=False),
+                "accepted": False,
+                "message": (
+                    "2D SLAM 지도 작성 중일 때만 map.yaml을 저장할 수 있습니다. "
+                    "3D 수집은 전용 종료 버튼으로 RTAB-Map DB를 저장하세요."
+                ),
             }
         if self._current_session_id is None:
             session = self._world_catalog.begin_session(
@@ -1046,7 +1131,7 @@ class SystemModeManager:
         if (
             current_process is not None
             and (
-                (mode == "patrol" and current_mode == "mapping")
+                (mode in {"patrol", "rgbd_mapping"} and current_mode == "mapping")
                 or (current_mode == "patrol" and self._patrol_slam)
             )
         ):
@@ -1055,8 +1140,14 @@ class SystemModeManager:
                 return saved
 
         self._stop_managed_process()
+        if current_mode == "rgbd_mapping":
+            self._finalize_rgbd_session()
 
-        if mode == "patrol" and not keep_mapping and not self._map_files_available():
+        if (
+            mode in {"patrol", "rgbd_mapping"}
+            and not keep_mapping
+            and not self._map_files_available()
+        ):
             with self._lock:
                 return self._update_locked(
                     mode="idle",
@@ -1065,7 +1156,7 @@ class SystemModeManager:
                     managed=False,
                     pid=None,
                     message=(
-                        "순찰 모드에 사용할 저장 지도가 없습니다. "
+                        "저장 지도 기반 모드에 사용할 2D 지도가 없습니다. "
                         "먼저 맵 생성 모드에서 지도를 작성하고 저장하세요."
                     ),
                 )
@@ -1087,6 +1178,7 @@ class SystemModeManager:
                 )
 
         pending_session: dict[str, Any] | None = None
+        rgbd_session: dict[str, Any] | None = None
         if mode == "mapping":
             pending_session = self._world_catalog.begin_session(
                 self._active_world["id"], requested_profile
@@ -1099,6 +1191,28 @@ class SystemModeManager:
             pending_session = self._world_catalog.begin_session(
                 self._active_world["id"], requested_profile
             )
+        elif mode == "rgbd_mapping":
+            rgbd_session = self._active_map_session()
+            if rgbd_session is None:
+                with self._lock:
+                    return self._update_locked(
+                        mode="idle",
+                        state="failed",
+                        accepted=False,
+                        managed=False,
+                        pid=None,
+                        message=(
+                            "3D 수집을 연결할 저장 2D 지도 세션이 없습니다. "
+                            "지도 파일에서 사용할 세션을 먼저 지정하세요."
+                        ),
+                    )
+            self._world_catalog.update_session(
+                rgbd_session["id"],
+                self._active_world["id"],
+                rtabmap_database_file="rtabmap.db",
+                rgbd_status="collecting",
+                rgbd_started_at=utc_now(),
+            )
         self._patrol_slam = keep_mapping
         command = self._launch_arguments(
             mode,
@@ -1106,7 +1220,11 @@ class SystemModeManager:
             rtabmap_database_path=(
                 pending_session["rtabmap_database_path"]
                 if pending_session is not None
-                else None
+                else (
+                    Path(rgbd_session["storage_directory"]) / "rtabmap.db"
+                    if rgbd_session is not None
+                    else None
+                )
             ),
         )
         try:
@@ -1118,6 +1236,12 @@ class SystemModeManager:
             if pending_session is not None:
                 self._world_catalog.discard_empty_session(
                     self._active_world["id"], pending_session["id"]
+                )
+            if rgbd_session is not None:
+                self._world_catalog.update_session(
+                    rgbd_session["id"],
+                    self._active_world["id"],
+                    rgbd_status="failed",
                 )
             with self._lock:
                 return self._update_locked(
@@ -1137,6 +1261,13 @@ class SystemModeManager:
                 self._rtabmap_database_path = pending_session[
                     "rtabmap_database_path"
                 ]
+            elif rgbd_session is not None:
+                self._current_session_id = None
+                self._active_map_session_id = rgbd_session["id"]
+                self._rgbd_session_id = rgbd_session["id"]
+                self._rtabmap_database_path = (
+                    Path(rgbd_session["storage_directory"]) / "rtabmap.db"
+                )
             self._generation += 1
             generation = self._generation
             self._process = process
@@ -1150,22 +1281,33 @@ class SystemModeManager:
                 started_at=utc_now(),
                 map_path=str(self._map_path),
                 mapping_session_id=self._current_session_id,
+                active_map_session_id=self._active_map_session_id,
+                rgbd_session_id=self._rgbd_session_id,
                 mapping_profile=self._mapping_profile,
                 patrol_slam=self._patrol_slam,
                 rtabmap_database_path=(
                     str(self._rtabmap_database_path)
-                    if mode == "mapping"
-                    and self._mapping_profile == "toolbox_rtabmap"
+                    if (
+                        mode == "rgbd_mapping"
+                        or (
+                            mode == "mapping"
+                            and self._mapping_profile == "toolbox_rtabmap"
+                        )
+                    )
                     else None
                 ),
                 message=(
                     "SLAM 지도 생성 모드를 시작하고 있습니다."
                     if mode == "mapping"
                     else (
-                        "지도 갱신 순찰 모드(SLAM·Nav2)를 시작하고 있습니다. "
-                        "WASD로 주행한 뒤 지도를 저장할 수 있습니다."
-                        if keep_mapping
-                        else "AMCL·Nav2 순찰 모드를 시작하고 있습니다."
+                        "저장된 2D 지도를 불러와 RGB-D 3D 수집을 시작하고 있습니다."
+                        if mode == "rgbd_mapping"
+                        else (
+                            "지도 갱신 순찰 모드(SLAM·Nav2)를 시작하고 있습니다. "
+                            "WASD로 주행한 뒤 지도를 저장할 수 있습니다."
+                            if keep_mapping
+                            else "AMCL·Nav2 순찰 모드를 시작하고 있습니다."
+                        )
                     )
                 ),
             )
@@ -1197,13 +1339,18 @@ class SystemModeManager:
             )
 
     def stop(self) -> dict[str, Any]:
+        with self._lock:
+            stopped_mode = self._data.get("mode")
         self._stop_managed_process()
+        if stopped_mode == "rgbd_mapping":
+            self._finalize_rgbd_session()
         if self._deployment_target == "simulation":
             self._stop_managed_simulation()
         with self._lock:
             self._patrol_slam = False
             return self._update_locked(
                 patrol_slam=False,
+                rgbd_session_id=None,
                 mode="idle",
                 state="disabled" if not self._enabled else "stopped",
                 accepted=True,
@@ -1211,6 +1358,26 @@ class SystemModeManager:
                 pid=None,
                 message="WebUI가 시작한 ROS 운용 모드를 종료했습니다.",
             )
+
+    def _finalize_rgbd_session(self) -> None:
+        session_id = self._rgbd_session_id
+        database_path = self._rtabmap_database_path
+        if session_id is None or database_path is None:
+            return
+        available = (
+            database_path.is_file() and database_path.stat().st_size > 0
+        )
+        self._world_catalog.update_session(
+            session_id,
+            self._active_world["id"],
+            rgbd_status="saved" if available else "empty",
+            rgbd_finished_at=utc_now(),
+            rtabmap_available=available,
+            rtabmap_database_bytes=(
+                database_path.stat().st_size if available else 0
+            ),
+        )
+        self._rgbd_session_id = None
 
 
 system_mode_manager = SystemModeManager()

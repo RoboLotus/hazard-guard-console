@@ -87,7 +87,7 @@ def test_system_mode_status_exposes_webui_control_contract():
     response = client.get("/api/v1/system/mode")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["mode"] in {"idle", "mapping", "patrol"}
+    assert payload["mode"] in {"idle", "mapping", "rgbd_mapping", "patrol"}
     assert "control_enabled" in payload
     assert "map_available" in payload
     assert "managed" in payload

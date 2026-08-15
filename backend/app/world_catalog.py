@@ -302,6 +302,9 @@ class WorldCatalog:
                             if database_path and database_path.is_file()
                             else 0
                         ),
+                        "rgbd_status": metadata.get("rgbd_status", "not_started"),
+                        "rgbd_started_at": metadata.get("rgbd_started_at"),
+                        "rgbd_finished_at": metadata.get("rgbd_finished_at"),
                         "cloud_available": cloud_path.is_file()
                         and cloud_path.stat().st_size > 0,
                         "cloud_bytes": (

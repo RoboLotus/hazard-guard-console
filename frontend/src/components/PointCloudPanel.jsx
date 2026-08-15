@@ -387,7 +387,8 @@ export default function PointCloudPanel({
   const cloudFresh = Boolean(
     status.updatedAt && clockTick - status.updatedAt.getTime() < 5000,
   );
-  const hybridProfile = systemMode?.mapping_profile === "toolbox_rtabmap";
+  const rgbdMode = systemMode?.mode === "rgbd_mapping"
+    || systemMode?.mapping_profile === "toolbox_rtabmap";
   const connectionLabel = archived
     ? status.connection === "connected" && status.pointCount
       ? "저장된 3D 세션"
@@ -433,13 +434,13 @@ export default function PointCloudPanel({
         {!status.pointCount && (
           <div className="point-cloud-empty">
             <EmptyIcon size={38} weight="duotone" />
-            <strong>{archived ? "저장된 3D 지도를 준비하고 있습니다" : hybridProfile ? spec.emptyTitle : "2D + RGB-D 3D 프로파일이 필요합니다"}</strong>
+            <strong>{archived ? "저장된 3D 지도를 준비하고 있습니다" : rgbdMode ? spec.emptyTitle : "2단계 RGB-D 3D 수집을 시작하세요"}</strong>
             <span>
               {archived
                 ? "RTAB-Map DB에서 브라우저용 컬러 PLY를 생성하고 있습니다."
-                : hybridProfile
+                : rgbdMode
                 ? spec.emptyBody
-                : "지도 운용 모드에서 생성 방식을 2D + RGB-D 3D로 선택하고 새 세션을 시작하세요."}
+                : "2D 지도를 저장한 뒤 지도 운용 모드에서 2단계 RGB-D 3D 수집을 시작하세요."}
             </span>
           </div>
         )}

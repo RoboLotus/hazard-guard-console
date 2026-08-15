@@ -37,7 +37,7 @@ class CommandRequest(BaseModel):
 
 
 class SystemModeRequest(BaseModel):
-    mode: Literal["mapping", "patrol"]
+    mode: Literal["mapping", "rgbd_mapping", "patrol"]
     mapping_profile: Literal["toolbox", "toolbox_rtabmap"] = "toolbox"
     # Patrol with SLAM Toolbox instead of AMCL, so manual driving keeps
     # extending the map and it can be saved from the patrol screen.
