@@ -321,7 +321,7 @@ export function App() {
         {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} />}
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
-        {active === "report" && <ReportsPage events={events} notify={notify} />}
+        {active === "report" && <ReportsPage notify={notify} />}
         {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} />}
         {active === "help" && <HelpPage onNavigate={navigate} />}
       </main>

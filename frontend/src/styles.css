@@ -605,6 +605,90 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .report-table-row { min-height: 40px; color: #718095; border-bottom: 1px solid #edf0f3; font-size: 9px; }
 .report-table-row strong { color: #34465c; font-size: 9px; }
 
+/* Mission-scoped Jetson performance reports */
+.performance-live { margin-bottom: 14px; min-height: 70px; padding: 14px 18px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 13px; border-color: #bfe3d0; background: linear-gradient(110deg, #f4fcf7, #fff); }
+.performance-live.stale { border-color: #f0d4ad; background: #fffaf3; }
+.performance-live-pulse { width: 10px; height: 10px; border-radius: 50%; background: #24a164; box-shadow: 0 0 0 6px rgba(36, 161, 100, .12); animation: performancePulse 1.8s ease-out infinite; }
+.performance-live.stale .performance-live-pulse { background: var(--warning); box-shadow: none; animation: none; }
+.performance-live strong { color: #263b50; font-size: 13px; }
+.performance-live p { margin: 4px 0 0; color: #718096; font-size: 10px; }
+.performance-live-values { display: flex; gap: 18px; color: #7a8797; font-size: 10px; }
+.performance-live-values span { display: flex; flex-direction: column; gap: 2px; }
+.performance-live-values strong { font-size: 15px; }
+@keyframes performancePulse { 70% { box-shadow: 0 0 0 11px rgba(36, 161, 100, 0); } 100% { box-shadow: 0 0 0 0 rgba(36, 161, 100, 0); } }
+
+.performance-error { margin-bottom: 12px; padding: 11px 14px; color: #a03b35; border: 1px solid #f2c5c1; border-radius: 9px; background: #fff6f5; font-size: 11px; }
+.performance-layout { display: grid; grid-template-columns: minmax(230px, 26%) minmax(0, 1fr); gap: 14px; align-items: start; }
+.performance-report-list { position: sticky; top: 14px; overflow: hidden; }
+.performance-report-list-body { max-height: calc(100vh - 220px); overflow-y: auto; }
+.performance-report-list-body button { width: 100%; padding: 13px 15px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; color: #768497; text-align: left; border: 0; border-top: 1px solid #edf1f4; background: transparent; cursor: pointer; }
+.performance-report-list-body button:hover { background: #f7f9fb; }
+.performance-report-list-body button.selected { background: #edf5ff; box-shadow: inset 3px 0 #2775c9; }
+.performance-report-list-body button > strong { overflow: hidden; color: #31465c; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.performance-report-list-body button small { grid-column: 1 / -1; font-size: 9px; }
+.performance-report-list-body button em { grid-column: 1 / -1; color: #8d99a7; font-size: 9px; font-style: normal; }
+.performance-report-state { justify-self: end; padding: 3px 7px; color: #65758a; border-radius: 999px; background: #edf1f5; font-size: 8px; font-weight: 800; }
+.performance-report-state.completed { color: #17744a; background: #e4f6ec; }
+.performance-report-state.failed { color: #ae3733; background: #fde9e7; }
+.performance-report-state.interrupted { color: #986018; background: #fff0d9; }
+
+.performance-detail { min-width: 0; display: grid; gap: 12px; }
+.performance-detail-header { min-height: 94px; padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.performance-detail-header h2 { margin: 7px 0 4px; color: #263b50; font-size: 18px; }
+.performance-detail-header p { margin: 0; display: flex; align-items: center; gap: 6px; color: #7b899a; font-size: 10px; }
+.performance-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.danger-button { color: #b23a34 !important; border-color: #efc7c4 !important; }
+.performance-metrics { margin: 0; }
+.performance-statistics { overflow: hidden; }
+.performance-statistics-body { padding: 4px 16px 12px; }
+.performance-stat-row { min-height: 44px; display: grid; grid-template-columns: minmax(95px, 1.2fr) repeat(4, minmax(76px, 1fr)); align-items: center; gap: 10px; border-top: 1px solid #edf1f4; }
+.performance-stat-row:first-child { border-top: 0; }
+.performance-stat-row > strong { color: #34495f; font-size: 10px; }
+.performance-stat-row span { color: #8a96a5; font-size: 9px; }
+.performance-stat-row b { margin-left: 4px; color: #30465d; font-size: 10px; }
+.performance-table-panel { overflow: hidden; }
+.performance-table-scroll { overflow-x: auto; }
+.performance-process-row { min-width: 580px; min-height: 39px; padding: 0 16px; display: grid; grid-template-columns: minmax(150px, 1.5fr) repeat(4, minmax(75px, 1fr)); align-items: center; gap: 10px; color: #66778b; border-top: 1px solid #edf1f4; font-size: 9px; }
+.performance-process-row.head { min-height: 34px; color: #8b97a6; border: 0; background: #fafbfc; font-size: 8px; font-weight: 800; }
+.performance-process-row strong { color: #34495f; }
+.performance-secondary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.performance-core-grid { padding: 0 14px 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.performance-core-grid > div { min-height: 72px; padding: 11px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 5px 8px; border: 1px solid #e5ebf1; border-radius: 9px; background: #fafcfd; }
+.performance-core-grid svg { color: #4c7eb2; }
+.performance-core-grid span { color: #748397; font-size: 9px; }
+.performance-core-grid strong { color: #2f465e; font-size: 14px; }
+.performance-core-grid small { grid-column: 2 / -1; color: #929dab; font-size: 8px; }
+.performance-phase-list { padding: 0 14px 14px; display: grid; gap: 7px; }
+.performance-phase-list > div { min-height: 40px; padding: 8px 10px; display: grid; grid-template-columns: minmax(78px, 1fr) repeat(3, auto); align-items: center; gap: 10px; border: 1px solid #e7edf2; border-radius: 8px; }
+.performance-phase-list strong { color: #34495f; font-size: 9px; }
+.performance-phase-list span { display: flex; align-items: center; gap: 4px; color: #728195; font-size: 8px; }
+.performance-phase-list svg { width: 13px; height: 13px; color: #5b83ae; }
+.performance-no-data { padding: 18px; color: #8b97a6; font-size: 10px; text-align: center; }
+.performance-empty { min-height: 330px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #8a98a8; text-align: center; }
+.performance-empty strong { color: #4a5e73; font-size: 13px; }
+.performance-empty p { max-width: 360px; margin: 0; font-size: 10px; }
+
+@media (max-width: 1100px) {
+  .performance-layout { grid-template-columns: 210px minmax(0, 1fr); }
+  .performance-secondary-grid { grid-template-columns: 1fr; }
+  .performance-stat-row { grid-template-columns: 90px repeat(4, minmax(64px, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .performance-live { grid-template-columns: auto 1fr; }
+  .performance-live-values { grid-column: 2; }
+  .performance-layout { grid-template-columns: 1fr; }
+  .performance-report-list { position: static; }
+  .performance-report-list-body { max-height: 260px; }
+  .performance-detail-header { align-items: flex-start; flex-direction: column; }
+  .performance-actions { justify-content: flex-start; }
+  .performance-stat-row { padding: 9px 0; grid-template-columns: 1fr 1fr; }
+  .performance-stat-row > strong { grid-column: 1 / -1; }
+  .performance-core-grid { grid-template-columns: 1fr; }
+  .performance-phase-list > div { grid-template-columns: 1fr 1fr; }
+  .performance-phase-list strong { grid-column: 1 / -1; }
+}
+
 .settings-page { min-height: 100vh; padding: 28px 34px 40px; }
 .help-page { max-width: 1480px; margin: 0 auto; }
 .help-quick-start { margin-bottom: 16px; padding: 18px; background: linear-gradient(135deg, #173f70, #1769c9); border-radius: 13px; box-shadow: 0 8px 24px rgba(20,63,112,.16); }
