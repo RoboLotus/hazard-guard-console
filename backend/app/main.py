@@ -79,7 +79,7 @@ def system_mode_status() -> dict:
             pose_fresh = False
 
     patrol_process_ready = (
-        status.get("mode") == "patrol"
+        status.get("mode") in {"patrol", "rgbd_mapping"}
         and status.get("state") in {"running", "external"}
     )
     readiness = {
@@ -91,7 +91,7 @@ def system_mode_status() -> dict:
     navigation_ready = patrol_process_ready and all(readiness.values())
     if navigation_ready:
         readiness_message = "AMCL 위치 추정과 Nav2 주행 서버가 준비되었습니다."
-    elif status.get("mode") != "patrol":
+    elif status.get("mode") not in {"patrol", "rgbd_mapping"}:
         readiness_message = "순찰 모드가 선택되지 않았습니다."
     elif status.get("state") not in {"running", "external"}:
         readiness_message = "순찰 모드 프로세스를 시작하고 있습니다."
@@ -107,7 +107,10 @@ def system_mode_status() -> dict:
     return {
         **status,
         "rtabmap": {
-            "enabled": status.get("mapping_profile") == "toolbox_rtabmap",
+            "enabled": (
+                status.get("mode") == "rgbd_mapping"
+                or status.get("mapping_profile") == "toolbox_rtabmap"
+            ),
             "live": cloud_live,
             "point_count": int(cloud_status.get("point_count") or 0),
             "color_available": bool(cloud_status.get("color_available")),
@@ -121,17 +124,17 @@ def system_mode_status() -> dict:
 
 
 def require_patrol_mode() -> None:
-    """Reject motion requests while the managed ROS stack is not in patrol mode."""
+    """Allow Nav2 requests only in saved-map localization modes."""
 
     status = system_mode_status()
     if not status.get("control_enabled"):
         return
-    if status.get("mode") != "patrol":
+    if status.get("mode") not in {"patrol", "rgbd_mapping"}:
         raise HTTPException(
             status_code=409,
             detail=(
-                "맵 생성 모드에서는 순찰 명령을 실행할 수 없습니다. "
-                "지도 탭에서 순찰 / AMCL·Nav2 모드로 전환하세요."
+                "2D 맵 생성 모드에서는 Nav2 명령을 실행할 수 없습니다. "
+                "지도 탭에서 3D 수집 또는 순찰 모드로 전환하세요."
             ),
         )
     if not status.get("navigation_ready"):
@@ -149,8 +152,8 @@ def simulation_teleop_readiness() -> tuple[bool, str]:
         return False, "실물 로봇에서는 안전을 위해 WebUI 가상 조작기를 사용할 수 없습니다."
     if not status.get("control_enabled"):
         return False, "WebUI 시뮬레이션 제어가 비활성화되어 있습니다."
-    if status.get("mode") not in {"mapping", "patrol"}:
-        return False, "가상 조작은 맵 생성 또는 순찰 모드에서만 사용할 수 있습니다."
+    if status.get("mode") not in {"mapping", "rgbd_mapping", "patrol"}:
+        return False, "가상 조작은 지도 작성·3D 수집·순찰 모드에서만 사용할 수 있습니다."
     if status.get("state") != "running" or not status.get("managed"):
         return False, "WebUI에서 시작한 SLAM 맵 생성 프로세스가 준비되지 않았습니다."
     if (
@@ -191,7 +194,7 @@ def update_system_mode(request: SystemModeRequest):
     ros_bridge.cancel_route()
     ros_bridge.cancel_navigation()
     ros_bridge.stop_motion()
-    if request.mode == "patrol":
+    if request.mode in {"patrol", "rgbd_mapping"}:
         current_pose = spatial_store.snapshot().get("pose") or {}
         if current_pose.get("available") and not current_pose.get("mock"):
             system_mode_manager.set_localization_pose(current_pose)
@@ -213,7 +216,7 @@ def update_system_mode(request: SystemModeRequest):
         spatial_store.reset_for_mapping(
             f"{result.get('active_world_id', 'world')}:{session_id}"
         )
-    elif request.mode == "patrol":
+    elif request.mode in {"patrol", "rgbd_mapping"}:
         spatial_store.reset_for_localization()
     return result
 
@@ -221,13 +224,15 @@ def update_system_mode(request: SystemModeRequest):
 @app.post("/api/v1/system/localization/initialize")
 def initialize_localization(request: LocalizationPoseRequest):
     status = system_mode_status()
-    if status.get("mode") != "patrol" or status.get("state") not in {
+    if status.get("mode") not in {"patrol", "rgbd_mapping"} or status.get(
+        "state"
+    ) not in {
         "running",
         "external",
     }:
         raise HTTPException(
             status_code=409,
-            detail="순찰 모드가 실행 중일 때만 AMCL 초기 위치를 적용할 수 있습니다.",
+            detail="저장 지도 기반 모드가 실행 중일 때만 AMCL 초기 위치를 적용할 수 있습니다.",
         )
     system_mode_manager.set_localization_pose(request.model_dump())
     spatial_store.reset_for_localization()
@@ -535,12 +540,13 @@ async def simulation_teleop(websocket: WebSocket):
                     }
                 )
                 continue
-            # In patrol mode Nav2 publishes to the same /cmd_vel. Hand the wheel
+            # Saved-map modes run Nav2 on the same /cmd_vel. Hand the wheel
             # over on the first key press instead of letting the two fight.
             if (
                 direction != "stop"
                 and not moving
-                and system_mode_status().get("mode") == "patrol"
+                and system_mode_status().get("mode")
+                in {"patrol", "rgbd_mapping"}
             ):
                 ros_bridge.cancel_route()
                 ros_bridge.cancel_navigation()

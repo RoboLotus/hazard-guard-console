@@ -138,14 +138,15 @@ export default function HelpPage({ onNavigate }) {
             </div>
           </HelpSection>
 
-          <HelpSection id="mapping" icon={MapTrifold} eyebrow="02 · SLAM" title="새 2D·3D 지도 세션 만들기">
+          <HelpSection id="mapping" icon={MapTrifold} eyebrow="02 · SLAM" title="2D 완성 후 RGB-D 3D 지도 만들기">
             <StepList>
               <li><strong>지도 탭</strong>에서 기존 운용 모드가 정지 상태인지 확인합니다.</li>
               <li>시뮬레이션에서는 <strong>시뮬레이션 환경·지도</strong>에서 시험 환경을 선택합니다. 실물에서는 <strong>현장 지도 세션</strong>이 표시됩니다.</li>
-              <li><strong>지도 생성 방식</strong>에서 빠른 2D 표준 또는 2D + RGB-D 3D 수집을 선택합니다.</li>
-              <li><strong>새 맵 생성</strong>을 선택합니다. 실행 중으로 바뀌면 선택한 배포 대상의 SLAM Toolbox가 준비된 상태입니다.</li>
+              <li><strong>1단계 · 2D 지도 작성</strong>을 선택합니다. 실행 중으로 바뀌면 SLAM Toolbox가 빈 세션에서 지도를 작성합니다.</li>
               <li>시뮬레이션은 <strong>가상 조작기</strong>의 버튼 또는 방향키/WASD를 사용하고, 실물 M1은 동봉 조이스틱으로 이동합니다.</li>
-              <li>작성이 끝나면 계속 수집할 경우 <strong>현재 SLAM 지도 저장</strong>, 작업을 마칠 경우 <strong>지도 저장 후 종료</strong>를 누릅니다.</li>
+              <li>2D 작성이 끝나면 <strong>현재 2D SLAM 지도 저장</strong> 또는 <strong>지도 저장 후 종료</strong>를 누르고 저장 결과를 순찰 지도로 지정합니다.</li>
+              <li><strong>2단계 · RGB-D 3D 수집</strong>을 선택하고 같은 공간을 한 번 더 주행합니다. 이 단계는 저장된 2D 지도에서 AMCL·Nav2로 위치를 추정합니다.</li>
+              <li>수집이 끝나면 <strong>3D 수집 종료 및 DB 저장</strong>을 눌러 RTAB-Map DB를 안전하게 닫습니다.</li>
             </StepList>
             <div className="help-callout info">
               <Keyboard size={20} weight="fill" />
@@ -161,7 +162,7 @@ export default function HelpPage({ onNavigate }) {
             </div>
             <div className="help-callout neutral">
               <Cube size={20} weight="fill" />
-              <div><strong>2D + RGB-D 3D 프로파일</strong><p>SLAM Toolbox가 Nav2용 2D 지도와 기준 좌표를 담당하고, RTAB-Map은 별도 토픽과 데이터베이스에 RGB-D 3D 정보를 저장합니다.</p></div>
+              <div><strong>2D와 3D는 같은 세션의 서로 다른 주행 단계입니다.</strong><p>첫 주행에서 SLAM Toolbox가 2D 지도를 완성하고, 두 번째 주행에서는 저장 지도 localization이 좌표를 담당합니다. RTAB-Map은 map→odom을 발행하거나 ICP·loop closure로 별도 주행 좌표를 만들지 않고 RGB-D 기록만 담당합니다.</p></div>
             </div>
             <div className="help-callout warning">
               <WarningCircle size={20} weight="fill" />
@@ -200,7 +201,7 @@ export default function HelpPage({ onNavigate }) {
             </StepList>
             <div className="help-callout info">
               <FloppyDisk size={20} weight="fill" />
-              <div><strong>3D 결과를 다시 열려면 먼저 수집을 종료하세요.</strong><p>실행 중 데이터베이스를 안전하게 내보내기 위해 <strong>지도 저장 후 종료</strong>를 사용합니다. 최초 PLY 생성은 데이터 크기에 따라 시간이 걸릴 수 있습니다.</p></div>
+              <div><strong>3D 결과를 다시 열려면 먼저 수집을 종료하세요.</strong><p>실행 중 데이터베이스를 안전하게 내보내기 위해 <strong>3D 수집 종료 및 DB 저장</strong>을 사용합니다. 최초 PLY 생성은 데이터 크기에 따라 시간이 걸릴 수 있습니다.</p></div>
             </div>
             <div className="help-callout neutral">
               <Archive size={20} weight="fill" />
@@ -286,7 +287,7 @@ export default function HelpPage({ onNavigate }) {
               </details>
               <details>
                 <summary>저장된 3D 지도가 열리지 않거나 PLY 다운로드가 실패합니다.</summary>
-                <p>해당 세션이 <strong>2D + RGB-D 3D</strong> 방식으로 생성되어 RTAB-Map DB를 가지고 있는지 확인합니다. 라이브 수집 중이면 지도 저장 후 종료한 뒤 다시 시도하고, 백엔드 환경에 <code>rtabmap-export</code>가 설치되어 있는지도 확인합니다.</p>
+                <p>해당 2D 세션에서 <strong>2단계 · RGB-D 3D 수집</strong>을 실행해 RTAB-Map DB가 생성됐는지 확인합니다. 라이브 수집 중이면 3D 수집 종료 후 다시 시도하고, 백엔드 환경에 <code>rtabmap-export</code>가 설치되어 있는지도 확인합니다.</p>
               </details>
               <details>
                 <summary>센서 진단이 모두 데이터 대기로 표시됩니다.</summary>

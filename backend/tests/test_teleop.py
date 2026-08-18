@@ -65,7 +65,7 @@ def test_teleop_websocket_rejects_idle_mode(monkeypatch):
     with client.websocket_connect("/ws/teleop") as websocket:
         response = websocket.receive_json()
         assert response["accepted"] is False
-        assert "맵 생성 또는 순찰 모드" in response["message"]
+        assert "지도 작성·3D 수집·순찰 모드" in response["message"]
 
 
 def test_teleop_in_patrol_takes_the_wheel_from_nav2(monkeypatch):

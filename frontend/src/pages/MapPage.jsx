@@ -59,6 +59,7 @@ export default function MapPage({
   onSystemModeUpdate,
   onSaveSystemMap,
   onSaveAndStop,
+  onStopSystemMode,
   notify,
 }) {
   const [goalMode, setGoalMode] = useState(false);
@@ -119,7 +120,9 @@ export default function MapPage({
     && savedMapSignature
     && savedMapSignature !== currentMapSignature,
   );
-  const patrolModeSelected = systemMode?.mode === "patrol";
+  const patrolModeSelected = ["patrol", "rgbd_mapping"].includes(
+    systemMode?.mode,
+  );
   const patrolModeReady = Boolean(systemMode?.navigation_ready);
   const modeTransitioning = ["starting", "stopping"].includes(systemMode?.state);
   const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
@@ -524,6 +527,7 @@ export default function MapPage({
             onSystemModeUpdate={onSystemModeUpdate}
             onSaveSystemMap={onSaveSystemMap}
             onSaveAndStop={onSaveAndStop}
+            onStopSystemMode={onStopSystemMode}
             onSaveImage={saveMapImage}
             selected3dSession={selected3dSession}
             onSelect3dSession={(session) => {

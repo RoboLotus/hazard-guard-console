@@ -213,7 +213,8 @@ export default function SimulationTeleop({ systemMode }) {
       </div>
       <small>
         버튼 또는 방향키/WASD를 누르고 있는 동안만 이동 · Space 정지
-        {systemMode?.mode === "patrol" && " · 조작을 시작하면 진행 중인 순찰이 취소됩니다"}
+        {["patrol", "rgbd_mapping"].includes(systemMode?.mode)
+          && " · 조작을 시작하면 진행 중인 Nav2 임무가 취소됩니다"}
       </small>
     </section>
   );

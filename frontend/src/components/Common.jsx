@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   CaretDown,
   Clock,
+  Cube,
   MapTrifold,
   NavigationArrow,
   Robot,
@@ -122,6 +123,7 @@ export function CurrentTime() {
 
 export const systemModeLabels = {
   mapping: "맵 생성 모드",
+  rgbd_mapping: "3D 지도 수집 모드",
   patrol: "순찰 모드",
   idle: "모드 미선택",
 };
@@ -142,7 +144,7 @@ export function SystemModeControl({ systemMode, busy, onChange, onInitializeLoca
   const controlEnabled = Boolean(systemMode?.control_enabled);
   const navigationReady = Boolean(systemMode?.navigation_ready);
   const navigationPreparing = (
-    mode === "patrol"
+    ["patrol", "rgbd_mapping"].includes(mode)
     && ["running", "external"].includes(state)
     && !navigationReady
   );
@@ -158,13 +160,8 @@ export function SystemModeControl({ systemMode, busy, onChange, onInitializeLoca
     : systemStateLabels[state] || state;
   const activeMappingProfile = systemMode?.mapping_profile || "toolbox";
   const physicalTarget = systemMode?.deployment_target === "physical";
-  const [mappingProfile, setMappingProfile] = useState(activeMappingProfile);
   const activePatrolSlam = Boolean(systemMode?.patrol_slam);
   const [patrolSlam, setPatrolSlam] = useState(activePatrolSlam);
-
-  useEffect(() => {
-    setMappingProfile(activeMappingProfile);
-  }, [activeMappingProfile]);
 
   useEffect(() => {
     setPatrolSlam(activePatrolSlam);
@@ -185,37 +182,32 @@ export function SystemModeControl({ systemMode, busy, onChange, onInitializeLoca
             : "회차별 새 세션에서 공간을 수동 주행하며 지도를 작성합니다."
           : mode === "patrol"
             ? "저장된 지도에서 위치를 추정하고 웨이포인트를 순찰합니다."
+            : mode === "rgbd_mapping"
+              ? "완성된 2D 지도에서 위치를 추정하며 RGB-D 3D 정보를 두 번째 주행으로 누적합니다."
             : "작업 목적에 맞는 모드를 선택하세요."}
       </p>
-      <fieldset className="mapping-profile-selector" disabled={!controlEnabled || changing}>
-        <legend>지도 생성 방식</legend>
-        <button
-          type="button"
-          className={mappingProfile === "toolbox" ? "active" : ""}
-          aria-pressed={mappingProfile === "toolbox"}
-          onClick={() => setMappingProfile("toolbox")}
-        >
-          <span>2D 표준<strong>SLAM Toolbox</strong></span>
-        </button>
-        <button
-          type="button"
-          className={mappingProfile === "toolbox_rtabmap" ? "active" : ""}
-          aria-pressed={mappingProfile === "toolbox_rtabmap"}
-          onClick={() => setMappingProfile("toolbox_rtabmap")}
-        >
-          <span>2D + RGB-D 3D<strong>Toolbox + RTAB-Map</strong></span>
-        </button>
-      </fieldset>
+      <p className="mapping-workflow-label">2단계 지도 제작 흐름</p>
       <div className="system-mode-buttons">
         <button
           type="button"
           className={mode === "mapping" ? "active" : ""}
           disabled={unavailable}
           aria-pressed={mode === "mapping"}
-          onClick={() => onChange("mapping", mappingProfile)}
+          onClick={() => onChange("mapping", "toolbox")}
         >
           <MapTrifold size={18} weight={mode === "mapping" ? "fill" : "regular"} />
-          <span>새 맵 생성<small>SLAM 세션</small></span>
+          <span>1단계 · 2D 지도 작성<small>SLAM Toolbox · 새 세션</small></span>
+        </button>
+        <button
+          type="button"
+          className={mode === "rgbd_mapping" ? "active" : ""}
+          disabled={unavailable || (!systemMode?.map_available && mode !== "mapping")}
+          aria-pressed={mode === "rgbd_mapping"}
+          onClick={() => onChange("rgbd_mapping", "toolbox")}
+          title={systemMode?.map_available || mode === "mapping" ? "2D 지도를 저장하고 3D 수집 시작" : "2D 지도를 먼저 저장하세요"}
+        >
+          <Cube size={18} weight={mode === "rgbd_mapping" ? "fill" : "regular"} />
+          <span>2단계 · RGB-D 3D 수집<small>저장 2D 지도 · RTAB-Map 기록</small></span>
         </button>
         <button
           type="button"
@@ -225,7 +217,7 @@ export function SystemModeControl({ systemMode, busy, onChange, onInitializeLoca
           onClick={() => onChange("patrol", activeMappingProfile, patrolSlam)}
         >
           <NavigationArrow size={18} weight={mode === "patrol" ? "fill" : "regular"} />
-          <span>순찰<small>{patrolSlam ? "SLAM · Nav2" : "AMCL · Nav2"}</small></span>
+          <span>운용 · 순찰<small>{patrolSlam ? "SLAM · Nav2" : "AMCL · Nav2"}</small></span>
         </button>
       </div>
       {!physicalTarget && (
@@ -254,7 +246,7 @@ export function SystemModeControl({ systemMode, busy, onChange, onInitializeLoca
       ) : (
         <SimulationTeleop systemMode={systemMode} />
       )}
-      {mode === "mapping" && activeMappingProfile === "toolbox_rtabmap" && (
+      {mode === "rgbd_mapping" && (
         <div className={`rtabmap-session-status ${systemMode?.rtabmap?.live ? "live" : "waiting"}`}>
           <span />
           <strong>{systemMode?.rtabmap?.live ? "3D 수집 중" : "RGB-D 데이터 대기"}</strong>

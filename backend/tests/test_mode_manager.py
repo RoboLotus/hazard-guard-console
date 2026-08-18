@@ -20,6 +20,88 @@ def test_patrol_mode_requires_saved_map(monkeypatch, tmp_path):
     assert "저장 지도" in result["message"]
 
 
+def _create_saved_session(manager):
+    session = manager._world_catalog.begin_session("facility_map", "toolbox")
+    session["map_path"].write_text(
+        "image: map.pgm\nresolution: 0.05\n",
+        encoding="utf-8",
+    )
+    (session["directory"] / "map.pgm").write_bytes(b"P5\n1 1\n255\n\xff")
+    manager._world_catalog.update_session(
+        session["id"],
+        "facility_map",
+        status="saved",
+    )
+    assert manager.select_map("facility_map", session["id"])["accepted"]
+    return session
+
+
+def test_rgbd_mapping_requires_an_activated_saved_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: None)
+
+    result = manager.switch_mode("rgbd_mapping")
+
+    assert result["accepted"] is False
+    assert "2D 지도" in result["message"]
+
+
+def test_rgbd_mapping_reuses_saved_session_and_dedicated_launch(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: None)
+    monkeypatch.setattr(manager, "_ensure_simulation", lambda: True)
+    session = _create_saved_session(manager)
+
+    class FakeProcess:
+        pid = 456
+
+        @staticmethod
+        def poll():
+            return None
+
+    class NoopThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    launched = {}
+    monkeypatch.setattr(
+        manager._process_controller,
+        "start_logged",
+        lambda command, _log_path: launched.setdefault("command", command)
+        and FakeProcess(),
+    )
+    monkeypatch.setattr("app.mode_manager.threading.Thread", NoopThread)
+
+    result = manager.switch_mode("rgbd_mapping")
+    sessions = manager._world_catalog.sessions("facility_map")
+
+    assert result["accepted"] is True
+    assert result["rgbd_session_id"] == session["id"]
+    assert len(sessions) == 1
+    assert sessions[0]["rgbd_status"] == "collecting"
+    assert launched["command"][:4] == [
+        "ros2",
+        "launch",
+        "hazard_guard_simulation",
+        "rgbd_mapping.launch.py",
+    ]
+    assert f"map:={session['map_path']}" in launched["command"]
+    assert any(
+        item.startswith("rtabmap_database_path:=")
+        for item in launched["command"]
+    )
+
+
 def test_saved_map_requires_yaml_and_referenced_image(monkeypatch, tmp_path):
     map_dir = tmp_path / "runtime" / "maps"
     map_dir.mkdir(parents=True)

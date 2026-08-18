@@ -40,6 +40,7 @@ export default function SimulationMapManager({
   onSystemModeUpdate,
   onSaveSystemMap,
   onSaveAndStop,
+  onStopSystemMode,
   onSaveImage,
   onSelect3dSession,
   selected3dSession,
@@ -67,6 +68,7 @@ export default function SimulationMapManager({
   // Both modes that run SLAM Toolbox have a live /map worth storing; plain
   // AMCL patrol would only re-dump the map it was started from.
   const mapping = systemMode?.mode === "mapping" || Boolean(systemMode?.patrol_slam);
+  const rgbdCollecting = systemMode?.mode === "rgbd_mapping";
   const externalSimulation = !physicalTarget
     && systemMode?.simulation_state === "external"
     && !systemMode?.simulation_managed;
@@ -197,6 +199,17 @@ export default function SimulationMapManager({
     setBusy(true);
     try {
       const result = await onSaveAndStop();
+      if (result) await refreshSessions(activeWorldId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopRgbdCollection = async () => {
+    if (!window.confirm("현재 RGB-D 3D 수집을 종료하고 데이터베이스를 닫을까요?")) return;
+    setBusy(true);
+    try {
+      const result = await onStopSystemMode();
       if (result) await refreshSessions(activeWorldId);
     } finally {
       setBusy(false);
@@ -348,7 +361,7 @@ export default function SimulationMapManager({
             {visibleSessions.filter((session) => session.available).map((session) => (
               <option key={session.id} value={session.id}>
                 {session.name || formatSessionTime(session.created_at)}
-                {session.mapping_profile === "toolbox_rtabmap" ? " · 2D+3D" : " · 2D"}
+                {session.rtabmap_available ? " · 2D+3D" : " · 2D"}
                 {session.archived ? " · 보관" : ""}
                 {session.active ? " · 사용 중" : ""}
               </option>
@@ -366,11 +379,13 @@ export default function SimulationMapManager({
         {selectedSession && (
           <div className={`map-session-detail ${selectedSession.rtabmap_available ? "has-3d" : ""} ${selectedSession.archived ? "archived" : ""}`}>
             <div>
-              <span>{selectedSession.mapping_profile === "toolbox_rtabmap" ? "Toolbox + RTAB-Map" : "SLAM Toolbox"}</span>
+              <span>{selectedSession.rtabmap_available ? "2D Toolbox + RGB-D 수집" : "2D SLAM Toolbox"}</span>
               <small>
                 {selectedSession.rtabmap_available
                   ? `3D DB ${formatBytes(selectedSession.rtabmap_database_bytes)}${selectedSession.cloud_available ? ` · PLY ${formatBytes(selectedSession.cloud_bytes)}` : ""}`
-                  : "2D 지도 저장 결과"}
+                  : selectedSession.rgbd_status === "collecting"
+                    ? "RGB-D 3D 데이터 수집 중"
+                    : "2D 지도 저장 결과 · 3D 수집 가능"}
               </small>
             </div>
             <div className="map-session-actions">
@@ -414,7 +429,7 @@ export default function SimulationMapManager({
           disabled={busy || !mapping || !systemMode?.control_enabled}
         >
           <FloppyDisk size={18} />
-          {systemMode?.mapping_profile === "toolbox_rtabmap" ? "현재 2D + 3D 세션 저장" : "현재 SLAM 지도 저장"}
+          현재 2D SLAM 지도 저장
         </button>
         <button
           type="button"
@@ -424,13 +439,25 @@ export default function SimulationMapManager({
         >
           <Stop size={18} />지도 저장 후 종료
         </button>
+        {rgbdCollecting && (
+          <button
+            type="button"
+            className="button secondary wide-button"
+            onClick={stopRgbdCollection}
+            disabled={busy || !systemMode?.control_enabled}
+          >
+            <Stop size={18} />3D 수집 종료 및 DB 저장
+          </button>
+        )}
         <button type="button" className="button ghost wide-button" onClick={onSaveImage}>
           <DownloadSimple size={18} />현재 화면 PNG 저장
         </button>
       </div>
       <p className={`map-storage-status ${systemMode?.map_available ? "available" : ""}`}>
         {mapping
-          ? `${systemMode?.mapping_profile === "toolbox_rtabmap" ? "2D + 3D" : "2D"} 새 SLAM 세션 ${systemMode?.mapping_session_id || "준비 중"}`
+          ? `2D 새 SLAM 세션 ${systemMode?.mapping_session_id || "준비 중"}`
+          : rgbdCollecting
+            ? `저장 2D 세션 ${systemMode?.rgbd_session_id || "확인 중"}에 RGB-D 3D 데이터를 누적하고 있습니다.`
           : systemMode?.map_available
             ? physicalTarget
               ? "실물 로봇 AMCL·Nav2 순찰에 사용할 지도가 준비되었습니다."
