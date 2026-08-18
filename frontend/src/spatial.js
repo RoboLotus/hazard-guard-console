@@ -246,19 +246,27 @@ export function thermalDetectionsToEvents(detections = []) {
       const reason = detection.trend_reason
         || String(detection.source || "").split(":")[3]
         || "";
-      const trendLabel = status === "critical"
-        ? "즉시 고온 위험"
-        : reason === "persistent_trend_and_environment_adjusted_anomaly"
-          ? "장기 상승 추세 경고"
-          : reason === "persistent_trend_only"
-            ? "장기 상승 추세 관찰"
-            : reason === "environment_adjusted_anomaly_only"
-              ? "환경 대비 온도 이상 관찰"
-              : status === "warning"
-                ? "장기 상승 추세 경고"
-                : status === "watch"
-                  ? "온도 이상 관찰"
-                  : "온도 임계값 초과";
+      const configurationWatch = reason === "baseline_required_not_configured";
+      const reasonLabels = {
+        baseline_required_not_configured: "설비 정상 기준값 미설정",
+        persistent_trend_and_baseline_residual: "장기 상승·기준선 이탈 경고",
+        persistent_trend_and_environment_adjusted_anomaly: "장기 상승 추세 경고",
+        persistent_trend_only: "장기 상승 추세 관찰",
+        environment_adjusted_anomaly_only: "환경 대비 온도 이상 관찰",
+        warning_approved_baseline_delta: "승인 기준선 대비 온도 상승 경고",
+        critical_approved_baseline_delta: "승인 기준선 대비 고온 위험",
+        watch_baseline_delta_pending_confirmation: "기준선 이탈 재확인 필요",
+        baseline_critical_candidate_requires_corroboration: "고온 후보 교차 확인 필요",
+        surface_screening_requires_direct_sensor_confirmation: "직접 온도 센서 확인 필요",
+      };
+      const trendLabel = reasonLabels[reason]
+        || (status === "critical"
+          ? "즉시 고온 위험"
+          : status === "warning"
+            ? "온도 상승 경고"
+            : status === "watch"
+              ? "온도 이상 관찰"
+              : "온도 임계값 초과");
       const baseDetectionId = detection.detection_id
         || `thermal-${detection.equipment_id || `${x}-${y}`}`;
       const detectionId = detection.visit_index == null
@@ -270,16 +278,20 @@ export function thermalDetectionsToEvents(detections = []) {
         code: `THERM-${String(detection.equipment_id || detectionId).toUpperCase()}`,
         level,
         status: "new",
-        title: critical
-          ? "고온 위험 감지"
-          : level === "warning"
-            ? "온도 상승 경고"
-            : "온도 이상 관찰",
+        title: configurationWatch
+          ? "설비 기준값 설정 필요"
+          : critical
+            ? "고온 위험 감지"
+            : level === "warning"
+              ? "온도 상승 경고"
+              : "온도 이상 관찰",
         ...timestamp,
         location: `${label} · ${coordinate}`,
         temperature: Number.isFinite(temperature) ? `${temperature.toFixed(1)}°C` : null,
         threshold: trendLabel,
-        detail: `${label}에서 ${trendLabel} 판정이 발생했습니다.`,
+        detail: configurationWatch
+          ? `${label}의 정상 운전 기준값을 등록해야 온도 판정을 시작할 수 있습니다.`
+          : `${label}에서 ${trendLabel} 판정이 발생했습니다.`,
         acknowledged: false,
         assignee: "미지정",
         note: detection.simulated

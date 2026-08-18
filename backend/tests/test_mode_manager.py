@@ -296,6 +296,12 @@ def test_physical_patrol_passes_opt_in_perception_settings(
     monkeypatch.setenv("HAZARD_GUARD_PERSON_DEVICE", "0")
     monkeypatch.setenv("HAZARD_GUARD_PERSON_DEPTH_REGISTERED", "true")
     monkeypatch.setenv("HAZARD_GUARD_THERMAL_PIPELINE_ENABLED", "yes")
+    monkeypatch.setenv(
+        "HAZARD_GUARD_THERMAL_BASELINE_PATH", "/data/motor-baseline.json"
+    )
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_AIR_TOPIC", "/sensors/air")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_OIL_TOPIC", "/sensors/oil")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_SENSOR_TIMEOUT_SEC", "8.0")
     monkeypatch.setenv("HAZARD_GUARD_THERMAL_SCALE", "0.01")
     monkeypatch.setenv("HAZARD_GUARD_THERMAL_OFFSET_C", "-273.15")
     manager = SystemModeManager()
@@ -307,6 +313,10 @@ def test_physical_patrol_passes_opt_in_perception_settings(
     assert "person_device:=0" in command
     assert "person_depth_registration_verified:=true" in command
     assert "enable_thermal_pipeline:=true" in command
+    assert "thermal_baseline_path:=/data/motor-baseline.json" in command
+    assert "thermal_air_temperature_topic:=/sensors/air" in command
+    assert "thermal_oil_temperature_topic:=/sensors/oil" in command
+    assert "thermal_sensor_timeout_sec:=8.0" in command
     assert "thermal_scale:=0.01" in command
     assert "thermal_offset_c:=-273.15" in command
 

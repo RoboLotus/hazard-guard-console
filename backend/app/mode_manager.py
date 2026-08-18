@@ -719,9 +719,21 @@ class SystemModeManager:
             "thermal_roi_config": os.getenv(
                 "HAZARD_GUARD_THERMAL_ROI_CONFIG", ""
             ),
+            "thermal_baseline_path": os.getenv(
+                "HAZARD_GUARD_THERMAL_BASELINE_PATH", ""
+            ),
             "thermal_history_path": os.getenv(
                 "HAZARD_GUARD_THERMAL_HISTORY_PATH",
                 "~/.local/share/hazard_guard/thermal_history.jsonl",
+            ),
+            "thermal_air_temperature_topic": os.getenv(
+                "HAZARD_GUARD_THERMAL_AIR_TOPIC", ""
+            ),
+            "thermal_oil_temperature_topic": os.getenv(
+                "HAZARD_GUARD_THERMAL_OIL_TOPIC", ""
+            ),
+            "thermal_sensor_timeout_sec": os.getenv(
+                "HAZARD_GUARD_THERMAL_SENSOR_TIMEOUT_SEC", "5.0"
             ),
             "thermal_image_topic": os.getenv(
                 "HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"
