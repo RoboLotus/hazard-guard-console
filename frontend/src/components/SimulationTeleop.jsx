@@ -9,6 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   isEditableKeyboardTarget,
+  isSimulationTeleopMode,
   teleopDirectionForKey,
 } from "../teleop.js";
 
@@ -28,7 +29,7 @@ export default function SimulationTeleop({ systemMode }) {
   const activeDirectionRef = useRef("stop");
   const pressedKeyRef = useRef(null);
 
-  const driveSelected = ["mapping", "patrol"].includes(systemMode?.mode);
+  const driveSelected = isSimulationTeleopMode(systemMode?.mode);
   const simulatorReady = Boolean(
     driveSelected
     && systemMode?.state === "running"

@@ -188,3 +188,36 @@ test("keeps repeated patrol events distinct after the history window", () => {
     ],
   );
 });
+
+test("shows a missing production baseline as a configuration watch", () => {
+  const [event] = thermalDetectionsToEvents([{
+    detection_id: "thermal-primary_shredder_motor",
+    equipment_id: "primary_shredder_motor",
+    frame_id: "map",
+    x: 0.2,
+    y: 0.4,
+    temperature_c: 200,
+    trend_status: "watch",
+    trend_reason: "baseline_required_not_configured",
+    updated_at: "2026-08-18T00:00:00Z",
+  }]);
+
+  assert.equal(event.threshold, "설비 정상 기준값 미설정");
+  assert.equal(event.title, "설비 기준값 설정 필요");
+});
+
+test("shows the baseline residual reason from the patrol trend policy", () => {
+  const [event] = thermalDetectionsToEvents([{
+    detection_id: "thermal-primary_shredder_motor",
+    equipment_id: "primary_shredder_motor",
+    frame_id: "map",
+    x: 0.2,
+    y: 0.4,
+    temperature_c: 74,
+    trend_status: "warning",
+    trend_reason: "persistent_trend_and_baseline_residual",
+    updated_at: "2026-08-18T00:00:00Z",
+  }]);
+
+  assert.equal(event.threshold, "장기 상승·기준선 이탈 경고");
+});

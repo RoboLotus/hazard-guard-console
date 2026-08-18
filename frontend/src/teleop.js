@@ -14,6 +14,10 @@ export function teleopDirectionForKey(code) {
   return TELEOP_KEY_DIRECTIONS[code] || null;
 }
 
+export function isSimulationTeleopMode(mode) {
+  return ["mapping", "rgbd_mapping", "patrol"].includes(mode);
+}
+
 export function isEditableKeyboardTarget(target) {
   const tagName = target?.tagName?.toLowerCase();
   return Boolean(
