@@ -27,6 +27,7 @@ from .models import (
     MapSessionUpdate,
     NavigationGoal,
     NavigationRoute,
+    PerformanceReportUpdate,
     RobotTelemetry,
     SystemModeRequest,
     ThermalDetection,
@@ -34,6 +35,7 @@ from .models import (
     WorldSelectionRequest,
 )
 from .settings_store import ThresholdSettingsStore
+from .performance_reports import PerformanceReportStore
 
 
 @asynccontextmanager
@@ -58,6 +60,7 @@ app.add_middleware(
 )
 
 threshold_store = ThresholdSettingsStore()
+performance_report_store = PerformanceReportStore()
 
 
 def system_mode_status() -> dict:
@@ -360,6 +363,55 @@ def thermal_cloud_status():
 @app.get("/api/v1/system/sensors")
 def sensor_diagnostics():
     return sensor_diagnostics_store.snapshot(ros_active=ros_bridge.active)
+
+
+@app.get("/api/v1/performance/reports")
+def performance_reports():
+    return performance_report_store.list()
+
+
+@app.get("/api/v1/performance/reports/{report_id}")
+def performance_report(report_id: str):
+    try:
+        return performance_report_store.get(report_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="성능 리포트를 찾을 수 없습니다.")
+
+
+@app.patch("/api/v1/performance/reports/{report_id}")
+def rename_performance_report(report_id: str, request: PerformanceReportUpdate):
+    try:
+        return performance_report_store.rename(report_id, request.name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="성능 리포트를 찾을 수 없습니다.")
+
+
+@app.delete("/api/v1/performance/reports/{report_id}")
+def delete_performance_report(report_id: str, confirm: bool = False):
+    if not confirm:
+        raise HTTPException(status_code=409, detail="삭제 확인이 필요합니다.")
+    try:
+        return performance_report_store.delete(report_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="성능 리포트를 찾을 수 없습니다.")
+
+
+@app.get("/api/v1/performance/reports/{report_id}/download")
+def download_performance_report(report_id: str, format: str = "csv"):
+    try:
+        path, media_type = performance_report_store.download(report_id, format)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="성능 리포트를 찾을 수 없습니다.")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="지원하지 않는 리포트 형식입니다.")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="리포트 파일이 없습니다.")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=path.name,
+        content_disposition_type="attachment",
+    )
 
 
 @app.post("/api/v1/spatial/detections")

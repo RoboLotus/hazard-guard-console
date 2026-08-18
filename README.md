@@ -40,6 +40,29 @@ npm run dev
 브라우저에서 `http://127.0.0.1:5173/`을 엽니다. Vite 개발 서버는 `/api`와
 `/ws` 요청을 `http://127.0.0.1:8000`으로 전달합니다.
 
+### 순찰 성능 리포트 경로
+
+`리포트` 탭은 Robot의 성능 모니터가 생성한 순찰별 CPU·GPU·RAM 보고서를
+읽습니다. Robot과 FastAPI를 같은 Jetson 사용자로 실행하면 기본 경로를 자동으로
+공유합니다.
+
+```text
+~/.local/share/hazard-guard/performance
+```
+
+Docker, 다른 사용자 또는 별도 저장장치를 사용할 때는 Robot launch와 FastAPI에
+동일한 경로를 지정해야 합니다.
+
+```bash
+export HAZARD_GUARD_PERFORMANCE_DIR=/data/hazard-guard/performance
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+리포트 탭에서는 완료된 임무의 평균·중앙값·P95·최댓값, CPU 코어와 주요 ROS
+프로세스별 부하를 확인할 수 있습니다. 이름 변경은 보고서 메타데이터와 Markdown
+제목에 함께 반영됩니다. 삭제는 해당 임무의 원본 JSONL·CSV·JSON·Markdown을
+모두 제거하며 되돌릴 수 없으므로 확인 창을 거칩니다.
+
 Gazebo와 ROS 2를 연결한 전체 시뮬레이션은 로컬 Docker 컨테이너에서 FastAPI를
 실행한 뒤 WebUI의 `지도` 탭에 있는 `지도 운용 모드`에서 `맵 생성` 또는
 `순찰`을 선택합니다. 이때 WebUI가 Gazebo·SLAM Toolbox·AMCL·Nav2 launch를

@@ -83,6 +83,17 @@ class MapSessionUpdate(BaseModel):
         return self
 
 
+class PerformanceReportUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+    @model_validator(mode="after")
+    def normalize_name(self):
+        self.name = self.name.strip()
+        if not self.name:
+            raise ValueError("name must not be blank")
+        return self
+
+
 class NavigationGoal(BaseModel):
     x: float = Field(..., ge=-1000, le=1000)
     y: float = Field(..., ge=-1000, le=1000)
