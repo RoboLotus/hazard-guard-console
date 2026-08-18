@@ -33,7 +33,6 @@ const VARIANTS = {
     idleLabel: "최근 3D 지도",
     emptyTitle: "컬러 3D 지도 데이터를 기다리고 있습니다",
     emptyBody: "맵 생성 모드에서 로봇을 조작하면 관측한 RGB-D 표면이 누적됩니다.",
-    footnote: "관측 표면 · map 좌표계 · Z축 높이",
     supportsArchive: true,
   },
   thermal: {
@@ -47,7 +46,6 @@ const VARIANTS = {
     emptyTitle: "열화상 3D 지도 데이터를 기다리고 있습니다",
     emptyBody:
       "캘리브레이션된 열화상-Depth 외부 파라미터로 Depth 표면에 온도를 입힙니다. 로봇을 움직이면 관측한 면부터 채워집니다.",
-    footnote: "온도 복셀 5cm · map 좌표계 · 이동평균",
     supportsArchive: false,
   },
 };
@@ -463,6 +461,8 @@ export default function PointCloudPanel({
         <span>
           {archived
             ? `저장 세션 · ${archived.name || archived.id}`
+            : variant === "thermal"
+            ? `열화상-Depth 투영 · ${status.frameId || "좌표계 미확인"} 좌표계 · 실시간`
             : `${status.frameId || "좌표계 미확인"} 좌표계 · Z축 높이`}
         </span>
         <strong>{status.pointCount.toLocaleString("ko-KR")} points{status.updatedAt ? ` · ${status.updatedAt.toLocaleTimeString("ko-KR", { hour12: false })}` : ""}</strong>
