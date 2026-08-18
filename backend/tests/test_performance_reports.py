@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 import app.main as main_module
 from app.main import app
@@ -80,9 +81,40 @@ def test_store_exposes_active_session_and_stale_state(tmp_path: Path):
     active = PerformanceReportStore(tmp_path).list()["active"][0]
     assert active["stale"] is True
 
-    deleted = PerformanceReportStore(tmp_path).delete("active-1")
-    assert deleted["deleted"] is True
-    assert not directory.exists()
+    try:
+        PerformanceReportStore(tmp_path).delete("active-1")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("an active collector directory must not be deleted")
+    assert directory.exists()
+
+
+def test_store_hides_summary_until_collector_removes_active_marker(
+    tmp_path: Path,
+):
+    directory = write_report(tmp_path, "finalizing-1")
+    (directory / "active.json").write_text(
+        json.dumps(
+            {
+                "id": "finalizing-1",
+                "name": "마감 중",
+                "updated_at": "2026-08-18T00:00:00+00:00",
+                "latest": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = PerformanceReportStore(tmp_path)
+
+    assert store.list()["reports"] == []
+    try:
+        store.delete("finalizing-1")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("a finalizing report must not be deleted")
+    assert directory.exists()
 
 
 def test_delete_removes_only_the_resolved_report_directory(tmp_path: Path):
@@ -96,6 +128,36 @@ def test_delete_removes_only_the_resolved_report_directory(tmp_path: Path):
     assert result["deleted"] is True
     assert not directory.exists()
     assert sibling.exists()
+
+
+def test_store_rejects_a_summary_at_the_date_directory_level(tmp_path: Path):
+    date_directory = tmp_path / "2026-08-18"
+    nested_report = write_report(tmp_path, "keep-report")
+    (date_directory / "summary.json").write_text(
+        json.dumps({"id": "2026-08-18", "name": "invalid"}),
+        encoding="utf-8",
+    )
+    store = PerformanceReportStore(tmp_path)
+
+    with pytest.raises(KeyError):
+        store.delete("2026-08-18")
+
+    assert nested_report.exists()
+
+
+def test_store_rejects_symlinked_download_artifacts(tmp_path: Path):
+    directory = write_report(tmp_path)
+    outside = tmp_path / "outside.csv"
+    outside.write_text("secret", encoding="utf-8")
+    csv_path = directory / "process-summary.csv"
+    csv_path.unlink()
+    try:
+        csv_path.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is not available")
+
+    with pytest.raises(ValueError):
+        PerformanceReportStore(tmp_path).download("report-1", "csv")
 
 
 def test_performance_report_api_manages_files(monkeypatch, tmp_path: Path):

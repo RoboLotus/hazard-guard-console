@@ -50,4 +50,5 @@ test("report management uses in-app dialogs instead of browser prompts", async (
   assert.equal(source.includes("window.prompt"), false);
   assert.equal(source.includes("window.confirm"), false);
   assert.match(source, /performance-dialog/);
+  assert.match(source, /setDetail\(null\);\s+setDetailLoading\(true\)/);
 });

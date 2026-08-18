@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import threading
 from typing import Any
@@ -14,6 +15,11 @@ ALLOWED_DOWNLOADS = {
     "markdown": ("report.md", "text/markdown"),
     "json": ("summary.json", "application/json"),
 }
+DATE_DIRECTORY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+class UnsafeReportPathError(ValueError):
+    pass
 
 
 def default_performance_root() -> Path:
@@ -49,10 +55,42 @@ class PerformanceReportStore:
         self._lock = threading.RLock()
 
     def _report_directories(self) -> list[Path]:
-        return sorted(
-            {path.parent.resolve() for path in self.root.rglob("summary.json")},
-            reverse=True,
+        directories = set()
+        for path in self.root.rglob("summary.json"):
+            if path.is_symlink() or (path.parent / "active.json").exists():
+                continue
+            summary = _read_json(path)
+            report_id = summary.get("id") if summary else None
+            if self._valid_report_directory(path.parent, report_id):
+                directories.add(path.parent.resolve())
+        return sorted(directories, reverse=True)
+
+    def _valid_report_directory(
+        self,
+        directory: Path,
+        report_id: object,
+    ) -> bool:
+        try:
+            resolved = directory.resolve()
+            relative = resolved.relative_to(self.root)
+        except (OSError, ValueError):
+            return False
+        return (
+            len(relative.parts) == 2
+            and DATE_DIRECTORY.fullmatch(relative.parts[0]) is not None
+            and isinstance(report_id, str)
+            and relative.parts[1] == report_id
+            and not directory.is_symlink()
         )
+
+    @staticmethod
+    def _artifact(directory: Path, filename: str) -> Path:
+        path = directory / filename
+        if path.is_symlink() or path.resolve().parent != directory.resolve():
+            raise UnsafeReportPathError(
+                "report artifact escaped its directory"
+            )
+        return path
 
     def _find(self, report_id: str) -> tuple[Path, dict[str, Any]]:
         for directory in self._report_directories():
@@ -63,7 +101,8 @@ class PerformanceReportStore:
 
     @staticmethod
     def _metric(summary: dict[str, Any], name: str) -> dict[str, Any]:
-        metric = (summary.get("system") or {}).get(name)
+        system = summary.get("system")
+        metric = system.get(name) if isinstance(system, dict) else None
         return metric if isinstance(metric, dict) else {}
 
     def _list_item(self, summary: dict[str, Any]) -> dict[str, Any]:
@@ -96,7 +135,10 @@ class PerformanceReportStore:
             now = datetime.now(timezone.utc)
             for path in self.root.rglob("active.json"):
                 item = _read_json(path)
-                if not item:
+                if not item or not self._valid_report_directory(
+                    path.parent,
+                    item.get("id"),
+                ):
                     continue
                 try:
                     updated = datetime.fromisoformat(str(item["updated_at"]))
@@ -113,6 +155,10 @@ class PerformanceReportStore:
                         "stale": age_sec is None or age_sec > 10.0,
                     }
                 )
+            active.sort(
+                key=lambda item: str(item.get("updated_at") or ""),
+                reverse=True,
+            )
             return {"reports": reports, "active": active}
 
     def get(self, report_id: str) -> dict[str, Any]:
@@ -133,14 +179,15 @@ class PerformanceReportStore:
             raise ValueError("report name must not be empty")
         with self._lock:
             directory, summary = self._find(report_id)
+            summary_path = self._artifact(directory, "summary.json")
+            metadata_path = self._artifact(directory, "metadata.json")
+            markdown = self._artifact(directory, "report.md")
             summary["name"] = clean_name
-            _atomic_json(directory / "summary.json", summary)
-            metadata_path = directory / "metadata.json"
+            _atomic_json(summary_path, summary)
             metadata = _read_json(metadata_path)
             if metadata is not None:
                 metadata["name"] = clean_name
                 _atomic_json(metadata_path, metadata)
-            markdown = directory / "report.md"
             if markdown.is_file():
                 lines = markdown.read_text(encoding="utf-8").splitlines()
                 if lines:
@@ -150,33 +197,27 @@ class PerformanceReportStore:
 
     def delete(self, report_id: str) -> dict[str, Any]:
         with self._lock:
-            try:
-                directory, summary = self._find(report_id)
-            except KeyError:
-                directory = None
-                summary = None
-                for path in self.root.rglob("active.json"):
-                    active = _read_json(path)
-                    if active and active.get("id") == report_id:
-                        directory = path.parent.resolve()
-                        summary = active
-                        break
-                if directory is None or summary is None:
-                    raise
+            directory, summary = self._find(report_id)
             resolved = directory.resolve()
             if self.root not in resolved.parents:
-                raise ValueError("report directory escaped the configured root")
+                raise UnsafeReportPathError(
+                    "report directory escaped the configured root"
+                )
             shutil.rmtree(resolved)
             return {"deleted": True, "id": report_id, "name": summary.get("name")}
 
-    def download(self, report_id: str, format_name: str) -> tuple[Path, str]:
+    def download(
+        self,
+        report_id: str,
+        format_name: str,
+    ) -> tuple[bytes, str, str]:
         try:
             filename, media_type = ALLOWED_DOWNLOADS[format_name]
         except KeyError as error:
             raise ValueError("unsupported report format") from error
         with self._lock:
             directory, _summary = self._find(report_id)
-            path = directory / filename
+            path = self._artifact(directory, filename)
             if not path.is_file():
                 raise FileNotFoundError(filename)
-            return path, media_type
+            return path.read_bytes(), media_type, filename

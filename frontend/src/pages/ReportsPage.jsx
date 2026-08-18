@@ -29,7 +29,7 @@ function toneForStatus(status) {
   return "interrupted";
 }
 
-function CurrentCollection({ active, onDeleteStale }) {
+function CurrentCollection({ active }) {
   if (!active?.length) return null;
   const item = active[0];
   const latest = item.latest || {};
@@ -45,7 +45,7 @@ function CurrentCollection({ active, onDeleteStale }) {
         <span>GPU <strong>{formatMetric({ mean: latest.jetson?.gpu_percent })}%</strong></span>
         <span>RAM <strong>{formatMetric({ mean: latest.memory?.used_percent })}%</strong></span>
       </div>
-      {item.stale && <button type="button" className="button ghost compact-button danger-button" onClick={() => onDeleteStale(item)}>중단 기록 삭제</button>}
+      {item.stale && <span className="performance-live-guidance">수집 프로세스 상태를 확인하세요</span>}
     </section>
   );
 }
@@ -134,6 +134,7 @@ export default function ReportsPage({ notify }) {
   const [active, setActive] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -172,9 +173,14 @@ export default function ReportsPage({ notify }) {
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
+      setDetailLoading(false);
       return undefined;
     }
     let disposed = false;
+    setDetail(null);
+    setDetailLoading(true);
+    setRenameOpen(false);
+    setDeleteTarget(null);
     const loadDetail = async () => {
       try {
         const response = await fetch(`/api/v1/performance/reports/${encodeURIComponent(selectedId)}`, { cache: "no-store" });
@@ -182,6 +188,8 @@ export default function ReportsPage({ notify }) {
         if (!disposed) setDetail(await response.json());
       } catch (loadError) {
         if (!disposed) setError(loadError.message);
+      } finally {
+        if (!disposed) setDetailLoading(false);
       }
     };
     void loadDetail();
@@ -233,14 +241,11 @@ export default function ReportsPage({ notify }) {
       const response = await fetch(`/api/v1/performance/reports/${encodeURIComponent(deleteTarget.id)}?confirm=true`, { method: "DELETE" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "리포트를 삭제하지 못했습니다.");
-      if (deleteTarget.kind === "report") {
-        setDetail(null);
-        setSelectedId(null);
-      }
-      const deletedKind = deleteTarget.kind;
+      setDetail(null);
+      setSelectedId(null);
       setDeleteTarget(null);
       await loadList({ quiet: true });
-      notify(deletedKind === "report" ? "성능 리포트와 원본 로그를 삭제했습니다." : "중단된 성능 로그를 삭제했습니다.");
+      notify("성능 리포트와 원본 로그를 삭제했습니다.");
     } catch (deleteError) {
       notify(deleteError.message, "warning");
     } finally {
@@ -253,17 +258,13 @@ export default function ReportsPage({ notify }) {
     window.location.href = `/api/v1/performance/reports/${encodeURIComponent(detail.id)}/download?format=${format}`;
   };
 
-  const deleteStale = async (item) => {
-    setDeleteTarget({ ...item, kind: "stale" });
-  };
-
   return (
     <div className="detail-page reports-page performance-reports-page">
       <DetailHeading eyebrow="JETSON PERFORMANCE" title="순찰 성능 리포트" description="순찰 중 Jetson과 주요 ROS 프로세스의 CPU·GPU·RAM 부하를 임무 단위로 확인합니다.">
         <button type="button" className="button ghost compact-button" onClick={() => loadList()} disabled={loading}><ArrowsClockwise size={18} />새로고침</button>
       </DetailHeading>
 
-      <CurrentCollection active={active} onDeleteStale={deleteStale} />
+      <CurrentCollection active={active} />
       {error && <div className="performance-error" role="alert">{error}</div>}
 
       <div className="performance-layout">
@@ -271,6 +272,8 @@ export default function ReportsPage({ notify }) {
         <section className="performance-detail">
           {loading && reports.length === 0 ? (
             <div className="panel performance-empty"><Gauge size={42} /><strong>성능 리포트를 불러오는 중입니다</strong></div>
+          ) : detailLoading ? (
+            <div className="panel performance-empty"><Gauge size={42} /><strong>선택한 성능 리포트를 불러오는 중입니다</strong></div>
           ) : !detail ? (
             <div className="panel performance-empty"><Gauge size={42} /><strong>아직 완료된 순찰 성능 리포트가 없습니다</strong><p>순찰을 시작하면 자동으로 측정하고 종료 시 보고서를 생성합니다.</p></div>
           ) : (
@@ -284,7 +287,7 @@ export default function ReportsPage({ notify }) {
                 <div className="performance-actions">
                   <button type="button" className="button ghost compact-button" onClick={openRename} disabled={busy}><PencilSimple size={17} />이름 변경</button>
                   <button type="button" className="button ghost compact-button" onClick={() => download("csv")}><DownloadSimple size={17} />CSV</button>
-                  <button type="button" className="button ghost compact-button danger-button" onClick={() => setDeleteTarget({ ...detail, kind: "report" })} disabled={busy}><Trash size={17} />삭제</button>
+                  <button type="button" className="button ghost compact-button danger-button" onClick={() => setDeleteTarget(detail)} disabled={busy}><Trash size={17} />삭제</button>
                 </div>
               </section>
 
