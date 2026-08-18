@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 
 import {
   formatDuration,
@@ -37,4 +38,16 @@ test("localizes terminal mission status", () => {
   assert.equal(reportStatusLabel("completed"), "완료");
   assert.equal(reportStatusLabel("failed"), "실패");
   assert.equal(reportStatusLabel("interrupted"), "중단");
+});
+
+
+test("report management uses in-app dialogs instead of browser prompts", async () => {
+  const source = await readFile(
+    new URL("../src/pages/ReportsPage.jsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(source.includes("window.prompt"), false);
+  assert.equal(source.includes("window.confirm"), false);
+  assert.match(source, /performance-dialog/);
 });

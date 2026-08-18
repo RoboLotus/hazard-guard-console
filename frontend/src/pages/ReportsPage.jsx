@@ -87,6 +87,48 @@ function MetricStatistics({ label, metric, unit = "%" }) {
   );
 }
 
+function RenameDialog({ value, busy, onChange, onCancel, onSubmit }) {
+  return (
+    <div className="performance-dialog-backdrop" role="presentation">
+      <form className="panel performance-dialog" role="dialog" aria-modal="true" aria-labelledby="performance-rename-title" onSubmit={onSubmit}>
+        <span className="eyebrow">REPORT NAME</span>
+        <h2 id="performance-rename-title">성능 기록 이름 변경</h2>
+        <p>측정 파일은 그대로 유지하고 화면과 보고서에 표시되는 이름만 변경합니다.</p>
+        <label htmlFor="performance-report-name">리포트 이름</label>
+        <input
+          id="performance-report-name"
+          autoFocus
+          maxLength={80}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          disabled={busy}
+        />
+        <div className="performance-dialog-actions">
+          <button type="button" className="button ghost compact-button" onClick={onCancel} disabled={busy}>취소</button>
+          <button type="submit" className="button primary compact-button" disabled={busy || !value.trim()}>저장</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function DeleteDialog({ target, busy, onCancel, onConfirm }) {
+  if (!target) return null;
+  return (
+    <div className="performance-dialog-backdrop" role="presentation">
+      <section className="panel performance-dialog" role="dialog" aria-modal="true" aria-labelledby="performance-delete-title">
+        <span className="eyebrow danger-text">DELETE REPORT</span>
+        <h2 id="performance-delete-title">성능 기록을 삭제할까요?</h2>
+        <p><strong>{target.name}</strong>의 요약 보고서와 원본 측정 로그가 모두 삭제되며 복구할 수 없습니다.</p>
+        <div className="performance-dialog-actions">
+          <button type="button" className="button ghost compact-button" onClick={onCancel} disabled={busy}>취소</button>
+          <button type="button" className="button danger compact-button" onClick={onConfirm} disabled={busy}>기록 삭제</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function ReportsPage({ notify }) {
   const [reports, setReports] = useState([]);
   const [active, setActive] = useState([]);
@@ -95,6 +137,9 @@ export default function ReportsPage({ notify }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const loadList = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
@@ -147,21 +192,32 @@ export default function ReportsPage({ notify }) {
   const cores = useMemo(() => Object.entries(detail?.cores || {}), [detail]);
   const phases = useMemo(() => Object.entries(detail?.phases || {}), [detail]);
 
-  const renameReport = async () => {
+  const openRename = () => {
     if (!detail) return;
-    const name = window.prompt("성능 리포트 이름", detail.name || "");
-    if (name === null || !name.trim() || name.trim() === detail.name) return;
+    setRenameValue(detail.name || "");
+    setRenameOpen(true);
+  };
+
+  const renameReport = async (event) => {
+    event.preventDefault();
+    const name = renameValue.trim();
+    if (!detail || !name) return;
+    if (name === detail.name) {
+      setRenameOpen(false);
+      return;
+    }
     setBusy(true);
     try {
       const response = await fetch(`/api/v1/performance/reports/${encodeURIComponent(detail.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() }),
+        body: JSON.stringify({ name }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "이름을 변경하지 못했습니다.");
       setDetail(payload);
       await loadList({ quiet: true });
+      setRenameOpen(false);
       notify("성능 리포트 이름을 변경했습니다.");
     } catch (renameError) {
       notify(renameError.message, "warning");
@@ -171,16 +227,20 @@ export default function ReportsPage({ notify }) {
   };
 
   const deleteReport = async () => {
-    if (!detail || !window.confirm(`'${detail.name}' 리포트와 원본 성능 로그를 모두 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return;
+    if (!deleteTarget) return;
     setBusy(true);
     try {
-      const response = await fetch(`/api/v1/performance/reports/${encodeURIComponent(detail.id)}?confirm=true`, { method: "DELETE" });
+      const response = await fetch(`/api/v1/performance/reports/${encodeURIComponent(deleteTarget.id)}?confirm=true`, { method: "DELETE" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "리포트를 삭제하지 못했습니다.");
-      setDetail(null);
-      setSelectedId(null);
+      if (deleteTarget.kind === "report") {
+        setDetail(null);
+        setSelectedId(null);
+      }
+      const deletedKind = deleteTarget.kind;
+      setDeleteTarget(null);
       await loadList({ quiet: true });
-      notify("성능 리포트와 원본 로그를 삭제했습니다.");
+      notify(deletedKind === "report" ? "성능 리포트와 원본 로그를 삭제했습니다." : "중단된 성능 로그를 삭제했습니다.");
     } catch (deleteError) {
       notify(deleteError.message, "warning");
     } finally {
@@ -194,16 +254,7 @@ export default function ReportsPage({ notify }) {
   };
 
   const deleteStale = async (item) => {
-    if (!window.confirm(`'${item.name}'의 중단된 원본 성능 로그를 삭제할까요?`)) return;
-    try {
-      const response = await fetch(`/api/v1/performance/reports/${encodeURIComponent(item.id)}?confirm=true`, { method: "DELETE" });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.detail || "중단 기록을 삭제하지 못했습니다.");
-      await loadList({ quiet: true });
-      notify("중단된 성능 로그를 삭제했습니다.");
-    } catch (deleteError) {
-      notify(deleteError.message, "warning");
-    }
+    setDeleteTarget({ ...item, kind: "stale" });
   };
 
   return (
@@ -231,9 +282,9 @@ export default function ReportsPage({ notify }) {
                   <p><Clock size={16} />{observedAt(detail.started_at)} · {formatDuration(detail.duration_sec)} · {detail.sample_count} samples</p>
                 </div>
                 <div className="performance-actions">
-                  <button type="button" className="button ghost compact-button" onClick={renameReport} disabled={busy}><PencilSimple size={17} />이름 변경</button>
+                  <button type="button" className="button ghost compact-button" onClick={openRename} disabled={busy}><PencilSimple size={17} />이름 변경</button>
                   <button type="button" className="button ghost compact-button" onClick={() => download("csv")}><DownloadSimple size={17} />CSV</button>
-                  <button type="button" className="button ghost compact-button danger-button" onClick={deleteReport} disabled={busy}><Trash size={17} />삭제</button>
+                  <button type="button" className="button ghost compact-button danger-button" onClick={() => setDeleteTarget({ ...detail, kind: "report" })} disabled={busy}><Trash size={17} />삭제</button>
                 </div>
               </section>
 
@@ -289,6 +340,21 @@ export default function ReportsPage({ notify }) {
           )}
         </section>
       </div>
+      {renameOpen && (
+        <RenameDialog
+          value={renameValue}
+          busy={busy}
+          onChange={setRenameValue}
+          onCancel={() => setRenameOpen(false)}
+          onSubmit={renameReport}
+        />
+      )}
+      <DeleteDialog
+        target={deleteTarget}
+        busy={busy}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={deleteReport}
+      />
     </div>
   );
 }
