@@ -789,9 +789,9 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .settings-form { max-width: 1120px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .settings-card { padding: 18px; background: #fff; border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 3px 12px rgba(18,38,63,.04); }
 .settings-card > header { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid #edf0f3; }
-.setting-icon { width: 37px; height: 37px; display: grid; place-items: center; border-radius: 9px; }
+.setting-icon { width: 37px; height: 37px; display: grid; flex: 0 0 auto; place-items: center; color: #47729f; background: #edf5ff; border-radius: 9px; }
 .warning-card .setting-icon { color: #c77b14; background: #fff3df; }
-.critical-card .setting-icon { color: var(--danger); background: #ffedef; }
+.critical-card .setting-icon { color: #47729f; background: #edf5ff; }
 .clear-card .setting-icon { color: var(--success); background: #e9f8f2; }
 .repeat-card .setting-icon { color: #5f63a6; background: #efeffa; }
 .settings-card h2 { margin: 0; font-size: 13px; }
@@ -832,7 +832,9 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .equipment-editor { min-width: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .equipment-basic-card, .equipment-roi-card { grid-column: 1 / -1; }
 .equipment-basic-card > header > div:first-child, .equipment-roi-card > header > div:first-child { flex: 1; }
-.icon-button.danger { margin-left: auto; color: #b73742; background: #fff0f1; border: 1px solid #f0c9cd; }
+.settings-delete-action { margin-left: auto; color: #748397; }
+.settings-delete-action:hover { color: #b73742; background: #fff0f1; border-color: #f0c9cd; }
+.settings-delete-action:focus-visible { outline: 2px solid rgba(220, 70, 80, .24); outline-offset: 2px; }
 .equipment-enable-row { margin-top: 15px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; color: #34485f; background: #f7fafc; border: 1px solid #e3e9ef; border-radius: 8px; cursor: pointer; }
 .equipment-enable-row input { margin-top: 2px; accent-color: var(--blue); }
 .equipment-enable-row span { display: flex; flex-direction: column; gap: 3px; }

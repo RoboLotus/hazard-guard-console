@@ -3,10 +3,11 @@ import {
   ArrowCounterClockwise,
   Check,
   ClockCounterClockwise,
-  Database,
   DownloadSimple,
+  Factory,
   MapTrifold,
   Plus,
+  SlidersHorizontal,
   Trash,
   UploadSimple,
   Warning,
@@ -389,7 +390,7 @@ export default function EquipmentSettings({
         <div className="equipment-settings-layout">
           <aside className="settings-card equipment-list-card">
             <header>
-              <div className="setting-icon"><Database size={21} weight="fill" /></div>
+              <div className="setting-icon"><Factory size={20} weight="duotone" /></div>
               <div><h2>설비 목록</h2><p>설비를 선택하거나 새로 추가합니다.</p></div>
             </header>
             <div className="equipment-list-tools">
@@ -413,7 +414,7 @@ export default function EquipmentSettings({
               <section className="settings-card equipment-basic-card">
                 <header>
                   <div><h2>{selected.display_name}</h2><p>내부 ID는 순찰 기록과 기준선 연결에 사용되므로 변경되지 않습니다.</p></div>
-                  <button type="button" className="icon-button danger" onClick={removeEquipment} title="설비 제거"><Trash size={17} /></button>
+                  <button type="button" className="icon-action settings-delete-action" onClick={removeEquipment} aria-label="설비 제거" title="설비 제거"><Trash size={16} weight="bold" /></button>
                 </header>
                 <div className="field-grid">
                   <label className="form-field">설비 이름<input className="text-input" value={selected.display_name} maxLength={60} onChange={(event) => updateSelected({ display_name: event.target.value })} /><small>화면과 이벤트에 표시되는 이름</small></label>
@@ -423,7 +424,7 @@ export default function EquipmentSettings({
               </section>
 
               <section className="settings-card critical-card">
-                <header><div className="setting-icon"><Warning size={21} weight="fill" /></div><div><h2>설비별 기준값</h2><p>절대 위험온도는 항상 유지하고 가변 기준은 선택적으로 사용합니다.</p></div></header>
+                <header><div className="setting-icon"><SlidersHorizontal size={20} weight="duotone" /></div><div><h2>설비별 기준값</h2><p>절대 위험온도는 항상 유지하고 가변 기준은 선택적으로 사용합니다.</p></div></header>
                 <label className={`policy-toggle-row ${adaptiveEnabled ? "enabled" : ""}`}>
                   <input type="checkbox" role="switch" checked={adaptiveEnabled} onChange={(event) => requestAdaptivePolicy(event.target.checked)} />
                   <span><strong>자동 가변 기준 사용</strong><small>{adaptiveEnabled ? baselineActive ? "승인 기준선과 상승 추세를 결합해 판정합니다." : `기준선 ${progressCount}/${progressTarget || 10} 수집 후 자동 적용됩니다.` : "고정 위험온도만 위험 판정에 사용합니다."}</small></span>
