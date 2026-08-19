@@ -53,7 +53,7 @@ const screenGuides = [
   ["이벤트", "감지된 위험을 확인하고 처리 상태를 변경합니다."],
   ["영상", "RGB 및 열화상 스트림을 크게 확인합니다."],
   ["리포트", "순찰별 Jetson CPU·GPU·RAM 부하와 프로세스 통계를 확인합니다."],
-  ["설정", "화재 판정 임계값을 저장하고 ROS 센서 토픽의 수신 상태를 진단합니다."],
+  ["설정", "이상 탐지 설정과 ROS 연결 상태 점검을 내부 탭으로 나누어 관리합니다."],
 ];
 
 function StepList({ children }) {
@@ -236,7 +236,7 @@ export default function HelpPage({ onNavigate }) {
             <div className="help-feature-list">
               <div><Camera size={19} /><span><strong>영상</strong><p>RGB와 열화상 스트림을 확인합니다. MOCK 표시는 실제 센서 영상이 아니라는 뜻입니다.</p></span></div>
               <div><ListChecks size={19} /><span><strong>이벤트</strong><p>위험 온도와 기타 이상 이벤트를 확인하고 처리 중·해결 상태로 변경합니다.</p></span></div>
-              <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>화재 판정값을 서버에 저장하고 LiDAR, RGB-D, 열화상, IMU, Odometry 토픽 상태를 확인합니다.</p></span></div>
+              <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>이상 탐지 설정에서 설비별 판정식·ROI·기준선을 관리하고, 연결 상태 점검에서 토픽 주기와 TF를 확인합니다.</p></span></div>
               <div><FloppyDisk size={19} /><span><strong>리포트</strong><p>순찰 중 자동 수집한 Jetson 및 ROS 프로세스 성능 통계를 조회하고, 이름 변경·CSV 저장·삭제를 수행합니다.</p></span></div>
             </div>
             <div className="help-callout info">
@@ -247,14 +247,14 @@ export default function HelpPage({ onNavigate }) {
 
           <HelpSection id="diagnostics" icon={Pulse} eyebrow="07 · SENSOR HEALTH" title="센서 진단 결과 이해하기">
             <StepList>
-              <li><strong>설정 탭</strong>의 센서 진단에서 LiDAR, RGB, Depth, 열화상, IMU, Odometry와 포인트클라우드 상태를 확인합니다.</li>
+              <li><strong>설정 → 연결 상태 점검</strong>에서 현재 운용 모드의 필수 센서, 수신 주기, frame_id와 base_link TF 연결을 확인합니다.</li>
               <li><strong>실시간</strong>은 최근 토픽 메시지가 들어왔다는 뜻이고, <strong>데이터 대기</strong>는 아직 한 번도 수신하지 못했다는 뜻입니다.</li>
               <li><strong>갱신 중단</strong>은 이전에 수신했지만 정해진 시간 동안 새 메시지가 없다는 뜻입니다. <strong>ROS 미연결</strong>이면 먼저 백엔드의 ROS 브리지를 확인합니다.</li>
               <li>3D 수집 전에는 RGB·Depth 영상과 각각의 CameraInfo, Odometry가 모두 갱신되는지 확인하고 카메라와 로봇 사이 TF도 별도로 검증합니다.</li>
             </StepList>
             <div className="help-callout warning">
               <Pulse size={20} weight="fill" />
-              <div><strong>실시간 표시는 캘리브레이션 성공을 보장하지 않습니다.</strong><p>센서 진단은 토픽 수신 시각만 검사합니다. RGB–Depth 정렬, 내부·외부 파라미터, TF 방향과 실제 측정 정확도는 RViz 및 기준 물체 테스트로 추가 확인해야 합니다.</p></div>
+              <div><strong>실시간·TF 연결 표시는 캘리브레이션 정확도를 보장하지 않습니다.</strong><p>진단 화면은 토픽 수신 주기와 TF 경로 존재 여부를 확인합니다. RGB–Depth 정렬, 내부·외부 파라미터와 실제 측정 정확도는 RViz 및 기준 물체 테스트로 추가 검증해야 합니다.</p></div>
             </div>
           </HelpSection>
 
