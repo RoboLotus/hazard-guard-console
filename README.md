@@ -145,8 +145,9 @@ export HAZARD_GUARD_ROS_ENABLED=1
 
 # YOLO11n 사람 탐지 → 안전 감독 → Nav2 감속/정지
 export HAZARD_GUARD_PERSON_SAFETY_ENABLED=1
-export HAZARD_GUARD_PERSON_MODEL_PATH=/absolute/path/to/yolo11n.pt
-export HAZARD_GUARD_PERSON_DEVICE=0
+export HAZARD_GUARD_PERSON_MODEL_PATH=/absolute/path/to/yolo11n.engine
+export HAZARD_GUARD_PERSON_DEVICE=cuda:0
+export HAZARD_GUARD_PERSON_RATE_HZ=6.0
 export HAZARD_GUARD_PERSON_DEPTH_REGISTERED=1
 
 # 열화상·Depth 융합 및 장기 추세 분석
@@ -162,6 +163,13 @@ fail-closed 상태를 유지합니다. `PERSON_DEVICE`, 열화상 scale·offset 
 Jetson 센서 드라이버의 실제 출력값에 맞춰야 합니다. 사람 안전 상태는
 `/hazard_guard/person/safety_state`에서 수신해 지도 탭의 `사람 안전` 항목에
 정상·감속·정지·센서 이상으로 표시합니다.
+
+사람 안전 기능을 활성화해도 YOLO는 순찰 모드에서만 실행합니다. 1차 2D 지도
+작성과 2차 RGB-D 3D 수집에서는 YOLO 추론 및 사람 안전 감속기를 실행하지
+않습니다. 2차 수집에서는 HP60C 카메라만 계속 실행해 RGB·Depth 포인트클라우드를
+생성합니다. 따라서 지도 작성은 사람과 장애물을 통제한 시험 공간에서 저속으로
+수행해야 합니다. Jetson의 실제 `.env` 또는 `runtime.env`는 Git에 커밋하지 말고,
+저장소의 `.env.example`을 복사해 장치별 경로만 설정합니다.
 
 열화상 3D 뷰어의 기본 입력은 Robot 열화상 융합 노드가 발행하는
 `/hazard_guard/thermal/points`입니다. 다른 토픽을 사용할 때만
