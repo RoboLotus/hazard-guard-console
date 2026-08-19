@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from app import main as main_module
@@ -15,6 +17,7 @@ def test_equipment_store_starts_with_four_defaults_and_persists(tmp_path):
     settings = store.get()
     assert len(settings.equipment) == 4
     assert settings.equipment[0].display_name == "폐기물 적치 구역"
+    assert settings.equipment[0].adaptive_threshold_enabled is True
 
     settings.equipment[0].display_name = "1번 적치 구역"
     store.save(settings)
@@ -26,6 +29,30 @@ def test_equipment_store_starts_with_four_defaults_and_persists(tmp_path):
     assert len(history) == 1
     assert history[0]["reason"] == "manual"
     assert store.metadata()["revision_id"] == history[0]["revision_id"]
+
+
+def test_legacy_equipment_settings_default_adaptive_policy_to_enabled(
+    tmp_path,
+):
+    path = tmp_path / "equipment.json"
+    document = {
+        "schema_version": 1,
+        "equipment": [
+            {
+                "id": "motor",
+                "display_name": "모터",
+                "enabled": True,
+                "critical_temperature_c": 100.0,
+                "adaptive_delta_c": 10.0,
+                "roi": {"min": [0, 0, 0], "max": [1, 1, 1]},
+            }
+        ],
+    }
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    loaded = ThermalEquipmentSettingsStore(path).get()
+
+    assert loaded.equipment[0].adaptive_threshold_enabled is True
 
 
 def test_equipment_store_restores_a_validated_revision(tmp_path):
@@ -88,6 +115,28 @@ def test_equipment_settings_api_supports_update_and_rejects_bad_roi(
     history = client.get("/api/v1/settings/equipment/history")
     assert history.status_code == 200
     assert history.json()["revisions"]
+
+
+def test_equipment_settings_api_publishes_adaptive_policy(monkeypatch, tmp_path):
+    store = ThermalEquipmentSettingsStore(tmp_path / "equipment.json")
+    monkeypatch.setattr(main_module, "equipment_store", store)
+    published = []
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "publish_thermal_equipment_config",
+        lambda document: published.append(document)
+        or {"state": "published", "equipment": []},
+    )
+    payload = store.get().model_dump(by_alias=True)
+    payload["equipment"][0]["adaptive_threshold_enabled"] = False
+
+    response = client.put("/api/v1/settings/equipment", json=payload)
+
+    assert response.status_code == 200
+    assert published[-1]["equipment"][0]["adaptive_threshold_enabled"] is False
+    assert (
+        response.json()["equipment"][0]["adaptive_threshold_enabled"] is False
+    )
 
 
 def test_equipment_baseline_reset_reports_ros_result(monkeypatch):

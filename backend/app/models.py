@@ -51,6 +51,7 @@ class ThermalEquipmentSettings(BaseModel):
     enabled: bool = True
     critical_temperature_c: float = Field(..., ge=1, le=300)
     adaptive_delta_c: float = Field(..., ge=0.1, le=100)
+    adaptive_threshold_enabled: bool = True
     roi: EquipmentRoi
 
     @model_validator(mode="after")

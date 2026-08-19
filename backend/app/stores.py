@@ -515,6 +515,20 @@ class SpatialStore:
             "trend_status": detection.get("trend_status"),
             "trend_reason": detection.get("trend_reason"),
             "visit_index": detection.get("visit_index"),
+            "policy_mode": detection.get("policy_mode"),
+            "adaptive_threshold_enabled": detection.get(
+                "adaptive_threshold_enabled"
+            ),
+            "baseline_temperature_c": detection.get(
+                "baseline_temperature_c"
+            ),
+            "baseline_residual_c": detection.get("baseline_residual_c"),
+            "baseline_residual_threshold_c": detection.get(
+                "baseline_residual_threshold_c"
+            ),
+            "effective_adaptive_threshold_c": detection.get(
+                "effective_adaptive_threshold_c"
+            ),
             "simulated": bool(detection.get("simulated", False)),
             "updated_at": utc_now(),
             "updated_monotonic": time.monotonic(),
@@ -566,7 +580,16 @@ class SpatialStore:
                 )
                 if previous is not None and previous.get("visit_index") is not None:
                     for key in (
-                        "trend_status", "trend_reason", "visit_index", "source"
+                        "trend_status",
+                        "trend_reason",
+                        "visit_index",
+                        "source",
+                        "policy_mode",
+                        "adaptive_threshold_enabled",
+                        "baseline_temperature_c",
+                        "baseline_residual_c",
+                        "baseline_residual_threshold_c",
+                        "effective_adaptive_threshold_c",
                     ):
                         detection[key] = previous.get(key)
             return self._store_detection_locked(detection)

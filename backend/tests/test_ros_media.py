@@ -239,6 +239,12 @@ def test_completed_visit_trend_is_not_overwritten_by_live_frame():
                 "trend_analysis": {
                     "status": "warning",
                     "reason": "persistent_trend_and_environment_adjusted_anomaly",
+                    "policy_mode": "adaptive_assisted",
+                    "adaptive_threshold_enabled": True,
+                    "baseline_temperature_c": 50.0,
+                    "baseline_residual_c": 12.0,
+                    "baseline_residual_threshold_c": 10.0,
+                    "effective_adaptive_threshold_c": 70.0,
                 },
             }],
         }],
@@ -259,6 +265,9 @@ def test_completed_visit_trend_is_not_overwritten_by_live_frame():
         "persistent_trend_and_environment_adjusted_anomaly"
     )
     assert detection["source"].endswith(":visit-3")
+    assert detection["policy_mode"] == "adaptive_assisted"
+    assert detection["baseline_residual_c"] == 12.0
+    assert detection["effective_adaptive_threshold_c"] == 70.0
 
 def test_completed_visit_before_live_frame_restores_visit_metadata():
     import json

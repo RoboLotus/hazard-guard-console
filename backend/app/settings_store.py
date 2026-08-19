@@ -66,6 +66,7 @@ def default_thermal_equipment_settings() -> ThermalEquipmentSettingsDocument:
                     "enabled": True,
                     "critical_temperature_c": 49.0,
                     "adaptive_delta_c": 10.0,
+                    "adaptive_threshold_enabled": True,
                     "roi": {
                         "min": [-1.95, -0.95, 0.02],
                         "max": [-1.45, -0.45, 0.35],
@@ -77,6 +78,7 @@ def default_thermal_equipment_settings() -> ThermalEquipmentSettingsDocument:
                     "enabled": True,
                     "critical_temperature_c": 110.0,
                     "adaptive_delta_c": 10.0,
+                    "adaptive_threshold_enabled": True,
                     "roi": {
                         "min": [-1.25, 0.0, 0.02],
                         "max": [-0.78, 0.5, 0.42],
@@ -88,6 +90,7 @@ def default_thermal_equipment_settings() -> ThermalEquipmentSettingsDocument:
                     "enabled": True,
                     "critical_temperature_c": 105.0,
                     "adaptive_delta_c": 10.0,
+                    "adaptive_threshold_enabled": True,
                     "roi": {
                         "min": [0.95, 0.53, 0.02],
                         "max": [1.32, 0.86, 0.42],
@@ -99,6 +102,7 @@ def default_thermal_equipment_settings() -> ThermalEquipmentSettingsDocument:
                     "enabled": True,
                     "critical_temperature_c": 82.0,
                     "adaptive_delta_c": 10.0,
+                    "adaptive_threshold_enabled": True,
                     "roi": {
                         "min": [0.94, 0.2, 0.02],
                         "max": [1.34, 0.5, 0.3],

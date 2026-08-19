@@ -341,6 +341,26 @@ class RosMediaAdapter:
                     candidates, key=lambda item: (item[0], item[1])
                 )
                 completed["temperature_c"] = temperature
+                hottest_decision = hottest.get("trend_analysis", {})
+                if isinstance(hottest_decision, dict):
+                    completed.update(
+                        policy_mode=hottest_decision.get("policy_mode"),
+                        adaptive_threshold_enabled=hottest_decision.get(
+                            "adaptive_threshold_enabled"
+                        ),
+                        baseline_temperature_c=hottest_decision.get(
+                            "baseline_temperature_c"
+                        ),
+                        baseline_residual_c=hottest_decision.get(
+                            "baseline_residual_c"
+                        ),
+                        baseline_residual_threshold_c=hottest_decision.get(
+                            "baseline_residual_threshold_c"
+                        ),
+                        effective_adaptive_threshold_c=hottest_decision.get(
+                            "effective_adaptive_threshold_c"
+                        ),
+                    )
                 center = hottest.get("center", [])
                 equipment_name=equipment_name,
                 if len(center) >= 3:
