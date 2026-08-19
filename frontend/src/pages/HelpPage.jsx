@@ -52,7 +52,7 @@ const screenGuides = [
   ["지도", "SLAM/순찰 모드, 2D·3D 지도, 웨이포인트와 시뮬레이션 환경을 관리합니다."],
   ["이벤트", "감지된 위험을 확인하고 처리 상태를 변경합니다."],
   ["영상", "RGB 및 열화상 스트림을 크게 확인합니다."],
-  ["리포트", "순찰과 이벤트 결과를 기간별로 보고 CSV로 내보냅니다."],
+  ["리포트", "순찰별 Jetson CPU·GPU·RAM 부하와 프로세스 통계를 확인합니다."],
   ["설정", "화재 판정 임계값을 저장하고 ROS 센서 토픽의 수신 상태를 진단합니다."],
 ];
 
@@ -237,7 +237,7 @@ export default function HelpPage({ onNavigate }) {
               <div><Camera size={19} /><span><strong>영상</strong><p>RGB와 열화상 스트림을 확인합니다. MOCK 표시는 실제 센서 영상이 아니라는 뜻입니다.</p></span></div>
               <div><ListChecks size={19} /><span><strong>이벤트</strong><p>위험 온도와 기타 이상 이벤트를 확인하고 처리 중·해결 상태로 변경합니다.</p></span></div>
               <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>화재 판정값을 서버에 저장하고 LiDAR, RGB-D, 열화상, IMU, Odometry 토픽 상태를 확인합니다.</p></span></div>
-              <div><FloppyDisk size={19} /><span><strong>리포트</strong><p>기간별 순찰 성과와 이벤트 통계를 확인하고 CSV 파일로 저장합니다.</p></span></div>
+              <div><FloppyDisk size={19} /><span><strong>리포트</strong><p>순찰 중 자동 수집한 Jetson 및 ROS 프로세스 성능 통계를 조회하고, 이름 변경·CSV 저장·삭제를 수행합니다.</p></span></div>
             </div>
             <div className="help-callout info">
               <SlidersHorizontal size={20} weight="fill" />
