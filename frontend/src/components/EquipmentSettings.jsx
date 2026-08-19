@@ -29,6 +29,7 @@ function makeEquipment(existing) {
     enabled: false,
     critical_temperature_c: 80,
     adaptive_delta_c: 10,
+    adaptive_threshold_enabled: true,
     roi: { min: [0, 0, 0], max: [0.5, 0.5, 0.5] },
   };
 }
@@ -36,7 +37,12 @@ function makeEquipment(existing) {
 function settingsDocument(payload) {
   return {
     schema_version: Number(payload?.schema_version || 1),
-    equipment: Array.isArray(payload?.equipment) ? payload.equipment : [],
+    equipment: Array.isArray(payload?.equipment)
+      ? payload.equipment.map((item) => ({
+        ...item,
+        adaptive_threshold_enabled: item.adaptive_threshold_enabled !== false,
+      }))
+      : [],
   };
 }
 
@@ -67,6 +73,12 @@ function formatDate(value) {
   if (!value) return "기록 없음";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "기록 없음" : date.toLocaleString("ko-KR");
+}
+
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function baselineRuntime(runtime, equipmentId) {
@@ -360,7 +372,27 @@ export default function EquipmentSettings({
   const progressTarget = Number(selectedRuntime?.baseline_sample_target || 0);
   const progressCount = Number(selectedRuntime?.baseline_sample_count || 0);
   const progress = progressTarget ? Math.min(100, (progressCount / progressTarget) * 100) : 0;
+  const adaptiveEnabled = selected?.adaptive_threshold_enabled !== false;
+  const baselineActive = selectedRuntime?.baseline_state === "active";
+  const baselineTemperature = optionalNumber(selectedRuntime?.baseline_temperature_c);
+  const latestEffectiveThreshold = optionalNumber(selectedRuntime?.effective_adaptive_threshold_c);
+  const fallbackEffectiveThreshold = baselineTemperature !== null && selected
+    ? baselineTemperature + Number(selected.adaptive_delta_c)
+    : null;
   const mapSpec = spatialState?.map;
+
+  const requestAdaptivePolicy = (enabled) => requestConfirmation({
+    title: enabled ? "자동 가변 기준을 사용할까요?" : "고정 임계값만 사용할까요?",
+    description: enabled
+      ? "승인된 정상 기준선과 순찰 간 상승 추세를 함께 사용합니다. 기준선 수집 중이면 완료 후 자동 적용됩니다."
+      : "기준선 파일은 보존하지만 가변 이탈 경고를 중지합니다. 절대 위험온도 판정은 계속 작동합니다.",
+    impact: runtime?.state === "pending"
+      ? "현재 순찰 종료 후 변경됩니다."
+      : "설정 저장 후 다음 설비 검사부터 적용됩니다.",
+    confirmLabel: enabled ? "자동 가변 기준 사용" : "고정 임계값만 사용",
+    danger: !enabled,
+    action: () => updateSelected({ adaptive_threshold_enabled: enabled }),
+  });
 
   return (
     <>
@@ -410,12 +442,25 @@ export default function EquipmentSettings({
               </section>
 
               <section className="settings-card critical-card">
-                <header><div className="setting-icon"><Warning size={21} weight="fill" /></div><div><h2>설비별 기준값</h2><p>현재 온도와 기준선 대비 상승을 함께 판단합니다.</p></div></header>
+                <header><div className="setting-icon"><Warning size={21} weight="fill" /></div><div><h2>설비별 기준값</h2><p>절대 위험온도는 항상 유지하고 가변 기준은 선택적으로 사용합니다.</p></div></header>
+                <label className={`policy-toggle-row ${adaptiveEnabled ? "enabled" : ""}`}>
+                  <input type="checkbox" role="switch" checked={adaptiveEnabled} onChange={(event) => requestAdaptivePolicy(event.target.checked)} />
+                  <span><strong>자동 가변 기준 사용</strong><small>{adaptiveEnabled ? baselineActive ? "승인 기준선과 상승 추세를 결합해 판정합니다." : `기준선 ${progressCount}/${progressTarget || 10} 수집 후 자동 적용됩니다.` : "고정 위험온도만 위험 판정에 사용합니다."}</small></span>
+                  <em>{adaptiveEnabled ? baselineActive ? "적용 중" : "준비 중" : "사용 안 함"}</em>
+                </label>
                 <div className="field-grid">
                   <NumberField label="즉시 위험 온도" name="critical_temperature_c" value={selected.critical_temperature_c} onChange={(event) => updateSelected({ critical_temperature_c: Number(event.target.value) })} unit="°C" min={1} max={300} />
                   <NumberField label="기준선 대비 상승" name="adaptive_delta_c" value={selected.adaptive_delta_c} onChange={(event) => updateSelected({ adaptive_delta_c: Number(event.target.value) })} unit="°C" min={0.1} max={100} step={0.1} />
                 </div>
-                <div className="policy-preview"><strong>위험 판정식</strong><span>현재 온도 ≥ {selected.critical_temperature_c}°C <b>또는</b> 정상 기준선보다 {selected.adaptive_delta_c}°C 이상 상승</span></div>
+                <div className="policy-preview">
+                  <strong>현재 판정 흐름</strong>
+                  <span><b>즉시 위험</b> · P95 온도 ≥ {selected.critical_temperature_c}°C</span>
+                  {adaptiveEnabled ? <>
+                    <span><b>가변 경고</b> · 지속 상승 추세 <b>그리고</b> 승인 기준선 대비 +{selected.adaptive_delta_c}°C 이상</span>
+                    <span><b>한 조건만 만족</b> · 위험으로 확정하지 않고 재확인</span>
+                    <span><b>최근 실효 임계점</b> · {latestEffectiveThreshold !== null ? `${latestEffectiveThreshold.toFixed(1)}°C (환경 보정 반영)` : fallbackEffectiveThreshold !== null ? `${fallbackEffectiveThreshold.toFixed(1)}°C (환경 기준 미수신 시)` : "기준선 활성화 후 계산"}</span>
+                  </> : <span><b>고정 모드</b> · 가변 이탈은 사용하지 않고 상승 추세만 재확인 정보로 남깁니다.</span>}
+                </div>
               </section>
 
               <section className="settings-card baseline-status-card">
@@ -426,7 +471,7 @@ export default function EquipmentSettings({
                   <small>{runtime.state === "pending" ? "현재 순찰 종료 후 설정이 적용됩니다." : `동기화 상태: ${runtime.state || "unknown"}`}</small>
                 </div>
                 <div className="baseline-progress"><span style={{ width: `${progress}%` }} /></div>
-                <dl className="baseline-meta"><div><dt>수집 조건</dt><dd>설비 웨이포인트 정상 측정 {progressTarget || 10}회</dd></div><div><dt>마지막 표본</dt><dd>{selectedRuntime?.baseline_last_sample_unix_sec ? formatDate(selectedRuntime.baseline_last_sample_unix_sec * 1000) : "아직 수집되지 않음"}</dd></div></dl>
+                <dl className="baseline-meta"><div><dt>수집 조건</dt><dd>설비 웨이포인트 정상 측정 {progressTarget || 10}회</dd></div><div><dt>마지막 표본</dt><dd>{selectedRuntime?.baseline_last_sample_unix_sec ? formatDate(selectedRuntime.baseline_last_sample_unix_sec * 1000) : "아직 수집되지 않음"}</dd></div><div><dt>판정 모드</dt><dd>{adaptiveEnabled ? baselineActive ? "자동 가변 기준" : "고정 기준 · 가변 준비 중" : "고정 임계값만"}</dd></div>{baselineTemperature !== null && <div><dt>승인 기준선</dt><dd>{baselineTemperature.toFixed(1)}°C</dd></div>}</dl>
                 <button type="button" className="button ghost baseline-reset-button" onClick={resetBaseline} disabled={!apiOnline || runtime.state === "offline"}><ArrowCounterClockwise size={15} />기준선 다시 수집</button>
               </section>
 

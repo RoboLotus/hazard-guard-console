@@ -236,12 +236,12 @@ export default function HelpPage({ onNavigate }) {
             <div className="help-feature-list">
               <div><Camera size={19} /><span><strong>영상</strong><p>RGB와 열화상 스트림을 확인합니다. MOCK 표시는 실제 센서 영상이 아니라는 뜻입니다.</p></span></div>
               <div><ListChecks size={19} /><span><strong>이벤트</strong><p>위험 온도와 기타 이상 이벤트를 확인하고 처리 중·해결 상태로 변경합니다.</p></span></div>
-              <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>이상 탐지 설정에서 설비별 판정식·ROI·기준선을 관리하고, 연결 상태 점검에서 토픽 주기와 TF를 확인합니다.</p></span></div>
+              <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>이상 탐지 설정에서 설비별 고정·자동 가변 판정, ROI와 기준선을 관리하고, 연결 상태 점검에서 토픽 주기와 TF를 확인합니다.</p></span></div>
               <div><FloppyDisk size={19} /><span><strong>리포트</strong><p>순찰 중 자동 수집한 Jetson 및 ROS 프로세스 성능 통계를 조회하고, 이름 변경·CSV 저장·삭제를 수행합니다.</p></span></div>
             </div>
             <div className="help-callout info">
               <SlidersHorizontal size={20} weight="fill" />
-              <div><strong>임계값은 서버 저장값이 기준입니다.</strong><p>서버가 연결되면 서버에 저장된 값이 다시 로드됩니다. 서버가 잠시 끊기면 브라우저 저장값을 예비값으로 사용하며, 연결 복구 후 다시 서버 값과 동기화합니다.</p></div>
+              <div><strong>절대 위험온도는 항상 유지됩니다.</strong><p>자동 가변 기준을 켜면 승인 기준선 이탈과 지속 상승 추세가 함께 확인될 때 경고합니다. 기준선 수집 중이거나 가변 기준을 끈 설비는 고정 위험온도로 판정하며, 정책 변경은 설정 저장 후 다음 설비 검사부터 적용됩니다.</p></div>
             </div>
           </HelpSection>
 

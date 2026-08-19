@@ -807,14 +807,18 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .form-errors p { margin: 1px 0; font-size: 9px; }
 .form-footer { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 .equipment-settings-form { max-width: 1240px; margin: 0 auto; }
-.equipment-settings-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); align-items: start; gap: 13px; }
-.equipment-list-card { position: sticky; top: 16px; padding: 0; overflow: hidden; }
+.equipment-settings-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); align-items: stretch; gap: 13px; }
+.equipment-list-card { position: sticky; top: 16px; height: 100%; min-height: 0; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
 .equipment-list-card > header { padding: 18px; }
 .equipment-list-tools { padding: 13px; display: grid; gap: 8px; border-bottom: 1px solid #edf0f3; }
 .text-input { width: 100%; height: 38px; padding: 0 11px; color: #223247; background: #f9fafb; border: 1px solid #dce3e9; border-radius: 7px; font: 600 11px "Pretendard Variable", Pretendard, sans-serif; }
 .text-input:focus { outline: 0; background: #fff; border-color: var(--blue); }
 .text-input[readonly] { color: #7d8997; background: #f1f4f7; }
-.equipment-list { max-height: 525px; padding: 7px; overflow-y: auto; }
+.equipment-list { min-height: 240px; padding: 7px; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.equipment-list::-webkit-scrollbar { width: 8px; }
+.equipment-list::-webkit-scrollbar-track { background: #f4f7f9; }
+.equipment-list::-webkit-scrollbar-thumb { background: #c5d0da; border: 2px solid #f4f7f9; border-radius: 999px; }
+.equipment-list::-webkit-scrollbar-thumb:hover { background: #9eafbe; }
 .equipment-list-item { width: 100%; min-height: 62px; padding: 10px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 9px; align-items: center; color: #64758a; background: transparent; border: 1px solid transparent; border-radius: 8px; text-align: left; cursor: pointer; }
 .equipment-list-item:hover { background: #f7f9fb; }
 .equipment-list-item.selected { color: #1b5f9f; background: #edf6ff; border-color: #c8ddf2; }
@@ -880,6 +884,14 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .policy-preview { margin-top: 12px; padding: 10px 11px; display: flex; flex-direction: column; gap: 4px; color: #536980; background: #fff8ea; border: 1px solid #f0ddb2; border-radius: 8px; font-size: 8px; line-height: 1.5; }
 .policy-preview strong { color: #8e5c12; font-size: 9px; }
 .policy-preview b { color: #b44249; }
+.policy-toggle-row { margin-top: 14px; padding: 11px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; color: #536579; background: #f7f9fb; border: 1px solid #dfe6ec; border-radius: 9px; cursor: pointer; }
+.policy-toggle-row.enabled { color: #1c5f8f; background: #eef7ff; border-color: #c7ddf0; }
+.policy-toggle-row input { width: 31px; height: 17px; accent-color: var(--blue); cursor: pointer; }
+.policy-toggle-row > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.policy-toggle-row strong { color: #34485f; font-size: 9px; }
+.policy-toggle-row small { color: #7e8c9c; font-size: 7px; line-height: 1.45; }
+.policy-toggle-row em { padding: 4px 7px; color: #69798b; background: #e7ebef; border-radius: 999px; font-size: 7px; font-style: normal; font-weight: 800; white-space: nowrap; }
+.policy-toggle-row.enabled em { color: #176943; background: #dff3e9; }
 .baseline-progress { height: 6px; margin: 6px 4px 10px; overflow: hidden; background: #e8edf1; border-radius: 999px; }
 .baseline-progress span { display: block; height: 100%; background: linear-gradient(90deg, #1a9a67, #3cb987); border-radius: inherit; transition: width .2s ease; }
 .baseline-meta { margin: 0 4px 10px; display: grid; gap: 5px; }
@@ -996,7 +1008,8 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
   .equipment-settings-layout, .equipment-editor, .roi-grid { grid-template-columns: 1fr; }
   .equipment-list-card { position: static; }
   .equipment-basic-card, .equipment-roi-card { grid-column: auto; }
-  .equipment-list { max-height: 310px; }
+  .equipment-list-card { height: auto; }
+  .equipment-list { max-height: 310px; min-height: 0; }
   .map-side-panel, .settings-form, .sensor-diagnostic-grid, .help-two-column, .help-feature-list, .video-side-panel { grid-template-columns: 1fr; }
   .simulation-map-manager, .waypoint-mission-card { grid-column: auto; }
   .map-panel-detail { min-height: 520px; }
