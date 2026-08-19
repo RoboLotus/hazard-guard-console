@@ -311,6 +311,7 @@ def test_physical_patrol_passes_opt_in_perception_settings(
     assert "use_person_safety:=true" in command
     assert "person_model_path:=/models/yolo11n.pt" in command
     assert "person_device:=0" in command
+    assert "person_inference_rate_hz:=6.0" in command
     assert "person_depth_registration_verified:=true" in command
     assert "enable_thermal_pipeline:=true" in command
     assert "thermal_baseline_path:=/data/motor-baseline.json" in command
@@ -319,6 +320,34 @@ def test_physical_patrol_passes_opt_in_perception_settings(
     assert "thermal_sensor_timeout_sec:=8.0" in command
     assert "thermal_scale:=0.01" in command
     assert "thermal_offset_c:=-273.15" in command
+
+
+def test_physical_rgbd_mapping_disables_yolo_but_keeps_camera(
+    monkeypatch,
+    tmp_path,
+):
+    map_path = tmp_path / "runtime" / "maps" / "facility" / "map.yaml"
+    map_path.parent.mkdir(parents=True)
+    map_path.write_text("image: map.pgm\nresolution: 0.05\n", encoding="utf-8")
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("HAZARD_GUARD_MAP_PATH", str(map_path))
+    monkeypatch.setenv("HAZARD_GUARD_PERSON_SAFETY_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_PERSON_CAMERA_START", "1")
+    manager = SystemModeManager()
+
+    command = manager._launch_arguments("rgbd_mapping")
+
+    assert command[:4] == [
+        "ros2",
+        "launch",
+        "hazard_guard_simulation",
+        "physical_rgbd_mapping.launch.py",
+    ]
+    assert command.count("use_person_safety:=false") == 1
+    assert "use_person_safety:=true" not in command
+    assert "start_person_camera:=true" in command
 
 
 def test_physical_runtime_never_starts_gazebo(monkeypatch, tmp_path):

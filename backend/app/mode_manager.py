@@ -604,7 +604,13 @@ class SystemModeManager:
                     + os.getenv("HAZARD_GUARD_RGBD_STAMP_MODE", "offset"),
                     "rgbd_cloud_stamp_offset_sec:="
                     + os.getenv("HAZARD_GUARD_RGBD_STAMP_OFFSET_SEC", "0.0"),
-                    *self._physical_patrol_feature_arguments(),
+                    # RGB-D mapping needs the HP60C camera, but it should not
+                    # spend Jetson resources on YOLO inference. The patrol
+                    # launch starts the camera independently when
+                    # enable_rgbd_mapping=true.
+                    *self._physical_patrol_feature_arguments(
+                        person_safety_enabled=False,
+                    ),
                 ]
             return [
                 "ros2",
@@ -679,14 +685,20 @@ class SystemModeManager:
         ]
 
     @staticmethod
-    def _physical_patrol_feature_arguments() -> list[str]:
+    def _physical_patrol_feature_arguments(
+        *,
+        person_safety_enabled: bool | None = None,
+    ) -> list[str]:
         """Translate deployment settings into the physical patrol contract."""
 
+        safety_enabled = (
+            env_flag("HAZARD_GUARD_PERSON_SAFETY_ENABLED")
+            if person_safety_enabled is None
+            else person_safety_enabled
+        )
         values = {
             "use_person_safety": (
-                "true"
-                if env_flag("HAZARD_GUARD_PERSON_SAFETY_ENABLED")
-                else "false"
+                "true" if safety_enabled else "false"
             ),
             "start_person_camera": (
                 "true"
@@ -704,7 +716,7 @@ class SystemModeManager:
                 "HAZARD_GUARD_PERSON_IMAGE_SIZE", "640"
             ),
             "person_inference_rate_hz": os.getenv(
-                "HAZARD_GUARD_PERSON_RATE_HZ", "10.0"
+                "HAZARD_GUARD_PERSON_RATE_HZ", "6.0"
             ),
             "person_depth_registration_verified": (
                 "true"
