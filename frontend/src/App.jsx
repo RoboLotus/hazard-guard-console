@@ -322,7 +322,7 @@ export function App() {
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}
-        {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} />}
+        {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} spatialState={spatialState} />}
         {active === "help" && <HelpPage onNavigate={navigate} />}
       </main>
       {toast && <div className={`toast ${toast.tone}`} role="status">{toast.tone === "warning" ? <Warning size={19} weight="fill" /> : <CheckCircle size={19} weight="fill" />}<span>{toast.message}</span></div>}

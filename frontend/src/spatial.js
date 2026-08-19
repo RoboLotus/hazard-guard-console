@@ -198,11 +198,12 @@ export function detectionOpacity(detection) {
 const EQUIPMENT_LABELS = {
   primary_shredder_motor: "1차 파쇄기 모터",
   secondary_processor_pump: "2차 처리기 펌프",
-  baler_hydraulic_tank: "압축기 유압 탱크",
-  bunker_waste_pile: "벙커 폐기물 더미",
+  baler_hydraulic_tank: "베일러 유압 탱크",
+  bunker_waste_pile: "폐기물 적치 구역",
 };
 
 function equipmentLabel(detection) {
+  if (detection?.equipment_name) return detection.equipment_name;
   const equipmentId = detection?.equipment_id || detection?.detection_id || "unknown";
   return EQUIPMENT_LABELS[equipmentId]
     || String(equipmentId).replace(/^thermal-/, "").replaceAll("_", " ");
@@ -258,6 +259,12 @@ export function thermalDetectionsToEvents(detections = []) {
         watch_baseline_delta_pending_confirmation: "기준선 이탈 재확인 필요",
         baseline_critical_candidate_requires_corroboration: "고온 후보 교차 확인 필요",
         surface_screening_requires_direct_sensor_confirmation: "직접 온도 센서 확인 필요",
+        critical_p95_temperature: "고정 위험온도 초과",
+        trend_and_adaptive: "지속 상승·가변 기준 동시 충족",
+        trend_only_recheck: "지속 상승 추세 재확인",
+        adaptive_only_recheck: "가변 기준 이탈 재확인",
+        adaptive_disabled: "고정 임계값 모드",
+        baseline_pending: "정상 기준선 수집 중",
       };
       const trendLabel = reasonLabels[reason]
         || (status === "critical"
@@ -272,6 +279,27 @@ export function thermalDetectionsToEvents(detections = []) {
       const detectionId = detection.visit_index == null
         ? baseDetectionId
         : `${baseDetectionId}-visit-${detection.visit_index}`;
+      const policyLabel = detection.policy_mode === "fixed_only"
+        ? "고정 임계값"
+        : detection.policy_mode === "adaptive_assisted"
+          ? "자동 가변 기준"
+          : "판정 정책 확인 중";
+      const effectiveThreshold = detection.effective_adaptive_threshold_c == null
+        ? Number.NaN
+        : Number(detection.effective_adaptive_threshold_c);
+      const residual = detection.baseline_residual_c == null
+        ? Number.NaN
+        : Number(detection.baseline_residual_c);
+      const residualThreshold = detection.baseline_residual_threshold_c == null
+        ? Number.NaN
+        : Number(detection.baseline_residual_threshold_c);
+      const policyDetail = [
+        policyLabel,
+        Number.isFinite(effectiveThreshold) ? `실효 임계점 ${effectiveThreshold.toFixed(1)}°C` : null,
+        Number.isFinite(residual) && Number.isFinite(residualThreshold)
+          ? `기준선 잔차 ${residual.toFixed(1)}/${residualThreshold.toFixed(1)}°C`
+          : null,
+      ].filter(Boolean).join(" · ");
 
       return {
         id: detectionId,
@@ -291,7 +319,7 @@ export function thermalDetectionsToEvents(detections = []) {
         threshold: trendLabel,
         detail: configurationWatch
           ? `${label}의 정상 운전 기준값을 등록해야 온도 판정을 시작할 수 있습니다.`
-          : `${label}에서 ${trendLabel} 판정이 발생했습니다.`,
+          : `${label}에서 ${trendLabel} 판정이 발생했습니다. ${policyDetail}`,
         acknowledged: false,
         assignee: "미지정",
         note: detection.simulated
@@ -300,6 +328,7 @@ export function thermalDetectionsToEvents(detections = []) {
         equipmentId: detection.equipment_id || null,
         visitIndex: detection.visit_index ?? null,
         source: detection.source || "thermal",
+        policyMode: detection.policy_mode || null,
         simulated: Boolean(detection.simulated),
       };
     })

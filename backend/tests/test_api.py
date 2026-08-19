@@ -555,6 +555,30 @@ def test_route_rejects_duplicate_waypoint_ids():
     assert response.status_code == 422
 
 
+def test_route_rejects_equipment_waypoint_without_measurement_dwell():
+    response = client.post(
+        "/api/v1/navigation/route",
+        json={
+            "name": "Invalid equipment route",
+            "frame_id": "map",
+            "waypoints": [
+                {
+                    "id": "equipment-without-dwell",
+                    "name": "설비 측정",
+                    "equipment_id": "primary_shredder_motor",
+                    "x": 0,
+                    "y": 0,
+                    "yaw": 0,
+                    "dwell_seconds": 0,
+                    "enabled": True,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_telemetry_websocket_sends_snapshot_and_closes_cleanly():
     with client.websocket_connect("/ws/telemetry") as websocket:
         payload = websocket.receive_json()

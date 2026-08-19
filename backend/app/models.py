@@ -23,6 +23,60 @@ class ThresholdSettings(BaseModel):
         return self
 
 
+class EquipmentRoi(BaseModel):
+    minimum: list[float] = Field(
+        ..., alias="min", min_length=3, max_length=3
+    )
+    maximum: list[float] = Field(
+        ..., alias="max", min_length=3, max_length=3
+    )
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def validate_bounds(self):
+        if any(low >= high for low, high in zip(self.minimum, self.maximum)):
+            raise ValueError("each ROI min value must be smaller than max")
+        return self
+
+
+class ThermalEquipmentSettings(BaseModel):
+    id: str = Field(
+        ...,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+    display_name: str = Field(..., min_length=1, max_length=60)
+    enabled: bool = True
+    critical_temperature_c: float = Field(..., ge=1, le=300)
+    adaptive_delta_c: float = Field(..., ge=0.1, le=100)
+    adaptive_threshold_enabled: bool = True
+    roi: EquipmentRoi
+
+    @model_validator(mode="after")
+    def normalize_name(self):
+        self.display_name = self.display_name.strip()
+        if not self.display_name:
+            raise ValueError("display_name must not be blank")
+        return self
+
+
+class ThermalEquipmentSettingsDocument(BaseModel):
+    schema_version: Literal[1] = 1
+    equipment: list[ThermalEquipmentSettings] = Field(
+        ..., min_length=1, max_length=100
+    )
+
+    @model_validator(mode="after")
+    def validate_equipment(self):
+        identifiers = [item.id for item in self.equipment]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("equipment ids must be unique")
+        if not any(item.enabled for item in self.equipment):
+            raise ValueError("at least one equipment item must be enabled")
+        return self
+
 class MockCommand(BaseModel):
     command: str
     accepted: bool = True
@@ -119,6 +173,14 @@ class RouteWaypoint(BaseModel):
     yaw: float = Field(0, ge=-3.141593, le=3.141593)
     dwell_seconds: float = Field(0, ge=0, le=300)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def require_measurement_dwell(self):
+        if self.equipment_id and self.dwell_seconds <= 0:
+            raise ValueError(
+                "equipment waypoints require a positive dwell time"
+            )
+        return self
 
 
 class NavigationRoute(BaseModel):

@@ -299,6 +299,7 @@ class RosMediaAdapter:
             if not isinstance(equipment, dict):
                 continue
             equipment_id = str(equipment.get("equipment_id", ""))
+            equipment_name = str(equipment.get("display_name") or equipment_id)
             live = self._latest_thermal_detections.get(equipment_id)
             completed = dict(live) if live else {
                 "detection_id": f"thermal-{equipment_id}",
@@ -310,6 +311,7 @@ class RosMediaAdapter:
                 "confidence": 0.0,
                 "radius_m": 0.04,
                 "equipment_id": equipment_id,
+                "equipment_name": equipment_name,
                 "simulated": True,
             }
             status = str(equipment.get("trend_status", "normal"))
@@ -339,7 +341,28 @@ class RosMediaAdapter:
                     candidates, key=lambda item: (item[0], item[1])
                 )
                 completed["temperature_c"] = temperature
+                hottest_decision = hottest.get("trend_analysis", {})
+                if isinstance(hottest_decision, dict):
+                    completed.update(
+                        policy_mode=hottest_decision.get("policy_mode"),
+                        adaptive_threshold_enabled=hottest_decision.get(
+                            "adaptive_threshold_enabled"
+                        ),
+                        baseline_temperature_c=hottest_decision.get(
+                            "baseline_temperature_c"
+                        ),
+                        baseline_residual_c=hottest_decision.get(
+                            "baseline_residual_c"
+                        ),
+                        baseline_residual_threshold_c=hottest_decision.get(
+                            "baseline_residual_threshold_c"
+                        ),
+                        effective_adaptive_threshold_c=hottest_decision.get(
+                            "effective_adaptive_threshold_c"
+                        ),
+                    )
                 center = hottest.get("center", [])
+                equipment_name=equipment_name,
                 if len(center) >= 3:
                     completed.update(x=center[0], y=center[1], z=center[2])
             reason = "within_expected_range"

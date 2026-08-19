@@ -52,8 +52,57 @@ function radiansToDegrees(radians) {
   return Math.round(((Number(radians) || 0) * 180) / Math.PI);
 }
 
+function WaypointKindToggle({ measurement, disabled, onChange }) {
+  return (
+    <div className="waypoint-kind-control">
+      <span>웨이포인트 용도</span>
+      <button
+        type="button"
+        className={`waypoint-kind-toggle ${measurement ? "measurement" : ""}`}
+        role="switch"
+        aria-checked={measurement}
+        disabled={disabled}
+        onClick={() => onChange(!measurement)}
+      >
+        <i aria-hidden="true" />
+        <strong>{measurement ? "설비 측정" : "단순 주행"}</strong>
+      </button>
+    </div>
+  );
+}
+
+function EquipmentSelect({
+  equipmentOptions,
+  value,
+  disabled,
+  onChange,
+}) {
+  const currentIsMissing = Boolean(
+    value && !equipmentOptions.some((equipment) => equipment.id === value),
+  );
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      aria-label="측정할 설비"
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">설비를 선택하세요</option>
+      {currentIsMissing && (
+        <option value={value} disabled>등록되지 않은 설비 · {value}</option>
+      )}
+      {equipmentOptions.map((equipment) => (
+        <option key={equipment.id} value={equipment.id}>
+          {equipment.display_name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export default function WaypointMissionPanel({
   waypoints,
+  equipmentOptions = [],
   candidate,
   goalMode,
   repositioning,
@@ -87,6 +136,7 @@ export default function WaypointMissionPanel({
 }) {
   const [candidateName, setCandidateName] = useState("");
   const [candidateEquipmentId, setCandidateEquipmentId] = useState("");
+  const [candidateMeasurement, setCandidateMeasurement] = useState(false);
   const [candidateYaw, setCandidateYaw] = useState(0);
   const [candidateDwell, setCandidateDwell] = useState(2);
   const [draggingId, setDraggingId] = useState(null);
@@ -96,6 +146,10 @@ export default function WaypointMissionPanel({
     () => new Map((missionStatus?.waypoints || []).map((item) => [item.id, item])),
     [missionStatus],
   );
+  const equipmentNames = useMemo(
+    () => new Map(equipmentOptions.map((item) => [item.id, item.display_name])),
+    [equipmentOptions],
+  );
   const nextRunLabel = formatUnixTime(missionStatus?.next_run_at_unix_ms);
   const endAtLabel = formatUnixTime(missionStatus?.end_at_unix_ms);
 
@@ -103,6 +157,7 @@ export default function WaypointMissionPanel({
     if (!candidate) return;
     setCandidateName(`WP-${String(waypoints.length + 1).padStart(2, "0")}`);
     setCandidateEquipmentId("");
+    setCandidateMeasurement(false);
     setCandidateYaw(0);
     setCandidateDwell(2);
   }, [candidate?.mapX, candidate?.mapY, waypoints.length]);
@@ -110,7 +165,7 @@ export default function WaypointMissionPanel({
   const addCandidate = () => {
     onAdd({
       name: candidateName,
-      equipment_id: candidateEquipmentId,
+      equipment_id: candidateMeasurement ? candidateEquipmentId : null,
       yaw: degreesToRadians(candidateYaw),
       dwell_seconds: Math.max(0, Math.min(300, Number(candidateDwell) || 0)),
     });
@@ -188,16 +243,34 @@ export default function WaypointMissionPanel({
               placeholder="예: 펌프 점검구역"
             />
           </label>
-          <label>
-            <span>설비 ID (선택)</span>
-            <input
-              value={candidateEquipmentId}
-              maxLength={80}
-              onChange={(event) => setCandidateEquipmentId(event.target.value)}
-              placeholder="예: secondary_processor_pump"
-              pattern="[A-Za-z0-9_.:-]+"
-            />
-          </label>
+          <WaypointKindToggle
+            measurement={candidateMeasurement}
+            disabled={!candidateMeasurement && equipmentOptions.length === 0}
+            onChange={(measurement) => {
+              setCandidateMeasurement(measurement);
+              setCandidateEquipmentId(
+                measurement ? candidateEquipmentId || equipmentOptions[0]?.id || "" : "",
+              );
+              if (measurement && Number(candidateDwell) <= 0) {
+                setCandidateDwell(2);
+              }
+            }}
+          />
+          {candidateMeasurement && (
+            <label>
+              <span>측정할 설비</span>
+              <EquipmentSelect
+                equipmentOptions={equipmentOptions}
+                value={candidateEquipmentId}
+                onChange={setCandidateEquipmentId}
+              />
+            </label>
+          )}
+          {equipmentOptions.length === 0 && (
+            <small className="waypoint-kind-help">
+              설정에서 활성화된 설비를 먼저 등록하세요.
+            </small>
+          )}
           <div className="candidate-fields">
             <label>
               <span>바라볼 방향</span>
@@ -217,8 +290,9 @@ export default function WaypointMissionPanel({
               <div className="input-suffix">
                 <input
                   type="number"
-                  min="0"
+                  min={candidateMeasurement ? "0.1" : "0"}
                   max="300"
+                  step="0.1"
                   value={candidateDwell}
                   onChange={(event) => setCandidateDwell(event.target.value)}
                 />
@@ -233,7 +307,11 @@ export default function WaypointMissionPanel({
             <button
               type="button"
               className="button primary"
-              disabled={!candidateName.trim()}
+              disabled={
+                !candidateName.trim()
+                || (candidateMeasurement && !candidateEquipmentId)
+                || (candidateMeasurement && Number(candidateDwell) <= 0)
+              }
               onClick={addCandidate}
             >
               <Check size={16} weight="bold" />추가
@@ -284,9 +362,11 @@ export default function WaypointMissionPanel({
                   <small>
                     X {waypoint.x.toFixed(2)} · Y {waypoint.y.toFixed(2)} · {radiansToDegrees(waypoint.yaw)}°
                   </small>
-                  {waypoint.equipment_id && (
-                    <small>설비 · {waypoint.equipment_id}</small>
-                  )}
+                  <small>
+                    {waypoint.equipment_id
+                      ? `설비 측정 · ${equipmentNames.get(waypoint.equipment_id) || waypoint.equipment_id}`
+                      : "단순 주행"}
+                  </small>
                 </span>
                 {itemStatus && (
                   <span className={`waypoint-run-state ${itemStatus.status}`}>
@@ -306,18 +386,32 @@ export default function WaypointMissionPanel({
                       onChange={(event) => onUpdate(waypoint.id, { name: event.target.value })}
                     />
                   </label>
-                  <label>
-                    <span>설비 ID (선택)</span>
-                    <input
-                      value={waypoint.equipment_id || ""}
-                      maxLength={80}
-                      pattern="[A-Za-z0-9_.:-]+"
-                      disabled={missionActive}
-                      onChange={(event) => onUpdate(waypoint.id, {
-                        equipment_id: event.target.value.trim() || null,
-                      })}
-                    />
-                  </label>
+                  <WaypointKindToggle
+                    measurement={Boolean(waypoint.equipment_id)}
+                    disabled={
+                      missionActive
+                      || (!waypoint.equipment_id && equipmentOptions.length === 0)
+                    }
+                    onChange={(measurement) => onUpdate(waypoint.id, {
+                      equipment_id: measurement ? equipmentOptions[0]?.id || null : null,
+                      ...(measurement && Number(waypoint.dwell_seconds) <= 0
+                        ? { dwell_seconds: 2 }
+                        : {}),
+                    })}
+                  />
+                  {waypoint.equipment_id && (
+                    <label>
+                      <span>측정할 설비</span>
+                      <EquipmentSelect
+                        equipmentOptions={equipmentOptions}
+                        value={waypoint.equipment_id}
+                        disabled={missionActive}
+                        onChange={(equipmentId) => onUpdate(waypoint.id, {
+                          equipment_id: equipmentId || null,
+                        })}
+                      />
+                    </label>
+                  )}
                   <div className="candidate-fields">
                     <label>
                       <span>방향</span>
@@ -340,8 +434,9 @@ export default function WaypointMissionPanel({
                       <div className="input-suffix">
                         <input
                           type="number"
-                          min="0"
+                          min={waypoint.equipment_id ? "0.1" : "0"}
                           max="300"
+                          step="0.1"
                           disabled={missionActive}
                           value={waypoint.dwell_seconds}
                           onChange={(event) => onUpdate(waypoint.id, {

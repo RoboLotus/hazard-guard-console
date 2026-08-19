@@ -617,6 +617,7 @@ class SystemModeManager:
                 "launch",
                 "hazard_guard_simulation",
                 "physical_patrol.launch.py",
+                "enable_thermal_pipeline:=true",
                 f"map:={self._map_path}",
                 f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
                 f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
@@ -776,6 +777,7 @@ class SystemModeManager:
             "simulation.launch.py",
             f"gui:={'true' if self._gui else 'false'}",
             f"simulation_mode:={self._simulation_mode}",
+            "use_thermal_pipeline:=true",
             *self._world_launch_arguments(),
         ]
 
