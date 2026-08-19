@@ -36,7 +36,11 @@ from .models import (
     WorldSelectionRequest,
 )
 from .performance_reports import PerformanceReportStore, UnsafeReportPathError
-from .settings_store import ThermalEquipmentSettingsStore, ThresholdSettingsStore
+from .settings_store import (
+    ThermalEquipmentSettingsStore,
+    ThresholdSettingsStore,
+    default_thermal_equipment_settings,
+)
 
 
 @asynccontextmanager
@@ -75,6 +79,7 @@ def equipment_settings_response(
     return {
         **settings.model_dump(by_alias=True),
         "runtime": ros_bridge.thermal_equipment_config_status(),
+        "metadata": equipment_store.metadata(),
     }
 
 
@@ -401,7 +406,16 @@ def thermal_cloud_status():
 
 @app.get("/api/v1/system/sensors")
 def sensor_diagnostics():
-    return sensor_diagnostics_store.snapshot(ros_active=ros_bridge.active)
+    mode = system_mode_manager.snapshot(detect_external=False)
+    requirements = {
+        "mapping": ("mapping",),
+        "rgbd_mapping": ("patrol", "3d", "inspection"),
+        "patrol": ("patrol", "inspection"),
+    }.get(str(mode.get("mode")), ())
+    return ros_bridge.sensor_diagnostics_snapshot(
+        active_requirements=requirements,
+        deployment_target=mode.get("deployment_target"),
+    )
 
 
 @app.get("/api/v1/performance/reports")
@@ -498,11 +512,21 @@ def get_equipment_settings():
     return equipment_settings_response(equipment_store.get())
 
 
+@app.get("/api/v1/settings/equipment/defaults")
+def get_default_equipment_settings():
+    return default_thermal_equipment_settings().model_dump(by_alias=True)
+
+
+@app.get("/api/v1/settings/equipment/history")
+def get_equipment_settings_history():
+    return {"revisions": equipment_store.history()}
+
+
 @app.put("/api/v1/settings/equipment")
 def update_equipment_settings(
     settings: ThermalEquipmentSettingsDocument,
 ):
-    saved = equipment_store.save(settings)
+    saved = equipment_store.save(settings, reason="manual")
     ros_bridge.publish_thermal_equipment_config(saved.model_dump(by_alias=True))
     return equipment_settings_response(saved)
 
@@ -512,6 +536,24 @@ def reset_equipment_settings():
     saved = equipment_store.reset_defaults()
     ros_bridge.publish_thermal_equipment_config(saved.model_dump(by_alias=True))
     return equipment_settings_response(saved)
+
+
+@app.post("/api/v1/settings/equipment/history/{revision_id}/restore")
+def restore_equipment_settings(revision_id: str):
+    try:
+        saved = equipment_store.restore(revision_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="설정 이력을 찾을 수 없습니다.")
+    ros_bridge.publish_thermal_equipment_config(saved.model_dump(by_alias=True))
+    return equipment_settings_response(saved)
+
+
+@app.post("/api/v1/settings/equipment/baseline/reset")
+def reset_equipment_baseline_collection():
+    result = ros_bridge.reset_thermal_baseline_collection()
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result
 
 @app.post("/api/v1/commands/{command}", response_model=MockCommand)
 def robot_command(command: str, request: CommandRequest | None = None):

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 from .models import ThermalEquipmentSettingsDocument, ThresholdSettings
 
@@ -123,6 +127,7 @@ class ThermalEquipmentSettingsStore:
         ).expanduser().resolve()
         self._lock = threading.RLock()
         self._value = self._load()
+        self.history_path = self.path.parent / "equipment-history"
 
     def _load(self) -> ThermalEquipmentSettingsDocument:
         try:
@@ -137,7 +142,10 @@ class ThermalEquipmentSettingsStore:
             return self._value.model_copy(deep=True)
 
     def save(
-        self, value: ThermalEquipmentSettingsDocument
+        self,
+        value: ThermalEquipmentSettingsDocument,
+        *,
+        reason: str = "manual",
     ) -> ThermalEquipmentSettingsDocument:
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -153,7 +161,108 @@ class ThermalEquipmentSettingsStore:
             )
             temporary.replace(self.path)
             self._value = value.model_copy(deep=True)
+            self._record_revision(value, reason=reason)
             return self.get()
 
     def reset_defaults(self) -> ThermalEquipmentSettingsDocument:
-        return self.save(default_thermal_equipment_settings())
+        return self.save(default_thermal_equipment_settings(), reason="defaults")
+
+    def metadata(self) -> dict[str, Any]:
+        with self._lock:
+            updated_at = None
+            if self.path.exists():
+                updated_at = datetime.fromtimestamp(
+                    self.path.stat().st_mtime,
+                    timezone.utc,
+                ).isoformat()
+            revisions = self.history(limit=1)
+            return {
+                "updated_at": updated_at,
+                "revision_id": revisions[0]["revision_id"] if revisions else None,
+            }
+
+    def history(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            if not self.history_path.exists():
+                return []
+            revisions: list[dict[str, Any]] = []
+            for path in self.history_path.glob("*.json"):
+                try:
+                    if path.is_symlink() or path.resolve().parent != self.history_path.resolve():
+                        continue
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    settings = ThermalEquipmentSettingsDocument.model_validate(
+                        payload["settings"]
+                    )
+                    revision_id = str(payload["revision_id"])
+                    if revision_id != path.stem:
+                        continue
+                    revisions.append(
+                        {
+                            "revision_id": revision_id,
+                            "created_at": str(payload["created_at"]),
+                            "reason": str(payload.get("reason", "manual")),
+                            "equipment_count": len(settings.equipment),
+                        }
+                    )
+                except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+            revisions.sort(key=lambda item: item["created_at"], reverse=True)
+            return revisions[: max(1, min(limit, 50))]
+
+    def restore(self, revision_id: str) -> ThermalEquipmentSettingsDocument:
+        if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z[0-9a-f]{6}", revision_id):
+            raise KeyError(revision_id)
+        with self._lock:
+            path = self.history_path / f"{revision_id}.json"
+            try:
+                if (
+                    path.is_symlink()
+                    or path.parent.resolve() != self.history_path.resolve()
+                    or path.resolve().parent != self.history_path.resolve()
+                ):
+                    raise KeyError(revision_id)
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if str(payload["revision_id"]) != revision_id:
+                    raise KeyError(revision_id)
+                settings = ThermalEquipmentSettingsDocument.model_validate(
+                    payload["settings"]
+                )
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                raise KeyError(revision_id) from None
+            return self.save(settings, reason=f"restore:{revision_id}")
+
+    def _record_revision(
+        self,
+        value: ThermalEquipmentSettingsDocument,
+        *,
+        reason: str,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        revision_id = f"{now.strftime('%Y%m%dT%H%M%SZ')}{uuid4().hex[:6]}"
+        self.history_path.mkdir(parents=True, exist_ok=True)
+        if (
+            self.history_path.is_symlink()
+            or self.history_path.resolve().parent != self.path.parent.resolve()
+        ):
+            raise OSError("unsafe equipment history path")
+        target = self.history_path / f"{revision_id}.json"
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "revision_id": revision_id,
+                    "created_at": now.isoformat(),
+                    "reason": reason,
+                    "settings": value.model_dump(by_alias=True),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+        revisions = sorted(self.history_path.glob("*.json"), reverse=True)
+        for stale in revisions[50:]:
+            stale.unlink(missing_ok=True)

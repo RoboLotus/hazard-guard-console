@@ -114,34 +114,37 @@ class RosBridge:
         self._equipment_config_string_type = None
         self._equipment_config_status: dict[str, Any] = {"state": "offline", "equipment": []}
         self._equipment_config_lock = threading.RLock()
+        self._baseline_reset_client = None
+        self._baseline_reset_request_type = None
 
         sensor_specs = [
-            ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0),
-            ("map", "2D 지도", "/map", ("mapping", "patrol"), 4.0),
-            ("lidar", "2D LiDAR", os.getenv("HAZARD_GUARD_SCAN_TOPIC", "/scan"), ("mapping", "patrol"), 2.0),
-            ("rgb", "RGB 카메라", os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw"), ("3d", "inspection"), 2.0),
-            ("rgb_info", "RGB CameraInfo", os.getenv("HAZARD_GUARD_RGB_INFO_TOPIC", "/camera/camera_info"), ("3d",), 5.0),
-            ("depth", "Depth 카메라", os.getenv("HAZARD_GUARD_DEPTH_TOPIC", "/depth_camera/image_raw"), ("3d",), 2.0),
-            ("depth_info", "Depth CameraInfo", os.getenv("HAZARD_GUARD_DEPTH_INFO_TOPIC", "/depth_camera/camera_info"), ("3d",), 5.0),
-            ("thermal", "열화상 카메라", os.getenv("HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"), ("inspection",), 2.0),
-            ("imu", "IMU", os.getenv("HAZARD_GUARD_IMU_TOPIC", "/imu/data_raw"), ("mapping", "patrol"), 2.0),
-            ("odom", "Odometry", os.getenv("HAZARD_GUARD_ODOM_TOPIC", "/odom"), ("mapping", "patrol", "3d"), 2.0),
-            ("point_cloud", "RTAB-Map 컬러 클라우드", os.getenv("HAZARD_GUARD_POINT_CLOUD_TOPIC", "/hazard_guard/rtabmap/cloud_surface"), ("3d",), 3.0),
-            ("thermal_cloud", "열화상 3D 클라우드", os.getenv("HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/points"), ("3d",), 4.0),
-            ("person_safety", "사람 안전 감속", "/hazard_guard/person/safety_state", (), 2.0),
+            ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0, 1.0),
+            ("map", "2D 지도", "/map", ("mapping", "patrol"), 4.0, 0.2),
+            ("lidar", "2D LiDAR", os.getenv("HAZARD_GUARD_SCAN_TOPIC", "/scan"), ("mapping", "patrol"), 2.0, 5.0),
+            ("rgb", "RGB 카메라", os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw"), ("3d", "inspection"), 2.0, 5.0),
+            ("rgb_info", "RGB CameraInfo", os.getenv("HAZARD_GUARD_RGB_INFO_TOPIC", "/camera/camera_info"), ("3d",), 5.0, 0.1),
+            ("depth", "Depth 카메라", os.getenv("HAZARD_GUARD_DEPTH_TOPIC", "/depth_camera/image_raw"), ("3d",), 2.0, 5.0),
+            ("depth_info", "Depth CameraInfo", os.getenv("HAZARD_GUARD_DEPTH_INFO_TOPIC", "/depth_camera/camera_info"), ("3d",), 5.0, 0.1),
+            ("thermal", "열화상 카메라", os.getenv("HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"), ("inspection",), 2.0, 5.0),
+            ("imu", "IMU", os.getenv("HAZARD_GUARD_IMU_TOPIC", "/imu/data_raw"), ("mapping", "patrol"), 2.0, 10.0),
+            ("odom", "Odometry", os.getenv("HAZARD_GUARD_ODOM_TOPIC", "/odom"), ("mapping", "patrol", "3d"), 2.0, 10.0),
+            ("point_cloud", "RTAB-Map 컬러 클라우드", os.getenv("HAZARD_GUARD_POINT_CLOUD_TOPIC", "/hazard_guard/rtabmap/cloud_surface"), ("3d",), 3.0, 0.5),
+            ("thermal_cloud", "열화상 3D 클라우드", os.getenv("HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/points"), ("3d",), 4.0, 0.5),
+            ("person_safety", "사람 안전 감속", "/hazard_guard/person/safety_state", (), 2.0, 2.0),
         ]
-        for sensor_id, label, topic, required_for, stale_after in sensor_specs:
+        for sensor_id, label, topic, required_for, stale_after, expected_hz in sensor_specs:
             self.diagnostics.register(
                 sensor_id,
                 label=label,
                 topic=topic,
                 required_for=required_for,
                 stale_after_sec=stale_after,
+                expected_min_hz=expected_hz,
             )
 
     def _observe(self, sensor_id: str, callback=None):
         def observed(message):
-            self.diagnostics.mark(sensor_id)
+            self.diagnostics.mark(sensor_id, message)
             if callback is not None:
                 callback(message)
         return observed
@@ -339,6 +342,11 @@ class RosBridge:
                 "/hazard_guard/mission/cancel",
             )
             self._mission_cancel_request_type = Trigger.Request
+            self._baseline_reset_client = self._node.create_client(
+                Trigger,
+                "/hazard_guard/thermal/reset_baseline_collection",
+            )
+            self._baseline_reset_request_type = Trigger.Request
             self._client = self._node.create_client(
                 RobotCommand, "/hazard_guard/command"
             )
@@ -415,6 +423,68 @@ class RosBridge:
                 "equipment": previous.get("equipment", []),
             }
         return self.thermal_equipment_config_status()
+
+    def reset_thermal_baseline_collection(self) -> dict[str, Any]:
+        client = self._baseline_reset_client
+        request_type = self._baseline_reset_request_type
+        if not self.active or client is None or request_type is None:
+            return {
+                "accepted": False,
+                "message": "ROS 열화상 분석 노드가 연결되지 않았습니다.",
+            }
+        if not client.wait_for_service(timeout_sec=0.75):
+            return {
+                "accepted": False,
+                "message": "기준선 초기화 서비스를 찾지 못했습니다.",
+            }
+        future = client.call_async(request_type())
+        completed = threading.Event()
+        future.add_done_callback(lambda _: completed.set())
+        if not completed.wait(timeout=3.0):
+            return {
+                "accepted": False,
+                "message": "기준선 초기화 응답 시간이 초과되었습니다.",
+            }
+        try:
+            response = future.result()
+            return {
+                "accepted": bool(response.success),
+                "message": str(response.message),
+            }
+        except Exception as exc:
+            return {
+                "accepted": False,
+                "message": f"기준선 초기화 처리 오류: {exc}",
+            }
+
+    def sensor_diagnostics_snapshot(
+        self,
+        *,
+        active_requirements: tuple[str, ...],
+        deployment_target: str | None,
+    ) -> dict[str, Any]:
+        snapshot = self.diagnostics.snapshot(
+            ros_active=self.active,
+            active_requirements=active_requirements,
+            deployment_target=deployment_target,
+        )
+        tf_buffer = self._tf_buffer
+        time_type = self._ros_time_type
+        for sensor in snapshot["sensors"]:
+            frame_id = sensor.get("frame_id")
+            if not frame_id or tf_buffer is None or time_type is None:
+                sensor["tf_connected"] = None
+                continue
+            if frame_id == "base_link":
+                sensor["tf_connected"] = True
+                continue
+            try:
+                sensor["tf_connected"] = bool(
+                    tf_buffer.can_transform("base_link", frame_id, time_type())
+                )
+            except Exception:
+                sensor["tf_connected"] = False
+        return snapshot
 
     def capability_status(self) -> dict[str, bool]:
         """Report ROS capabilities without sending a command."""
