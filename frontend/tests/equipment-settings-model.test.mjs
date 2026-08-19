@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   adaptivePolicyConfirmation,
+  equipmentSyncStatus,
   effectiveThresholdSummary,
   normalizeEquipmentSettings,
 } from "../src/equipmentSettingsModel.js";
@@ -18,6 +19,23 @@ test("legacy equipment settings enable the adaptive policy by default", () => {
 
   assert.equal(normalized.equipment[0].adaptive_threshold_enabled, true);
   assert.equal(normalized.equipment[1].adaptive_threshold_enabled, false);
+});
+
+test("equipment synchronization distinguishes desired and applied settings", () => {
+  const rejected = equipmentSyncStatus({
+    state: "rejected",
+    error: "ROI frame mismatch",
+  });
+  assert.equal(rejected.label, "로봇 적용 실패");
+  assert.equal(rejected.tone, "error");
+  assert.equal(rejected.canRetry, true);
+  assert.equal(rejected.error, "ROI frame mismatch");
+  assert.match(rejected.detail, /이전 설정을 유지/);
+
+  const applied = equipmentSyncStatus({ state: "applied" });
+  assert.equal(applied.tone, "success");
+  assert.equal(applied.canRetry, false);
+  assert.match(applied.detail, /실제 판정 설정이 일치/);
 });
 
 test("policy confirmation preserves the critical threshold in fixed mode", () => {

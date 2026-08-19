@@ -75,10 +75,17 @@ equipment_store = ThermalEquipmentSettingsStore()
 
 def equipment_settings_response(
     settings: ThermalEquipmentSettingsDocument,
+    *,
+    runtime: dict | None = None,
 ) -> dict:
+    current_runtime = (
+        runtime
+        if runtime is not None
+        else ros_bridge.thermal_equipment_config_status()
+    )
     return {
         **settings.model_dump(by_alias=True),
-        "runtime": ros_bridge.thermal_equipment_config_status(),
+        "runtime": current_runtime,
         "metadata": equipment_store.metadata(),
     }
 
@@ -527,15 +534,29 @@ def update_equipment_settings(
     settings: ThermalEquipmentSettingsDocument,
 ):
     saved = equipment_store.save(settings, reason="manual")
-    ros_bridge.publish_thermal_equipment_config(saved.model_dump(by_alias=True))
-    return equipment_settings_response(saved)
+    runtime = ros_bridge.publish_thermal_equipment_config(
+        saved.model_dump(by_alias=True)
+    )
+    return equipment_settings_response(saved, runtime=runtime)
+
+
+@app.post("/api/v1/settings/equipment/apply")
+def apply_saved_equipment_settings():
+    """Retry the saved desired settings without creating another revision."""
+    saved = equipment_store.get()
+    runtime = ros_bridge.publish_thermal_equipment_config(
+        saved.model_dump(by_alias=True)
+    )
+    return equipment_settings_response(saved, runtime=runtime)
 
 
 @app.post("/api/v1/settings/equipment/reset-defaults")
 def reset_equipment_settings():
     saved = equipment_store.reset_defaults()
-    ros_bridge.publish_thermal_equipment_config(saved.model_dump(by_alias=True))
-    return equipment_settings_response(saved)
+    runtime = ros_bridge.publish_thermal_equipment_config(
+        saved.model_dump(by_alias=True)
+    )
+    return equipment_settings_response(saved, runtime=runtime)
 
 
 @app.post("/api/v1/settings/equipment/history/{revision_id}/restore")
@@ -544,8 +565,10 @@ def restore_equipment_settings(revision_id: str):
         saved = equipment_store.restore(revision_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="설정 이력을 찾을 수 없습니다.")
-    ros_bridge.publish_thermal_equipment_config(saved.model_dump(by_alias=True))
-    return equipment_settings_response(saved)
+    runtime = ros_bridge.publish_thermal_equipment_config(
+        saved.model_dump(by_alias=True)
+    )
+    return equipment_settings_response(saved, runtime=runtime)
 
 
 @app.post("/api/v1/settings/equipment/baseline/reset")

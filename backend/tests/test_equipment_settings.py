@@ -139,6 +139,56 @@ def test_equipment_settings_api_publishes_adaptive_policy(monkeypatch, tmp_path)
     )
 
 
+def test_equipment_settings_api_returns_robot_rejection_without_rolling_back(
+    monkeypatch, tmp_path
+):
+    store = ThermalEquipmentSettingsStore(tmp_path / "equipment.json")
+    monkeypatch.setattr(main_module, "equipment_store", store)
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "publish_thermal_equipment_config",
+        lambda document: {
+            "state": "rejected",
+            "error": "baseline state could not be invalidated safely",
+            "equipment": [],
+        },
+    )
+    payload = store.get().model_dump(by_alias=True)
+    payload["equipment"][0]["display_name"] = "저장된 목표 설정"
+
+    response = client.put("/api/v1/settings/equipment", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["runtime"]["state"] == "rejected"
+    assert response.json()["runtime"]["error"]
+    assert store.get().equipment[0].display_name == "저장된 목표 설정"
+
+
+def test_equipment_settings_apply_retries_without_creating_revision(
+    monkeypatch, tmp_path
+):
+    store = ThermalEquipmentSettingsStore(tmp_path / "equipment.json")
+    settings = store.get()
+    settings.equipment[0].display_name = "재적용 대상"
+    store.save(settings)
+    history_count = len(store.history())
+    published = []
+    monkeypatch.setattr(main_module, "equipment_store", store)
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "publish_thermal_equipment_config",
+        lambda document: published.append(document)
+        or {"state": "syncing", "equipment": []},
+    )
+
+    response = client.post("/api/v1/settings/equipment/apply")
+
+    assert response.status_code == 200
+    assert response.json()["runtime"]["state"] == "syncing"
+    assert published[-1]["equipment"][0]["display_name"] == "재적용 대상"
+    assert len(store.history()) == history_count
+
+
 def test_equipment_baseline_reset_reports_ros_result(monkeypatch):
     monkeypatch.setattr(
         main_module.ros_bridge,

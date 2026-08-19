@@ -17,6 +17,7 @@ import EquipmentRoiPicker from "./EquipmentRoiPicker.jsx";
 import SettingsConfirmDialog from "./SettingsConfirmDialog.jsx";
 import {
   adaptivePolicyConfirmation,
+  equipmentSyncStatus,
   effectiveThresholdSummary,
   normalizeEquipmentSettings,
   optionalFiniteNumber,
@@ -114,6 +115,7 @@ export default function EquipmentSettings({
   const [confirmation, setConfirmation] = useState(null);
   const importInput = useRef(null);
   const dirty = JSON.stringify(document) !== JSON.stringify(savedDocument);
+  const syncStatus = equipmentSyncStatus(runtime);
 
   const applyPayload = (payload) => {
     const next = settingsDocument(payload);
@@ -293,11 +295,46 @@ export default function EquipmentSettings({
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.detail || `save failed: ${response.status}`);
       }
-      applyPayload(await response.json());
+      const payload = await response.json();
+      applyPayload(payload);
       await loadHistory();
-      notify("설비별 온도 기준과 ROI를 저장했습니다.");
+      const nextSync = equipmentSyncStatus(payload.runtime);
+      notify(
+        nextSync.tone === "offline"
+          ? "설정은 저장됐습니다. 로봇 연결 후 다시 적용하세요."
+          : "설비별 온도 기준과 ROI를 저장했습니다.",
+        nextSync.tone === "offline" ? "warning" : "info",
+      );
     } catch (error) {
       notify(`설정 저장에 실패했습니다: ${error.message}`, "warning");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const retryApply = async () => {
+    if (!apiOnline || dirty) {
+      notify(
+        dirty
+          ? "편집 중인 변경사항을 먼저 저장한 뒤 다시 적용하세요."
+          : "서버가 연결되지 않아 다시 적용할 수 없습니다.",
+        "warning",
+      );
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch("/api/v1/settings/equipment/apply", {
+        method: "POST",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.detail || `apply failed: ${response.status}`);
+      }
+      applyPayload(payload);
+      notify("저장된 설정을 로봇에 다시 전송했습니다.", "info");
+    } catch (error) {
+      notify(`설정 재적용에 실패했습니다: ${error.message}`, "warning");
     } finally {
       setBusy(false);
     }
@@ -387,6 +424,25 @@ export default function EquipmentSettings({
           {dirty && <strong>저장되지 않은 변경</strong>}
         </div>
 
+        {syncStatus.tone === "error" && (
+          <div className="settings-sync-alert" role="alert">
+            <Warning size={20} weight="fill" />
+            <div>
+              <strong>{syncStatus.label}</strong>
+              <p>{syncStatus.detail}</p>
+              {syncStatus.error && <code>{syncStatus.error}</code>}
+            </div>
+            <button
+              type="button"
+              className="button ghost compact"
+              onClick={retryApply}
+              disabled={busy || dirty || !apiOnline}
+            >
+              <ArrowCounterClockwise size={15} />다시 적용
+            </button>
+          </div>
+        )}
+
         <div className="equipment-settings-layout">
           <aside className="settings-card equipment-list-card">
             <header>
@@ -448,9 +504,10 @@ export default function EquipmentSettings({
               <section className="settings-card baseline-status-card">
                 <header><div><h2>기준선 준비 상태</h2><p>설비 웨이포인트의 정상 순찰 측정값으로 생성합니다.</p></div></header>
                 <div className="baseline-status-value">
-                  <span className={`equipment-state-dot ${runtime.state !== "offline" ? "enabled" : ""}`} />
+                  <span className={`equipment-state-dot ${syncStatus.tone}`} />
                   <strong>{baselineLabel(runtime, selected.id)}</strong>
-                  <small>{runtime.state === "pending" ? "현재 순찰 종료 후 설정이 적용됩니다." : `동기화 상태: ${runtime.state || "unknown"}`}</small>
+                  <small>{syncStatus.label} · {syncStatus.detail}</small>
+                  {syncStatus.error && <small className="equipment-sync-error">원인: {syncStatus.error}</small>}
                 </div>
                 <div className="baseline-progress"><span style={{ width: `${progress}%` }} /></div>
                 <dl className="baseline-meta"><div><dt>수집 조건</dt><dd>설비 웨이포인트 정상 측정 {progressTarget || 10}회</dd></div><div><dt>마지막 표본</dt><dd>{selectedRuntime?.baseline_last_sample_unix_sec ? formatDate(selectedRuntime.baseline_last_sample_unix_sec * 1000) : "아직 수집되지 않음"}</dd></div><div><dt>판정 모드</dt><dd>{adaptiveEnabled ? baselineActive ? "자동 가변 기준" : "고정 기준 · 가변 준비 중" : "고정 임계값만"}</dd></div>{baselineTemperature !== null && <div><dt>승인 기준선</dt><dd>{baselineTemperature.toFixed(1)}°C</dd></div>}</dl>
@@ -484,7 +541,7 @@ export default function EquipmentSettings({
           <button type="button" className="button ghost" onClick={() => importInput.current?.click()}><UploadSimple size={16} />가져오기</button>
           <button type="button" className="button ghost" onClick={exportSettings}><DownloadSimple size={16} />내보내기</button>
           <button type="button" className="button ghost" onClick={loadDefaults}>기본 설비 불러오기</button>
-          <span className="settings-save-state">{dirty ? "변경사항을 검토한 뒤 저장하세요." : "서버 설정과 일치합니다."}</span>
+          <span className={`settings-save-state ${syncStatus.tone}`}>{dirty ? "변경사항을 검토한 뒤 저장하세요." : syncStatus.detail}</span>
           <button type="submit" className="button primary" disabled={busy || !selected || !dirty}><Check size={17} weight="bold" />{busy ? "저장 중…" : "설정 저장"}</button>
         </footer>
       </form>
