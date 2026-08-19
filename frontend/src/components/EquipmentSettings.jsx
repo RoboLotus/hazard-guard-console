@@ -14,6 +14,12 @@ import {
 import { NumberField } from "./Common.jsx";
 import EquipmentRoiPicker from "./EquipmentRoiPicker.jsx";
 import SettingsConfirmDialog from "./SettingsConfirmDialog.jsx";
+import {
+  adaptivePolicyConfirmation,
+  effectiveThresholdSummary,
+  normalizeEquipmentSettings,
+  optionalFiniteNumber,
+} from "../equipmentSettingsModel.js";
 
 function makeEquipment(existing) {
   let index = existing.length + 1;
@@ -35,15 +41,7 @@ function makeEquipment(existing) {
 }
 
 function settingsDocument(payload) {
-  return {
-    schema_version: Number(payload?.schema_version || 1),
-    equipment: Array.isArray(payload?.equipment)
-      ? payload.equipment.map((item) => ({
-        ...item,
-        adaptive_threshold_enabled: item.adaptive_threshold_enabled !== false,
-      }))
-      : [],
-  };
+  return normalizeEquipmentSettings(payload);
 }
 
 function validate(document) {
@@ -73,12 +71,6 @@ function formatDate(value) {
   if (!value) return "기록 없음";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "기록 없음" : date.toLocaleString("ko-KR");
-}
-
-function optionalNumber(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
 }
 
 function baselineRuntime(runtime, equipmentId) {
@@ -374,23 +366,12 @@ export default function EquipmentSettings({
   const progress = progressTarget ? Math.min(100, (progressCount / progressTarget) * 100) : 0;
   const adaptiveEnabled = selected?.adaptive_threshold_enabled !== false;
   const baselineActive = selectedRuntime?.baseline_state === "active";
-  const baselineTemperature = optionalNumber(selectedRuntime?.baseline_temperature_c);
-  const latestEffectiveThreshold = optionalNumber(selectedRuntime?.effective_adaptive_threshold_c);
-  const fallbackEffectiveThreshold = baselineTemperature !== null && selected
-    ? baselineTemperature + Number(selected.adaptive_delta_c)
-    : null;
+  const baselineTemperature = optionalFiniteNumber(selectedRuntime?.baseline_temperature_c);
+  const effectiveThreshold = effectiveThresholdSummary(selectedRuntime, selected);
   const mapSpec = spatialState?.map;
 
   const requestAdaptivePolicy = (enabled) => requestConfirmation({
-    title: enabled ? "자동 가변 기준을 사용할까요?" : "고정 임계값만 사용할까요?",
-    description: enabled
-      ? "승인된 정상 기준선과 순찰 간 상승 추세를 함께 사용합니다. 기준선 수집 중이면 완료 후 자동 적용됩니다."
-      : "기준선 파일은 보존하지만 가변 이탈 경고를 중지합니다. 절대 위험온도 판정은 계속 작동합니다.",
-    impact: runtime?.state === "pending"
-      ? "현재 순찰 종료 후 변경됩니다."
-      : "설정 저장 후 다음 설비 검사부터 적용됩니다.",
-    confirmLabel: enabled ? "자동 가변 기준 사용" : "고정 임계값만 사용",
-    danger: !enabled,
+    ...adaptivePolicyConfirmation(enabled, runtime?.state),
     action: () => updateSelected({ adaptive_threshold_enabled: enabled }),
   });
 
@@ -458,7 +439,7 @@ export default function EquipmentSettings({
                   {adaptiveEnabled ? <>
                     <span><b>가변 경고</b> · 지속 상승 추세 <b>그리고</b> 승인 기준선 대비 +{selected.adaptive_delta_c}°C 이상</span>
                     <span><b>한 조건만 만족</b> · 위험으로 확정하지 않고 재확인</span>
-                    <span><b>최근 실효 임계점</b> · {latestEffectiveThreshold !== null ? `${latestEffectiveThreshold.toFixed(1)}°C (환경 보정 반영)` : fallbackEffectiveThreshold !== null ? `${fallbackEffectiveThreshold.toFixed(1)}°C (환경 기준 미수신 시)` : "기준선 활성화 후 계산"}</span>
+                    <span><b>최근 실효 임계점</b> · {effectiveThreshold}</span>
                   </> : <span><b>고정 모드</b> · 가변 이탈은 사용하지 않고 상승 추세만 재확인 정보로 남깁니다.</span>}
                 </div>
               </section>
