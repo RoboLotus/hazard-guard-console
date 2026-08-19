@@ -299,6 +299,7 @@ class RosMediaAdapter:
             if not isinstance(equipment, dict):
                 continue
             equipment_id = str(equipment.get("equipment_id", ""))
+            equipment_name = str(equipment.get("display_name") or equipment_id)
             live = self._latest_thermal_detections.get(equipment_id)
             completed = dict(live) if live else {
                 "detection_id": f"thermal-{equipment_id}",
@@ -310,6 +311,7 @@ class RosMediaAdapter:
                 "confidence": 0.0,
                 "radius_m": 0.04,
                 "equipment_id": equipment_id,
+                "equipment_name": equipment_name,
                 "simulated": True,
             }
             status = str(equipment.get("trend_status", "normal"))
@@ -340,6 +342,7 @@ class RosMediaAdapter:
                 )
                 completed["temperature_c"] = temperature
                 center = hottest.get("center", [])
+                equipment_name=equipment_name,
                 if len(center) >= 3:
                     completed.update(x=center[0], y=center[1], z=center[2])
             reason = "within_expected_range"

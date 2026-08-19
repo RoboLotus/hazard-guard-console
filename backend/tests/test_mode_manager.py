@@ -201,6 +201,7 @@ def test_simulation_launch_arguments_are_separate_from_mode(monkeypatch, tmp_pat
         "simulation.launch.py",
     ]
     assert "simulation_mode:=kinematic" in command
+    assert "use_thermal_pipeline:=true" in command
     assert any(argument.startswith("world:=") for argument in command)
     assert "world_name:=facility_map" in command
     assert all(";" not in argument for argument in command)
@@ -274,6 +275,7 @@ def test_physical_patrol_passes_selected_map_to_hardware_launch(
         "physical_patrol.launch.py",
     ]
     assert f"map:={map_path}" in command
+    assert "enable_thermal_pipeline:=true" in command
     assert "initial_pose_x:=1.25" in command
     assert "initial_pose_y:=-0.4" in command
     assert "initial_pose_yaw:=0.75" in command

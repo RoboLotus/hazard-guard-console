@@ -401,7 +401,18 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .waypoint-candidate-editor { margin-top: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: #f4f8fe; border: 1px solid #cddff4; border-radius: 8px; }
 .candidate-coordinate { display: flex; align-items: center; gap: 6px; color: #245d98; font-size: 9px; font-weight: 800; }
 .waypoint-candidate-editor label, .waypoint-editor label { display: flex; flex-direction: column; gap: 4px; color: #748398; font-size: 7px; font-weight: 700; }
-.waypoint-candidate-editor input, .waypoint-editor input { min-width: 0; width: 100%; height: 30px; padding: 0 8px; color: #27394e; background: #fff; border: 1px solid #d6e0ea; border-radius: 6px; font-size: 9px; font-weight: 650; }
+.waypoint-candidate-editor input, .waypoint-candidate-editor select, .waypoint-editor input, .waypoint-editor select { min-width: 0; width: 100%; height: 30px; padding: 0 8px; color: #27394e; background: #fff; border: 1px solid #d6e0ea; border-radius: 6px; font-size: 9px; font-weight: 650; }
+.waypoint-kind-control { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.waypoint-kind-control > span { color: #748398; font-size: 7px; font-weight: 700; }
+.waypoint-kind-toggle { min-width: 100px; height: 30px; padding: 3px 7px; display: flex; align-items: center; gap: 6px; color: #617186; background: #fff; border: 1px solid #d6e0ea; border-radius: 15px; cursor: pointer; }
+.waypoint-kind-toggle i { position: relative; width: 24px; height: 14px; flex: 0 0 auto; background: #c8d1db; border-radius: 8px; transition: background .16s ease; }
+.waypoint-kind-toggle i::after { position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; content: ""; background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgba(30,48,68,.22); transition: transform .16s ease; }
+.waypoint-kind-toggle strong { font-size: 8px; white-space: nowrap; }
+.waypoint-kind-toggle.measurement { color: #115fc8; background: #edf5ff; border-color: #a9c8ed; }
+.waypoint-kind-toggle.measurement i { background: #1769e0; }
+.waypoint-kind-toggle.measurement i::after { transform: translateX(10px); }
+.waypoint-kind-toggle:disabled { opacity: .5; cursor: not-allowed; }
+.waypoint-kind-help { color: #9a6b22; font-size: 7px; line-height: 1.4; }
 .candidate-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .input-suffix { position: relative; }
 .input-suffix input { padding-right: 24px; }
@@ -795,6 +806,39 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .form-errors { grid-column: 1 / -1; padding: 12px 14px; display: flex; gap: 9px; color: #ad2b34; background: #fff0f1; border: 1px solid #efc2c6; border-radius: 9px; }
 .form-errors p { margin: 1px 0; font-size: 9px; }
 .form-footer { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.equipment-settings-form { max-width: 1120px; margin: 0 auto; }
+.equipment-settings-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); align-items: start; gap: 13px; }
+.equipment-list-card { position: sticky; top: 16px; padding: 0; overflow: hidden; }
+.equipment-list-card > header { padding: 18px; }
+.equipment-list-tools { padding: 13px; display: grid; gap: 8px; border-bottom: 1px solid #edf0f3; }
+.text-input { width: 100%; height: 38px; padding: 0 11px; color: #223247; background: #f9fafb; border: 1px solid #dce3e9; border-radius: 7px; font: 600 11px "Pretendard Variable", Pretendard, sans-serif; }
+.text-input:focus { outline: 0; background: #fff; border-color: var(--blue); }
+.text-input[readonly] { color: #7d8997; background: #f1f4f7; }
+.equipment-list { max-height: 525px; padding: 7px; overflow-y: auto; }
+.equipment-list-item { width: 100%; min-height: 62px; padding: 10px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 9px; align-items: center; color: #64758a; background: transparent; border: 1px solid transparent; border-radius: 8px; text-align: left; cursor: pointer; }
+.equipment-list-item:hover { background: #f7f9fb; }
+.equipment-list-item.selected { color: #1b5f9f; background: #edf6ff; border-color: #c8ddf2; }
+.equipment-list-item > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.equipment-list-item strong { overflow: hidden; color: #34485f; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.equipment-list-item small { overflow: hidden; color: #8996a5; font: 600 7px ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.equipment-list-item em { grid-column: 2; color: #7f8c9b; font-size: 7px; font-style: normal; }
+.equipment-state-dot { width: 8px; height: 8px; background: #aeb7c2; border-radius: 50%; }
+.equipment-state-dot.enabled { background: var(--success); box-shadow: 0 0 0 3px rgba(28,154,103,.12); }
+.equipment-empty { margin: 0; padding: 24px 10px; color: #8794a3; font-size: 9px; text-align: center; }
+.equipment-editor { min-width: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.equipment-basic-card, .equipment-roi-card { grid-column: 1 / -1; }
+.equipment-basic-card > header > div:first-child, .equipment-roi-card > header > div:first-child { flex: 1; }
+.icon-button.danger { margin-left: auto; color: #b73742; background: #fff0f1; border: 1px solid #f0c9cd; }
+.equipment-enable-row { margin-top: 15px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; color: #34485f; background: #f7fafc; border: 1px solid #e3e9ef; border-radius: 8px; cursor: pointer; }
+.equipment-enable-row input { margin-top: 2px; accent-color: var(--blue); }
+.equipment-enable-row span { display: flex; flex-direction: column; gap: 3px; }
+.equipment-enable-row strong { font-size: 10px; }
+.equipment-enable-row small { color: #8390a0; font-size: 8px; }
+.roi-grid { padding-top: 15px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; }
+.baseline-status-value { min-height: 78px; padding: 15px 4px 2px; display: grid; grid-template-columns: auto 1fr; align-content: center; align-items: center; gap: 5px 9px; }
+.baseline-status-value strong { color: #34485f; font-size: 11px; }
+.baseline-status-value small { grid-column: 2; color: #8491a1; font-size: 8px; }
+.equipment-settings-form > .form-errors, .equipment-settings-form > .form-footer { margin-top: 13px; }
 .sensor-diagnostics { max-width: 1120px; margin: 14px auto 0; }
 .sensor-diagnostics .setting-icon { color: #1769c9; background: #edf5ff; }
 .sensor-diagnostics > header { position: relative; }
@@ -857,11 +901,17 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
   .report-grid { grid-template-columns: 1fr; }
   .report-table-card { grid-column: auto; }
   .help-layout { grid-template-columns: 1fr; }
+  .equipment-settings-layout { grid-template-columns: 250px minmax(0, 1fr); }
+  .roi-grid { grid-template-columns: 1fr 1fr; }
   .help-toc { position: static; display: grid; grid-template-columns: repeat(3, 1fr); }
   .help-toc > strong { grid-column: 1 / -1; }
 }
 
 @media (max-width: 760px) {
+  .equipment-settings-layout, .equipment-editor, .roi-grid { grid-template-columns: 1fr; }
+  .equipment-list-card { position: static; }
+  .equipment-basic-card, .equipment-roi-card { grid-column: auto; }
+  .equipment-list { max-height: 310px; }
   .map-side-panel, .settings-form, .sensor-diagnostic-grid, .help-two-column, .help-feature-list, .video-side-panel { grid-template-columns: 1fr; }
   .simulation-map-manager, .waypoint-mission-card { grid-column: auto; }
   .map-panel-detail { min-height: 520px; }

@@ -32,15 +32,20 @@ from .models import (
     SystemModeRequest,
     ThermalDetection,
     ThresholdSettings,
+    ThermalEquipmentSettingsDocument,
     WorldSelectionRequest,
 )
-from .settings_store import ThresholdSettingsStore
 from .performance_reports import PerformanceReportStore, UnsafeReportPathError
+from .settings_store import ThermalEquipmentSettingsStore, ThresholdSettingsStore
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ros_bridge.start()
+    current_equipment = equipment_store.get()
+    ros_bridge.publish_thermal_equipment_config(
+        current_equipment.model_dump(by_alias=True)
+    )
     try:
         yield
     finally:
@@ -61,6 +66,40 @@ app.add_middleware(
 
 threshold_store = ThresholdSettingsStore()
 performance_report_store = PerformanceReportStore()
+equipment_store = ThermalEquipmentSettingsStore()
+
+
+def equipment_settings_response(
+    settings: ThermalEquipmentSettingsDocument,
+) -> dict:
+    return {
+        **settings.model_dump(by_alias=True),
+        "runtime": ros_bridge.thermal_equipment_config_status(),
+    }
+
+
+def validate_route_equipment(route: NavigationRoute) -> None:
+    configured = {item.id: item for item in equipment_store.get().equipment}
+    for waypoint in route.waypoints:
+        if not waypoint.equipment_id:
+            continue
+        equipment = configured.get(waypoint.equipment_id)
+        if equipment is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"웨이포인트 {waypoint.name!r}의 설비 ID "
+                    f"{waypoint.equipment_id!r}가 존재하지 않습니다."
+                ),
+            )
+        if not equipment.enabled:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"웨이포인트 {waypoint.name!r}에 연결된 "
+                    f"{equipment.display_name!r} 설비가 비활성 상태입니다."
+                ),
+            )
 
 
 def system_mode_status() -> dict:
@@ -454,6 +493,26 @@ def update_thresholds(settings: ThresholdSettings):
     return threshold_store.save(settings)
 
 
+@app.get("/api/v1/settings/equipment")
+def get_equipment_settings():
+    return equipment_settings_response(equipment_store.get())
+
+
+@app.put("/api/v1/settings/equipment")
+def update_equipment_settings(
+    settings: ThermalEquipmentSettingsDocument,
+):
+    saved = equipment_store.save(settings)
+    ros_bridge.publish_thermal_equipment_config(saved.model_dump(by_alias=True))
+    return equipment_settings_response(saved)
+
+
+@app.post("/api/v1/settings/equipment/reset-defaults")
+def reset_equipment_settings():
+    saved = equipment_store.reset_defaults()
+    ros_bridge.publish_thermal_equipment_config(saved.model_dump(by_alias=True))
+    return equipment_settings_response(saved)
+
 @app.post("/api/v1/commands/{command}", response_model=MockCommand)
 def robot_command(command: str, request: CommandRequest | None = None):
     enabled = request.enabled if request is not None else False
@@ -483,12 +542,14 @@ def navigation_route_status():
 
 @app.post("/api/v1/navigation/route/recommend")
 def recommend_navigation_route(route: NavigationRoute):
+    validate_route_equipment(route)
     return ros_bridge.recommend_route(route.model_dump())
 
 
 @app.post("/api/v1/navigation/route")
 def start_navigation_route(route: NavigationRoute):
     require_patrol_mode()
+    validate_route_equipment(route)
     return ros_bridge.start_route(route.model_dump())
 
 

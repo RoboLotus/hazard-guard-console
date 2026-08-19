@@ -80,6 +80,7 @@ export default function MapPage({
   const [repositionWaypointId, setRepositionWaypointId] = useState(null);
   const [missionStatus, setMissionStatus] = useState(null);
   const [navigationStatus, setNavigationStatus] = useState(null);
+  const [equipmentOptions, setEquipmentOptions] = useState([]);
   const [routeBusy, setRouteBusy] = useState(false);
   const [layers, setLayers] = useState({
     depth: true,
@@ -153,6 +154,27 @@ export default function MapPage({
     setGoalMode(false);
     setSelected3dSession(null);
   }, [activeWorldId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadEquipment = async () => {
+      try {
+        const response = await fetch("/api/v1/settings/equipment", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const payload = await response.json();
+        setEquipmentOptions(
+          (payload.equipment || []).filter((equipment) => equipment.enabled),
+        );
+      } catch (error) {
+        if (error.name !== "AbortError") setEquipmentOptions([]);
+      }
+    };
+    void loadEquipment();
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -447,6 +469,7 @@ export default function MapPage({
           />
           <WaypointMissionPanel
             waypoints={waypoints}
+            equipmentOptions={equipmentOptions}
             candidate={goalCandidate}
             goalMode={goalMode}
             repositioning={Boolean(repositionWaypointId)}

@@ -304,11 +304,11 @@ export function MetricCard({ label, value, unit, meta, tone = "" }) {
   );
 }
 
-export function NumberField({ label, name, value, onChange, unit, hint, min = 0, max = 999 }) {
+export function NumberField({ label, name, value, onChange, unit, hint, min = 0, max = 999, step = 1 }) {
   return (
     <label className="form-field">
       <span>{label}</span>
-      <div className="number-input"><input type="number" name={name} value={value} min={min} max={max} step="1" onChange={onChange} /><b>{unit}</b></div>
+      <div className="number-input"><input type="number" name={name} value={value} min={min} max={max} step={step} onChange={onChange} /><b>{unit}</b></div>
       {hint && <small>{hint}</small>}
     </label>
   );

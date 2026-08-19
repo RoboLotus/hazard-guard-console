@@ -110,6 +110,10 @@ class RosBridge:
         self._navigation_result_event = threading.Event()
         self._navigation_result_status: str | None = None
         self._mission_lock = threading.RLock()
+        self._equipment_config_publisher = None
+        self._equipment_config_string_type = None
+        self._equipment_config_status: dict[str, Any] = {"state": "offline", "equipment": []}
+        self._equipment_config_lock = threading.RLock()
 
         sensor_specs = [
             ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0),
@@ -213,6 +217,16 @@ class RosBridge:
                 OccupancyGrid,
                 "/map",
                 self._observe("map", self._media_adapter.on_map),
+                map_qos,
+            )
+            self._equipment_config_string_type = String
+            self._equipment_config_publisher = self._node.create_publisher(
+                String, "/hazard_guard/thermal/equipment_config", map_qos,
+            )
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/thermal/equipment_config/status",
+                self._on_equipment_config_status,
                 map_qos,
             )
             self._node.create_subscription(
@@ -357,6 +371,50 @@ class RosBridge:
         while not self._stop_event.is_set():
             self._executor.spin_once(timeout_sec=0.2)
             self._media_adapter.update_spatial_pose()
+
+    def _on_equipment_config_status(self, message: Any) -> None:
+        try:
+            payload = json.loads(message.data)
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict):
+            return
+        with self._equipment_config_lock:
+            self._equipment_config_status = payload
+
+    def thermal_equipment_config_status(self) -> dict[str, Any]:
+        with self._equipment_config_lock:
+            return json.loads(json.dumps(self._equipment_config_status))
+
+    def publish_thermal_equipment_config(
+        self, document: dict[str, Any]
+    ) -> dict[str, Any]:
+        if (
+            not self.active
+            or self._equipment_config_publisher is None
+            or self._equipment_config_string_type is None
+        ):
+            with self._equipment_config_lock:
+                self._equipment_config_status = {
+                    "state": "offline",
+                    "equipment": [],
+                }
+            return self.thermal_equipment_config_status()
+        message = self._equipment_config_string_type()
+        message.data = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        self._equipment_config_publisher.publish(message)
+        with self._equipment_config_lock:
+            previous = self._equipment_config_status
+            self._equipment_config_status = {
+                "state": "syncing",
+                "equipment": previous.get("equipment", []),
+            }
+        return self.thermal_equipment_config_status()
 
     def capability_status(self) -> dict[str, bool]:
         """Report ROS capabilities without sending a command."""

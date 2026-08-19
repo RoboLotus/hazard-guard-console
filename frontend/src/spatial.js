@@ -198,11 +198,12 @@ export function detectionOpacity(detection) {
 const EQUIPMENT_LABELS = {
   primary_shredder_motor: "1차 파쇄기 모터",
   secondary_processor_pump: "2차 처리기 펌프",
-  baler_hydraulic_tank: "압축기 유압 탱크",
-  bunker_waste_pile: "벙커 폐기물 더미",
+  baler_hydraulic_tank: "베일러 유압 탱크",
+  bunker_waste_pile: "폐기물 적치 구역",
 };
 
 function equipmentLabel(detection) {
+  if (detection?.equipment_name) return detection.equipment_name;
   const equipmentId = detection?.equipment_id || detection?.detection_id || "unknown";
   return EQUIPMENT_LABELS[equipmentId]
     || String(equipmentId).replace(/^thermal-/, "").replaceAll("_", " ");

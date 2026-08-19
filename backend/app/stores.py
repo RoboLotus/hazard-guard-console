@@ -511,6 +511,7 @@ class SpatialStore:
             "radius_m": round(float(detection.get("radius_m", 0.35)), 3),
             "source": str(detection.get("source") or "unknown"),
             "equipment_id": detection.get("equipment_id"),
+            "equipment_name": detection.get("equipment_name"),
             "trend_status": detection.get("trend_status"),
             "trend_reason": detection.get("trend_reason"),
             "visit_index": detection.get("visit_index"),
@@ -537,7 +538,7 @@ class SpatialStore:
                 and item.get("visit_index") is None
             ):
                 for key in (
-                    "source", "equipment_id", "trend_status", "trend_reason"
+                    "source", "equipment_id", "equipment_name", "trend_status", "trend_reason"
                 ):
                     item[key] = previous.get(key)
         self._detections[item["detection_id"]] = item
