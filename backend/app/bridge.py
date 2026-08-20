@@ -5,6 +5,7 @@ import math
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -119,6 +120,10 @@ class RosBridge:
         self._dispenser_command_publisher = None
         self._dispenser_string_type = None
         self._dispenser_result_handler = None
+        self._dispenser_result_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="dispenser-ledger",
+        )
         self._dispenser_lock = threading.RLock()
         self._dispenser_status_client = None
         self._dispenser_status_request_type = None
@@ -433,6 +438,14 @@ class RosBridge:
             handler = self._dispenser_result_handler
         if handler is None:
             return
+        try:
+            self._dispenser_result_executor.submit(
+                self._persist_dispenser_result, handler, payload
+            )
+        except RuntimeError as exc:
+            self._set_error(f"디스펜서 결과 작업 큐가 종료되었습니다: {exc}")
+
+    def _persist_dispenser_result(self, handler, payload: dict[str, Any]) -> None:
         try:
             handler(payload)
         except Exception as exc:
@@ -1460,6 +1473,7 @@ class RosBridge:
             self._node.destroy_node()
         if self._context is not None and self._context.ok():
             self._context.shutdown()
+        self._dispenser_result_executor.shutdown(wait=True, cancel_futures=False)
         self.active = False
         self._teleop_publisher = None
         self._teleop_twist_type = None

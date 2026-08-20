@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -14,7 +15,8 @@ from typing import Any
 TERMINAL = frozenset({
     "succeeded", "jam_suspected", "hardware_error", "canceled",
     "rejected_busy", "recovery_required", "command_completed_unverified",
-    "dispatch_unavailable",
+    "dispatch_unavailable", "hardware_unavailable",
+    "rejected_no_confirmation", "safety_interlock",
 })
 IN_PROGRESS = frozenset({"accepted", "dispatched", "dispensing", "waiting", "homing"})
 _ORDER = {"accepted": 0, "dispatched": 1, "dispensing": 2, "waiting": 3, "homing": 4}
@@ -22,6 +24,7 @@ ROBOT_RESULT_STATES = frozenset({
     "dispensing", "waiting", "homing", "succeeded", "jam_suspected",
     "hardware_error", "canceled", "rejected_busy", "command_completed_unverified",
     "recovery_required",
+    "hardware_unavailable", "rejected_no_confirmation", "safety_interlock",
 })
 
 
@@ -29,8 +32,21 @@ class DispenserRequestStoreError(RuntimeError):
     pass
 
 
+class IdempotencyConflictError(DispenserRequestStoreError):
+    """The same idempotency key was reused for different request content."""
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def request_fingerprint(command: str, detection_id: str | None) -> str:
+    canonical = json.dumps(
+        {"command": command, "detection_id": detection_id},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class DispenserRequestStore:
@@ -110,24 +126,83 @@ class DispenserRequestStore:
             return True
         return _ORDER.get(target, -1) >= _ORDER.get(current, -1)
 
-    def submit(self, *, request_id: str, detection_id: str | None) -> tuple[dict[str, Any], bool]:
+    def submit(
+        self,
+        *,
+        request_id: str,
+        detection_id: str | None,
+        audit_context: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
+            request_row = connection.execute(
                 "SELECT record_json FROM dispenser_requests WHERE request_id=?", (request_id,)
             ).fetchone()
-            if row is None and detection_id:
-                row = connection.execute(
+            detection_row = None
+            if detection_id:
+                detection_row = connection.execute(
                     "SELECT record_json FROM dispenser_requests WHERE detection_id=?", (detection_id,)
                 ).fetchone()
-            existing = self._row(row)
+            by_request = self._row(request_row)
+            by_detection = self._row(detection_row)
+            if (
+                by_request is not None
+                and by_detection is not None
+                and by_request["request_id"] != by_detection["request_id"]
+            ):
+                connection.rollback()
+                raise IdempotencyConflictError(
+                    "request_id와 detection_id가 서로 다른 기존 요청을 가리킵니다"
+                )
+            existing = by_request or by_detection
             if existing is not None:
+                expected = request_fingerprint("drop", detection_id)
+                actual = existing.get("request_fingerprint") or request_fingerprint(
+                    existing["command"], existing.get("detection_id")
+                )
+                if by_request is not None and actual != expected:
+                    connection.rollback()
+                    raise IdempotencyConflictError(
+                        "request_id가 다른 배출 요청 내용으로 재사용되었습니다"
+                    )
+                if existing["command"] != "drop":
+                    connection.rollback()
+                    raise IdempotencyConflictError(
+                        "detection_id가 다른 명령으로 재사용되었습니다"
+                    )
+                if existing["state"] in {
+                    "dispatch_unavailable",
+                    "rejected_busy",
+                    "hardware_unavailable",
+                    "rejected_no_confirmation",
+                    "safety_interlock",
+                } and not bool(existing.get("actuation_started", False)):
+                    existing.update(
+                        state="accepted",
+                        updated_at=_timestamp(),
+                        result_detail="safe_retry_before_actuation",
+                        audit_context=audit_context or existing.get("audit_context"),
+                    )
+                    connection.execute(
+                        "UPDATE dispenser_requests SET state=?, record_json=?, updated_at=? WHERE request_id=?",
+                        (
+                            existing["state"],
+                            self._encode(existing),
+                            existing["updated_at"],
+                            existing["request_id"],
+                        ),
+                    )
+                    connection.commit()
+                    return existing, True
                 connection.commit()
                 return existing, False
             timestamp = _timestamp()
             record = {
                 "request_id": request_id, "detection_id": detection_id, "command": "drop",
                 "state": "accepted", "created_at": timestamp, "updated_at": timestamp,
+                "request_fingerprint": request_fingerprint("drop", detection_id),
+                "audit_context": audit_context or {},
+                "actuation_started": False,
             }
             connection.execute(
                 "INSERT INTO dispenser_requests VALUES (?, ?, ?, ?, ?, ?)",

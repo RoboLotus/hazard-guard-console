@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -19,7 +20,11 @@ from .bridge import (
     thermal_cloud_store,
 )
 from .mode_manager import system_mode_manager
-from .dispenser_requests import DispenserRequestStore, DispenserRequestStoreError
+from .dispenser_requests import (
+    DispenserRequestStore,
+    DispenserRequestStoreError,
+    IdempotencyConflictError,
+)
 from .models import (
     CommandRequest,
     DispenserDropRequest,
@@ -73,8 +78,95 @@ app.add_middleware(
 threshold_store = ThresholdSettingsStore()
 performance_report_store = PerformanceReportStore()
 equipment_store = ThermalEquipmentSettingsStore()
-dispenser_request_store = DispenserRequestStore()
-ros_bridge.set_dispenser_result_handler(dispenser_request_store.apply_robot_result)
+try:
+    dispenser_request_store: DispenserRequestStore | None = DispenserRequestStore()
+    dispenser_request_store_error: str | None = None
+except DispenserRequestStoreError as exc:
+    # Keep monitoring available while the physical dispenser remains fail-closed.
+    dispenser_request_store = None
+    dispenser_request_store_error = str(exc)
+if dispenser_request_store is not None:
+    ros_bridge.set_dispenser_result_handler(
+        dispenser_request_store.apply_robot_result
+    )
+
+
+def dispenser_drop_enabled() -> bool:
+    return os.getenv("HAZARD_GUARD_DISPENSER_DROP_ENABLED", "0") == "1"
+
+
+def dispenser_safety_context(request: DispenserDropRequest) -> dict:
+    if not dispenser_drop_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="디스펜서 안전 승인 기능이 비활성화되어 있습니다.",
+        )
+    if not request.operator_approved:
+        raise HTTPException(status_code=403, detail="관리자 배출 승인이 필요합니다.")
+
+    telemetry = telemetry_store.snapshot()
+    try:
+        speed_mps = float(telemetry.get("speed_mps"))
+    except (TypeError, ValueError):
+        speed_mps = math.nan
+    try:
+        stop_threshold = float(
+            os.getenv("HAZARD_GUARD_DISPENSER_STOP_SPEED_MPS", "0.02")
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="디스펜서 정지 속도 설정이 유효하지 않습니다.",
+        ) from exc
+    if not math.isfinite(stop_threshold) or stop_threshold < 0:
+        raise HTTPException(
+            status_code=503,
+            detail="디스펜서 정지 속도 설정이 유효하지 않습니다.",
+        )
+    if not math.isfinite(speed_mps) or abs(speed_mps) > stop_threshold:
+        raise HTTPException(
+            status_code=409,
+            detail="로봇의 완전 정지가 확인되지 않아 배출할 수 없습니다.",
+        )
+
+    mission = route_mission_store.snapshot()
+    safe_statuses = {
+        "idle", "paused", "stopped", "succeeded", "failed", "canceled",
+        "cancelled",
+    }
+    if str(mission.get("status", "")).lower() not in safe_statuses:
+        raise HTTPException(
+            status_code=409,
+            detail="순찰 임무가 정지된 뒤에만 배출할 수 있습니다.",
+        )
+
+    person_safety = telemetry.get("person_safety") or {}
+    if (
+        bool(person_safety.get("detector_stale"))
+        or str(person_safety.get("state_name", "")).upper() != "CLEAR"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="사람 안전 상태가 CLEAR일 때만 배출할 수 있습니다.",
+        )
+    return {
+        "operator_approved": True,
+        "speed_mps": speed_mps,
+        "mission_status": mission.get("status"),
+        "person_safety_state": person_safety.get("state_name"),
+    }
+
+
+def require_dispenser_store() -> DispenserRequestStore:
+    if dispenser_request_store is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "디스펜서 요청 원장을 사용할 수 없어 배출을 차단했습니다: "
+                f"{dispenser_request_store_error or 'unknown error'}"
+            ),
+        )
+    return dispenser_request_store
 
 
 def equipment_settings_response(
@@ -234,6 +326,15 @@ def health():
             detect_external=False
         ).get("deployment_target"),
         "capabilities": ros_bridge.capability_status(),
+    }
+
+
+@app.get("/api/v1/dispenser/status")
+def dispenser_status():
+    return {
+        "drop_enabled": dispenser_drop_enabled(),
+        "ledger_available": dispenser_request_store is not None,
+        "ledger_error": dispenser_request_store_error,
     }
 
 
@@ -592,11 +693,16 @@ def robot_command(command: str, request: CommandRequest | None = None):
 def request_dispenser_drop(request: DispenserDropRequest):
     """Record first, then publish once. Replays always return saved state."""
 
+    audit_context = dispenser_safety_context(request)
+    store = require_dispenser_store()
     try:
-        record, created = dispenser_request_store.submit(
+        record, created = store.submit(
             request_id=request.request_id,
             detection_id=request.detection_id,
+            audit_context=audit_context,
         )
+    except IdempotencyConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DispenserRequestStoreError as exc:
         raise HTTPException(
             status_code=503,
@@ -607,14 +713,14 @@ def request_dispenser_drop(request: DispenserDropRequest):
 
     dispatch = ros_bridge.publish_dispenser_drop(record)
     if not dispatch["accepted"]:
-        record = dispenser_request_store.transition(
+        record = store.transition(
             record["request_id"],
             "dispatch_unavailable",
             result_detail=dispatch["message"],
         )
         return {**record, "replayed": False, "dispatched": False}
 
-    record = dispenser_request_store.transition(
+    record = store.transition(
         record["request_id"], "dispatched", dispatch_message=dispatch["message"]
     )
     return {**record, "replayed": False, "dispatched": True}
@@ -622,13 +728,14 @@ def request_dispenser_drop(request: DispenserDropRequest):
 
 @app.get("/api/v1/dispenser/requests/{request_id}")
 def dispenser_request_status(request_id: str):
-    record = dispenser_request_store.get(request_id)
+    store = require_dispenser_store()
+    record = store.get(request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="디스펜서 요청 기록이 없습니다.")
     if record.get("state") == "recovery_required":
         robot_record = ros_bridge.lookup_dispenser_request(request_id)
         if robot_record is not None:
-            restored = dispenser_request_store.apply_robot_result(robot_record)
+            restored = store.apply_robot_result(robot_record)
             if restored is not None:
                 record = restored
     return record

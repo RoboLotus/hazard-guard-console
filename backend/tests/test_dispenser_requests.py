@@ -2,9 +2,31 @@ from app import main as main_module
 import pytest
 from concurrent.futures import ThreadPoolExecutor
 
-from app.dispenser_requests import DispenserRequestStore, DispenserRequestStoreError
+from app.dispenser_requests import (
+    DispenserRequestStore,
+    DispenserRequestStoreError,
+    IdempotencyConflictError,
+)
 from app.main import app
+from app.models import DispenserDropRequest
 from fastapi.testclient import TestClient
+
+
+REAL_SAFETY_CONTEXT = main_module.dispenser_safety_context
+
+
+@pytest.fixture(autouse=True)
+def allow_test_dispenser_request(monkeypatch):
+    monkeypatch.setattr(
+        main_module,
+        "dispenser_safety_context",
+        lambda _request: {
+            "operator_approved": True,
+            "speed_mps": 0.0,
+            "mission_status": "stopped",
+            "person_safety_state": "CLEAR",
+        },
+    )
 
 
 def test_same_http_request_is_published_once_and_restored(monkeypatch, tmp_path):
@@ -58,6 +80,116 @@ def test_detection_id_blocks_a_new_network_request_id(monkeypatch, tmp_path):
     assert duplicate.json()["request_id"] == "beacon-request-1"
     assert duplicate.json()["replayed"] is True
     assert len(calls) == 1
+
+
+def test_request_id_reuse_with_different_detection_is_conflict(tmp_path):
+    store = DispenserRequestStore(tmp_path / "backend.sqlite3")
+    store.submit(request_id="beacon-request-1", detection_id="thermal-1")
+
+    with pytest.raises(IdempotencyConflictError):
+        store.submit(request_id="beacon-request-1", detection_id="thermal-2")
+
+
+def test_detection_only_request_id_is_bounded_for_robot_validation():
+    request = DispenserDropRequest(detection_id="a" * 96)
+
+    assert len(request.request_id) <= 96
+    assert request.request_id.startswith("detection:")
+
+
+def test_dispatch_failure_can_retry_same_request_without_actuation(tmp_path):
+    store = DispenserRequestStore(tmp_path / "backend.sqlite3")
+    store.submit(request_id="beacon-request-1", detection_id="thermal-1")
+    store.transition(
+        "beacon-request-1",
+        "dispatch_unavailable",
+        actuation_started=False,
+    )
+
+    record, created = store.submit(
+        request_id="beacon-request-1", detection_id="thermal-1"
+    )
+
+    assert created is True
+    assert record["state"] == "accepted"
+
+
+def test_real_safety_guard_requires_enablement_approval_and_full_stop(
+    monkeypatch,
+):
+    request = DispenserDropRequest(
+        request_id="beacon-request-1",
+        detection_id="thermal-1",
+        operator_approved=True,
+    )
+    monkeypatch.setenv("HAZARD_GUARD_DISPENSER_DROP_ENABLED", "1")
+    monkeypatch.setattr(
+        main_module.telemetry_store,
+        "snapshot",
+        lambda: {
+            "speed_mps": 0.1,
+            "person_safety": {
+                "state_name": "CLEAR",
+                "detector_stale": False,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        main_module.route_mission_store,
+        "snapshot",
+        lambda: {"status": "stopped"},
+    )
+
+    with pytest.raises(main_module.HTTPException) as error:
+        REAL_SAFETY_CONTEXT(request)
+
+    assert error.value.status_code == 409
+
+
+def test_real_safety_guard_is_disabled_and_unapproved_by_default(monkeypatch):
+    request = DispenserDropRequest(
+        request_id="beacon-request-1",
+        detection_id="thermal-1",
+    )
+    monkeypatch.delenv("HAZARD_GUARD_DISPENSER_DROP_ENABLED", raising=False)
+    with pytest.raises(main_module.HTTPException) as disabled:
+        REAL_SAFETY_CONTEXT(request)
+    assert disabled.value.status_code == 503
+
+    monkeypatch.setenv("HAZARD_GUARD_DISPENSER_DROP_ENABLED", "1")
+    with pytest.raises(main_module.HTTPException) as unapproved:
+        REAL_SAFETY_CONTEXT(request)
+    assert unapproved.value.status_code == 403
+
+
+def test_real_safety_guard_accepts_approved_stopped_clear_state(monkeypatch):
+    request = DispenserDropRequest(
+        request_id="beacon-request-1",
+        detection_id="thermal-1",
+        operator_approved=True,
+    )
+    monkeypatch.setenv("HAZARD_GUARD_DISPENSER_DROP_ENABLED", "1")
+    monkeypatch.setattr(
+        main_module.telemetry_store,
+        "snapshot",
+        lambda: {
+            "speed_mps": 0.0,
+            "person_safety": {
+                "state_name": "CLEAR",
+                "detector_stale": False,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        main_module.route_mission_store,
+        "snapshot",
+        lambda: {"status": "stopped"},
+    )
+
+    context = REAL_SAFETY_CONTEXT(request)
+
+    assert context["operator_approved"] is True
+    assert context["mission_status"] == "stopped"
 
 
 def test_backend_restart_never_republishes_an_interrupted_request(tmp_path):
