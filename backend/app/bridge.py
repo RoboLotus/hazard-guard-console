@@ -120,6 +120,8 @@ class RosBridge:
         self._dispenser_string_type = None
         self._dispenser_result_handler = None
         self._dispenser_lock = threading.RLock()
+        self._dispenser_status_client = None
+        self._dispenser_status_request_type = None
 
         sensor_specs = [
             ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0, 1.0),
@@ -165,6 +167,10 @@ class RosBridge:
             from cv_bridge import CvBridge
             from hazard_guard_interfaces.msg import PersonSafetyState, RobotTelemetry
             from hazard_guard_interfaces.srv import RobotCommand
+            try:
+                from hazard_guard_interfaces.srv import DispenserRequestStatus
+            except ImportError:
+                DispenserRequestStatus = None
             from nav_msgs.msg import OccupancyGrid, Odometry
             from nav2_msgs.action import ComputePathToPose, NavigateToPose
             from rclpy.action import ActionClient
@@ -240,6 +246,12 @@ class RosBridge:
                 self._on_dispenser_result,
                 10,
             )
+            if DispenserRequestStatus is not None:
+                self._dispenser_status_client = self._node.create_client(
+                    DispenserRequestStatus,
+                    "/hazard_guard/dispenser/request_status",
+                )
+                self._dispenser_status_request_type = DispenserRequestStatus.Request
             self._node.create_subscription(
                 String,
                 "/hazard_guard/thermal/equipment_config/status",
@@ -449,6 +461,31 @@ class RosBridge:
         )
         publisher.publish(message)
         return {"accepted": True, "message": "디스펜서 요청을 발행했습니다."}
+
+    def lookup_dispenser_request(self, request_id: str) -> dict[str, Any] | None:
+        """Recover one missed terminal result after a WebUI process restart."""
+
+        client = self._dispenser_status_client
+        request_type = self._dispenser_status_request_type
+        if not self.active or client is None or request_type is None:
+            return None
+        if not client.wait_for_service(timeout_sec=0.75):
+            return None
+        request = request_type()
+        request.request_id = request_id
+        future = client.call_async(request)
+        completed = threading.Event()
+        future.add_done_callback(lambda _: completed.set())
+        if not completed.wait(timeout=2.0):
+            return None
+        try:
+            response = future.result()
+            if not response.found:
+                return None
+            payload = json.loads(response.record_json)
+            return payload if isinstance(payload, dict) else None
+        except (Exception, ValueError, json.JSONDecodeError):
+            return None
 
     def thermal_equipment_config_status(self) -> dict[str, Any]:
         with self._equipment_config_lock:
@@ -1430,6 +1467,8 @@ class RosBridge:
         self._initial_pose_type = None
         self._dispenser_command_publisher = None
         self._dispenser_string_type = None
+        self._dispenser_status_client = None
+        self._dispenser_status_request_type = None
 
 
 telemetry_store = TelemetryStore()

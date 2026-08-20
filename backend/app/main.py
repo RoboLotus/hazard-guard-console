@@ -625,6 +625,12 @@ def dispenser_request_status(request_id: str):
     record = dispenser_request_store.get(request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="디스펜서 요청 기록이 없습니다.")
+    if record.get("state") == "recovery_required":
+        robot_record = ros_bridge.lookup_dispenser_request(request_id)
+        if robot_record is not None:
+            restored = dispenser_request_store.apply_robot_result(robot_record)
+            if restored is not None:
+                record = restored
     return record
 
 

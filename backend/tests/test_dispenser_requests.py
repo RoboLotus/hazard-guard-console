@@ -1,5 +1,8 @@
 from app import main as main_module
-from app.dispenser_requests import DispenserRequestStore
+import pytest
+from concurrent.futures import ThreadPoolExecutor
+
+from app.dispenser_requests import DispenserRequestStore, DispenserRequestStoreError
 from app.main import app
 from fastapi.testclient import TestClient
 
@@ -89,3 +92,41 @@ def test_completed_robot_result_survives_a_backend_restart(tmp_path):
 
     assert restored["state"] == "succeeded"
     assert restored["robot_result"]["result_detail"] == "ble_drop_confirmed"
+
+
+def test_fast_robot_result_cannot_be_downgraded_by_late_dispatch(tmp_path):
+    store = DispenserRequestStore(tmp_path / "backend.sqlite3")
+    store.submit(request_id="beacon-request-1", detection_id="thermal-1")
+    store.apply_robot_result(
+        {"request_id": "beacon-request-1", "state": "succeeded"}
+    )
+
+    result = store.transition("beacon-request-1", "dispatched")
+
+    assert result["state"] == "succeeded"
+
+
+def test_corrupt_sqlite_ledger_fails_closed(tmp_path):
+    path = tmp_path / "backend.sqlite3"
+    path.write_text("not a sqlite database", encoding="utf-8")
+
+    with pytest.raises(DispenserRequestStoreError):
+        DispenserRequestStore(path)
+
+
+def test_two_backend_process_connections_claim_only_once(tmp_path):
+    path = tmp_path / "backend.sqlite3"
+    first = DispenserRequestStore(path)
+    second = DispenserRequestStore(path)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda store: store.submit(
+                    request_id="beacon-request-1", detection_id="thermal-1"
+                ),
+                (first, second),
+            )
+        )
+
+    assert sum(created for _, created in results) == 1
