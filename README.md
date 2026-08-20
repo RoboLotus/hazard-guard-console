@@ -143,6 +143,10 @@ export HAZARD_GUARD_DEPLOYMENT_TARGET=physical
 export HAZARD_GUARD_MODE_CONTROL_ENABLED=1
 export HAZARD_GUARD_ROS_ENABLED=1
 
+# ROSMASTER bringup과 동일한 값 사용. 아래는 단일 Jetson 운용 예시입니다.
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=1
+
 # YOLO11n 사람 탐지 → 안전 감독 → Nav2 감속/정지
 export HAZARD_GUARD_PERSON_SAFETY_ENABLED=1
 export HAZARD_GUARD_PERSON_MODEL_PATH=/absolute/path/to/yolo11n.engine
@@ -170,6 +174,76 @@ Jetson 센서 드라이버의 실제 출력값에 맞춰야 합니다. 사람 �
 생성합니다. 따라서 지도 작성은 사람과 장애물을 통제한 시험 공간에서 저속으로
 수행해야 합니다. Jetson의 실제 `.env` 또는 `runtime.env`는 Git에 커밋하지 말고,
 저장소의 `.env.example`을 복사해 장치별 경로만 설정합니다.
+
+### Jetson 네이티브 ROS Bag·WebUI 연결
+
+Jetson에서는 FastAPI 가상환경이 시스템 ROS Python을 볼 수 있어야 합니다.
+일반 `requirements.txt`는 Windows mock 개발용 NumPy·OpenCV까지 설치하므로,
+실물 Jetson에서는 다음처럼 전용 최소 requirements를 사용합니다. JetPack이
+제공한 NumPy·OpenCV·CUDA PyTorch를 PyPI 패키지로 덮어쓰지 않습니다.
+
+```bash
+cd ~/hazard-guard/WebUI/backend
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-jetson.txt
+python -c 'import rclpy, cv_bridge, numpy, cv2; print("ROS Python imports OK")'
+```
+
+Robot 저장소를 갱신한 뒤 새 서비스 인터페이스와 recorder를 함께 빌드합니다.
+`rosdep`은 ROS Bag CLI, 기본 sqlite3 저장 플러그인과 `python3-serial`을
+확인·설치합니다. 이미 설치된 항목은 다시 설치하지 않습니다.
+
+```bash
+cd ~/hazard-guard/Robot
+source /opt/ros/humble/setup.bash
+rosdep install --from-paths \
+  src/hazard_guard_interfaces \
+  src/hazard_guard_bag_recorder \
+  src/hazard_guard_dispenser \
+  --ignore-src -r -y
+colcon build --symlink-install --packages-up-to \
+  hazard_guard_bag_recorder hazard_guard_dispenser
+source install/setup.bash
+```
+
+ROS Bag 노드는 FastAPI와 별도로 한 번 실행해야 합니다. WebUI 제어를 사용할
+때만 `enable_control_services:=true`를 명시하고, 대용량 RGB-D 기록은 Jetson의
+여유 공간을 확인한 저장 경로로 지정합니다.
+
+```bash
+ros2 launch hazard_guard_bag_recorder bag_record.launch.py \
+  enable_control_services:=true \
+  storage_root:=$HOME/.local/share/hazard_guard/bags
+```
+
+같은 셸에서 환경 파일을 실제 환경변수로 내보낸 뒤 FastAPI를 실행합니다.
+`.env.example`을 복사하는 것만으로는 자동 적용되지 않습니다.
+
+```bash
+cd ~/hazard-guard/WebUI
+cp -n .env.example runtime.env
+# runtime.env의 장치 경로와 현재 ROS_DOMAIN_ID를 확인한 뒤 실행합니다.
+cd backend
+source /opt/ros/humble/setup.bash
+source ~/hazard-guard/Robot/install/setup.bash
+source .venv/bin/activate
+set -a
+source ../runtime.env
+set +a
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+`ROS_DOMAIN_ID`는 실행 중인 ROSMASTER bringup 셸의 값을 그대로 사용해야 합니다.
+Robot 노드와 FastAPI ROS 브리지가 모두 같은 Jetson에서 실행되면
+`ROS_LOCALHOST_ONLY=1`로 충분하며, 노트북 프런트엔드는 DDS가 아니라 HTTP와
+WebSocket으로 연결됩니다. 다른 PC에서도 ROS 2 노드를 직접 실행할 때만 모든
+ROS 호스트에서 `ROS_LOCALHOST_ONLY=0`과 같은 `ROS_DOMAIN_ID`를 사용합니다.
+
+디스펜서는 현재 기본값이 `enable_physical_drop=false`라 설치 후에도 실제 서보를
+움직이지 않습니다. BLE·Rosmaster 직렬 포트 단일 소유와 정지 가드를 실물로
+검증하기 전에는 Robot과 WebUI의 배출 활성화 값을 모두 `false/0`으로 유지합니다.
 
 열화상 3D 뷰어의 기본 입력은 Robot 열화상 융합 노드가 발행하는
 `/hazard_guard/thermal/points`입니다. 다른 토픽을 사용할 때만
