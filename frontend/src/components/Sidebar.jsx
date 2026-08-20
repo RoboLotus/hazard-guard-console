@@ -1,5 +1,6 @@
 import {
   ChartBar,
+  Database,
   Gear,
   House,
   ListChecks,
@@ -14,6 +15,7 @@ const navItems = [
   { id: "events", label: "이벤트", icon: ListChecks },
   { id: "video", label: "영상", icon: VideoCamera },
   { id: "report", label: "리포트", icon: ChartBar },
+  { id: "rosbag", label: "ROS Bag 기록", icon: Database },
 ];
 
 export default function Sidebar({ active, onNavigate, pendingEvents }) {

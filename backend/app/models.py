@@ -90,6 +90,19 @@ class CommandRequest(BaseModel):
     enabled: bool = False
 
 
+class BagRecorderControlRequest(BaseModel):
+    command: Literal["start", "stop"]
+    profile: Literal[
+        "navigation-core", "rgbd-mapping", "patrol-core", "thermal-calibration", "patrol-thermal"
+    ] = "navigation-core"
+    session_name: str = Field("field-session", min_length=1, max_length=80)
+    allow_experimental: bool = False
+
+
+class BagRecorderEnabledRequest(BaseModel):
+    enabled: bool
+
+
 class SystemModeRequest(BaseModel):
     mode: Literal["mapping", "rgbd_mapping", "patrol"]
     mapping_profile: Literal["toolbox", "toolbox_rtabmap"] = "toolbox"

@@ -11,6 +11,7 @@ import Overview from "./pages/Overview.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
 import Settings from "./pages/Settings.jsx";
 import VideoPage from "./pages/VideoPage.jsx";
+import RosbagPage from "./pages/RosbagPage.jsx";
 
 export function App() {
   const [active, setActive] = useState("overview");
@@ -27,6 +28,9 @@ export function App() {
     map_available: false,
   });
   const [modeBusy, setModeBusy] = useState(false);
+  const [bagStatus, setBagStatus] = useState({ state: "offline", recording: false, control_enabled: false });
+  const [bagSessions, setBagSessions] = useState([]);
+  const [bagEnabled, setBagEnabled] = useState(false);
   const announcedThermalLevels = useRef(new Map());
 
   const notify = (message, tone = "success") => {
@@ -49,6 +53,17 @@ export function App() {
     void checkHealth();
     const interval = window.setInterval(checkHealth, 5000);
     return () => { disposed = true; window.clearInterval(interval); };
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    const refresh = async () => {
+      try {
+        const response = await fetch("/api/v1/rosbag/status", { cache: "no-store" });
+        if (!disposed && response.ok) { const payload = await response.json(); setBagStatus(payload); setBagEnabled(Boolean(payload.recording_control_enabled)); }
+      } catch { if (!disposed) setBagStatus({ state: "offline", recording: false, control_enabled: false }); }
+    };
+    void refresh(); const timer = window.setInterval(refresh, 1500);
+    return () => { disposed = true; window.clearInterval(timer); };
   }, []);
   useEffect(() => {
     let disposed = false;
@@ -180,8 +195,32 @@ export function App() {
     } : event));
   };
   const navigate = (id) => {
-    if (["overview", "map", "events", "video", "report", "settings", "help"].includes(id)) setActive(id);
+    if (["overview", "map", "events", "video", "report", "rosbag", "settings", "help"].includes(id)) setActive(id);
     else notify(`${navigationLabels[id] || "도움말"} 화면은 다음 단계에서 연결됩니다.`, "info");
+  };
+  const refreshBagSessions = async () => {
+    try {
+      const response = await fetch("/api/v1/rosbag/sessions", { cache: "no-store" });
+      if (!response.ok) throw new Error((await response.json()).detail || "세션을 조회하지 못했습니다.");
+      const result = await response.json(); setBagSessions(result.sessions || []);
+      if (result.truncated) notify("최근 50개 세션만 표시합니다.", "info");
+    } catch (error) { notify(error.message, "warning"); }
+  };
+  const controlBag = async (command, profile, sessionName) => {
+    if (command === "start" && !bagEnabled) { notify("ROS Bag 기록을 ON으로 켠 뒤 시작하세요.", "info"); return; }
+    if (!window.confirm(command === "start" ? "선택한 프로파일로 ROS Bag 기록을 시작할까요?" : "현재 ROS Bag 기록을 중지할까요?")) return;
+    try {
+      const response = await fetch("/api/v1/rosbag/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command, profile, session_name: sessionName }) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.detail || "ROS Bag 제어에 실패했습니다.");
+      setBagStatus(result.status || bagStatus); notify(result.message); if (command === "stop") void refreshBagSessions();
+    } catch (error) { notify(error.message, "warning"); }
+  };
+  const changeBagEnabled = async (enabled) => {
+    try {
+      const response = await fetch("/api/v1/rosbag/enabled", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.detail || "ROS Bag 기록 설정을 변경하지 못했습니다.");
+      setBagEnabled(Boolean(result.recording_control_enabled)); setBagStatus(result);
+    } catch (error) { notify(error.message, "warning"); }
   };
   const sendCommand = async (command, enabled = false) => {
     const response = await fetch(`/api/v1/commands/${command}`, {
@@ -322,6 +361,7 @@ export function App() {
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}
+        {active === "rosbag" && <RosbagPage status={bagStatus} enabled={bagEnabled} onEnabledChange={changeBagEnabled} sessions={bagSessions} onRefreshSessions={refreshBagSessions} onControl={controlBag} />}
         {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} spatialState={spatialState} />}
         {active === "help" && <HelpPage onNavigate={navigate} />}
       </main>

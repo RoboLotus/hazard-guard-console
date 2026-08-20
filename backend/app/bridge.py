@@ -116,6 +116,10 @@ class RosBridge:
         self._equipment_config_lock = threading.RLock()
         self._baseline_reset_client = None
         self._baseline_reset_request_type = None
+        self._bag_control_client = None
+        self._bag_control_request_type = None
+        self._bag_status: dict[str, Any] = {"state": "offline", "recording": False, "control_enabled": False}
+        self._bag_status_lock = threading.RLock()
 
         sensor_specs = [
             ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0, 1.0),
@@ -161,6 +165,10 @@ class RosBridge:
             from cv_bridge import CvBridge
             from hazard_guard_interfaces.msg import PersonSafetyState, RobotTelemetry
             from hazard_guard_interfaces.srv import RobotCommand
+            try:
+                from hazard_guard_interfaces.srv import BagRecorderControl
+            except ImportError:
+                BagRecorderControl = None
             from nav_msgs.msg import OccupancyGrid, Odometry
             from nav2_msgs.action import ComputePathToPose, NavigateToPose
             from rclpy.action import ActionClient
@@ -232,6 +240,17 @@ class RosBridge:
                 self._on_equipment_config_status,
                 map_qos,
             )
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/bag/status_json",
+                self._on_bag_status,
+                10,
+            )
+            if BagRecorderControl is not None:
+                self._bag_control_client = self._node.create_client(
+                    BagRecorderControl, "/hazard_guard/bag/control"
+                )
+                self._bag_control_request_type = BagRecorderControl.Request
             self._node.create_subscription(
                 String,
                 "/hazard_guard/thermal/trend",
@@ -389,6 +408,43 @@ class RosBridge:
             return
         with self._equipment_config_lock:
             self._equipment_config_status = payload
+
+    def _on_bag_status(self, message: Any) -> None:
+        try:
+            payload = json.loads(message.data)
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return
+        if isinstance(payload, dict):
+            with self._bag_status_lock:
+                self._bag_status = payload
+
+    def bag_status(self) -> dict[str, Any]:
+        with self._bag_status_lock:
+            return json.loads(json.dumps(self._bag_status))
+
+    def bag_control(self, command: str, profile: str = "", session_name: str = "", allow_experimental: bool = False) -> dict[str, Any]:
+        client, request_type = self._bag_control_client, self._bag_control_request_type
+        if not self.active or client is None or request_type is None:
+            return {"accepted": False, "message": "ROS Bag 제어 서비스가 비활성화되어 있습니다."}
+        if not client.wait_for_service(timeout_sec=0.75):
+            return {"accepted": False, "message": "ROS Bag 제어 서비스를 찾을 수 없습니다."}
+        request = request_type()
+        request.command, request.profile, request.session_name = command, profile, session_name
+        request.allow_experimental = bool(allow_experimental)
+        future = client.call_async(request)
+        done = threading.Event()
+        future.add_done_callback(lambda _: done.set())
+        if not done.wait(timeout=3.0):
+            return {"accepted": False, "message": "ROS Bag 제어 응답 시간이 초과되었습니다."}
+        try:
+            response = future.result()
+            payload = json.loads(response.status_json) if response.status_json else self.bag_status()
+            if isinstance(payload, dict):
+                with self._bag_status_lock:
+                    self._bag_status = payload
+            return {"accepted": bool(response.accepted), "message": str(response.message), "status": self.bag_status()}
+        except Exception as exc:
+            return {"accepted": False, "message": f"ROS Bag 제어 오류: {exc}"}
 
     def thermal_equipment_config_status(self) -> dict[str, Any]:
         with self._equipment_config_lock:
