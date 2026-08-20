@@ -21,6 +21,7 @@ from .bridge import (
 from .mode_manager import system_mode_manager
 from .models import (
     CommandRequest,
+    BagRecorderControlRequest,
     LocalizationPoseRequest,
     MockCommand,
     MapSelectionRequest,
@@ -582,6 +583,21 @@ def reset_equipment_baseline_collection():
 def robot_command(command: str, request: CommandRequest | None = None):
     enabled = request.enabled if request is not None else False
     return ros_bridge.command(command, enabled)
+
+
+@app.get("/api/v1/rosbag/status")
+def rosbag_status():
+    return ros_bridge.bag_status()
+
+
+@app.post("/api/v1/rosbag/control")
+def rosbag_control(request: BagRecorderControlRequest):
+    result = ros_bridge.bag_control(
+        request.command, request.profile, request.session_name, request.allow_experimental
+    )
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result
 
 
 @app.get("/api/v1/navigation/status")
