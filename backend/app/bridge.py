@@ -116,6 +116,10 @@ class RosBridge:
         self._equipment_config_lock = threading.RLock()
         self._baseline_reset_client = None
         self._baseline_reset_request_type = None
+        self._dispenser_command_publisher = None
+        self._dispenser_string_type = None
+        self._dispenser_result_handler = None
+        self._dispenser_lock = threading.RLock()
 
         sensor_specs = [
             ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0, 1.0),
@@ -225,6 +229,16 @@ class RosBridge:
             self._equipment_config_string_type = String
             self._equipment_config_publisher = self._node.create_publisher(
                 String, "/hazard_guard/thermal/equipment_config", map_qos,
+            )
+            self._dispenser_string_type = String
+            self._dispenser_command_publisher = self._node.create_publisher(
+                String, "/hazard_guard/dispenser/command", 10,
+            )
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/dispenser/result",
+                self._on_dispenser_result,
+                10,
             )
             self._node.create_subscription(
                 String,
@@ -389,6 +403,52 @@ class RosBridge:
             return
         with self._equipment_config_lock:
             self._equipment_config_status = payload
+
+    def set_dispenser_result_handler(self, handler) -> None:
+        """Attach the persistent API ledger without importing FastAPI here."""
+
+        with self._dispenser_lock:
+            self._dispenser_result_handler = handler
+
+    def _on_dispenser_result(self, message: Any) -> None:
+        try:
+            payload = json.loads(message.data)
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict):
+            return
+        with self._dispenser_lock:
+            handler = self._dispenser_result_handler
+        if handler is None:
+            return
+        try:
+            handler(payload)
+        except Exception as exc:
+            self._set_error(f"디스펜서 결과 기록 실패: {exc}")
+
+    def publish_dispenser_drop(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Publish only a replay-safe JSON request, never an unkeyed drop."""
+
+        publisher = self._dispenser_command_publisher
+        message_type = self._dispenser_string_type
+        if not self.active or publisher is None or message_type is None:
+            return {
+                "accepted": False,
+                "message": "ROS 디스펜서 브리지가 연결되지 않았습니다.",
+            }
+        message = message_type()
+        message.data = json.dumps(
+            {
+                "command": "drop",
+                "request_id": request["request_id"],
+                "detection_id": request.get("detection_id"),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        publisher.publish(message)
+        return {"accepted": True, "message": "디스펜서 요청을 발행했습니다."}
 
     def thermal_equipment_config_status(self) -> dict[str, Any]:
         with self._equipment_config_lock:
@@ -1368,6 +1428,8 @@ class RosBridge:
         self._teleop_twist_type = None
         self._initial_pose_publisher = None
         self._initial_pose_type = None
+        self._dispenser_command_publisher = None
+        self._dispenser_string_type = None
 
 
 telemetry_store = TelemetryStore()

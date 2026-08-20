@@ -90,6 +90,29 @@ class CommandRequest(BaseModel):
     enabled: bool = False
 
 
+class DispenserDropRequest(BaseModel):
+    request_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+    detection_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+
+    @model_validator(mode="after")
+    def require_idempotency_key(self):
+        if not self.request_id and not self.detection_id:
+            raise ValueError("request_id or detection_id is required")
+        if not self.request_id:
+            self.request_id = f"detection:{self.detection_id}"
+        return self
+
+
 class SystemModeRequest(BaseModel):
     mode: Literal["mapping", "rgbd_mapping", "patrol"]
     mapping_profile: Literal["toolbox", "toolbox_rtabmap"] = "toolbox"

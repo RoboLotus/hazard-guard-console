@@ -19,8 +19,10 @@ from .bridge import (
     thermal_cloud_store,
 )
 from .mode_manager import system_mode_manager
+from .dispenser_requests import DispenserRequestStore, DispenserRequestStoreError
 from .models import (
     CommandRequest,
+    DispenserDropRequest,
     LocalizationPoseRequest,
     MockCommand,
     MapSelectionRequest,
@@ -71,6 +73,8 @@ app.add_middleware(
 threshold_store = ThresholdSettingsStore()
 performance_report_store = PerformanceReportStore()
 equipment_store = ThermalEquipmentSettingsStore()
+dispenser_request_store = DispenserRequestStore()
+ros_bridge.set_dispenser_result_handler(dispenser_request_store.apply_robot_result)
 
 
 def equipment_settings_response(
@@ -582,6 +586,46 @@ def reset_equipment_baseline_collection():
 def robot_command(command: str, request: CommandRequest | None = None):
     enabled = request.enabled if request is not None else False
     return ros_bridge.command(command, enabled)
+
+
+@app.post("/api/v1/dispenser/requests/drop", status_code=202)
+def request_dispenser_drop(request: DispenserDropRequest):
+    """Record first, then publish once. Replays always return saved state."""
+
+    try:
+        record, created = dispenser_request_store.submit(
+            request_id=request.request_id,
+            detection_id=request.detection_id,
+        )
+    except DispenserRequestStoreError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"디스펜서 요청 기록을 안전하게 저장할 수 없습니다: {exc}",
+        ) from exc
+    if not created:
+        return {**record, "replayed": True, "dispatched": False}
+
+    dispatch = ros_bridge.publish_dispenser_drop(record)
+    if not dispatch["accepted"]:
+        record = dispenser_request_store.transition(
+            record["request_id"],
+            "dispatch_unavailable",
+            result_detail=dispatch["message"],
+        )
+        return {**record, "replayed": False, "dispatched": False}
+
+    record = dispenser_request_store.transition(
+        record["request_id"], "dispatched", dispatch_message=dispatch["message"]
+    )
+    return {**record, "replayed": False, "dispatched": True}
+
+
+@app.get("/api/v1/dispenser/requests/{request_id}")
+def dispenser_request_status(request_id: str):
+    record = dispenser_request_store.get(request_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="디스펜서 요청 기록이 없습니다.")
+    return record
 
 
 @app.get("/api/v1/navigation/status")
