@@ -600,6 +600,15 @@ def rosbag_control(request: BagRecorderControlRequest):
     return result
 
 
+@app.get("/api/v1/rosbag/sessions")
+def rosbag_sessions():
+    result = ros_bridge.bag_control("list")
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    status = result.get("status", {})
+    return {"sessions": status.get("sessions", []), "truncated": bool(status.get("sessions_truncated"))}
+
+
 @app.get("/api/v1/navigation/status")
 def navigation_status():
     return navigation_store.snapshot()

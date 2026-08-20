@@ -25,3 +25,14 @@ def test_rosbag_control_delegates_validated_request(monkeypatch):
     })
     assert response.status_code == 200
     assert response.json()["status"]["profile"] == "patrol-core"
+
+
+def test_rosbag_sessions_reads_controlled_list(monkeypatch):
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "bag_control",
+        lambda command, *_args: {"accepted": True, "message": "sessions", "status": {"sessions": [{"session_id": "s1"}]}},
+    )
+    response = TestClient(app).get("/api/v1/rosbag/sessions")
+    assert response.status_code == 200
+    assert response.json()["sessions"][0]["session_id"] == "s1"
