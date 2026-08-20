@@ -12,7 +12,6 @@ def test_rosbag_status_reports_offline_without_ros():
 
 
 def test_rosbag_control_delegates_validated_request(monkeypatch):
-    monkeypatch.setattr(main_module, "bag_control_enabled", True)
     monkeypatch.setattr(
         main_module.ros_bridge,
         "bag_control",
@@ -28,10 +27,6 @@ def test_rosbag_control_delegates_validated_request(monkeypatch):
     assert response.json()["status"]["profile"] == "patrol-core"
 
 
-def test_rosbag_start_is_rejected_when_backend_gate_is_off(monkeypatch):
-    monkeypatch.setattr(main_module, "bag_control_enabled", False)
-    response = TestClient(app).post("/api/v1/rosbag/control", json={"command": "start"})
-    assert response.status_code == 409
 
 
 def test_rosbag_sessions_reads_controlled_list(monkeypatch):

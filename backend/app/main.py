@@ -1,6 +1,5 @@
 import asyncio
 import os
-import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -74,8 +73,6 @@ app.add_middleware(
 threshold_store = ThresholdSettingsStore()
 performance_report_store = PerformanceReportStore()
 equipment_store = ThermalEquipmentSettingsStore()
-bag_control_lock = threading.RLock()
-bag_control_enabled = False
 
 
 def equipment_settings_response(
@@ -591,28 +588,19 @@ def robot_command(command: str, request: CommandRequest | None = None):
 
 @app.get("/api/v1/rosbag/status")
 def rosbag_status():
-    with bag_control_lock:
-        enabled = bag_control_enabled
-    return {**ros_bridge.bag_status(), "recording_control_enabled": enabled}
+    return ros_bridge.bag_status()
 
 
 @app.put("/api/v1/rosbag/enabled")
 def set_rosbag_enabled(request: BagRecorderEnabledRequest):
-    global bag_control_enabled
-    status = ros_bridge.bag_status()
-    if not request.enabled and status.get("recording"):
-        raise HTTPException(status_code=409, detail="기록 중에는 먼저 ROS Bag 기록을 중지하세요.")
-    with bag_control_lock:
-        bag_control_enabled = request.enabled
-    return rosbag_status()
+    result = ros_bridge.bag_control("enable" if request.enabled else "disable")
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result.get("status", rosbag_status())
 
 
 @app.post("/api/v1/rosbag/control")
 def rosbag_control(request: BagRecorderControlRequest):
-    with bag_control_lock:
-        enabled = bag_control_enabled
-    if request.command == "start" and not enabled:
-        raise HTTPException(status_code=409, detail="ROS Bag 기록이 OFF 상태입니다.")
     result = ros_bridge.bag_control(
         request.command, request.profile, request.session_name, request.allow_experimental
     )
