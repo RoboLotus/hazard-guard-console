@@ -30,7 +30,7 @@ export function App() {
   const [modeBusy, setModeBusy] = useState(false);
   const [bagStatus, setBagStatus] = useState({ state: "offline", recording: false, control_enabled: false });
   const [bagSessions, setBagSessions] = useState([]);
-  const [bagEnabled, setBagEnabled] = useState(() => localStorage.getItem("hazard-guard-rosbag-enabled") === "true");
+  const [bagEnabled, setBagEnabled] = useState(false);
   const announcedThermalLevels = useRef(new Map());
 
   const notify = (message, tone = "success") => {
@@ -54,13 +54,12 @@ export function App() {
     const interval = window.setInterval(checkHealth, 5000);
     return () => { disposed = true; window.clearInterval(interval); };
   }, []);
-  useEffect(() => { localStorage.setItem("hazard-guard-rosbag-enabled", String(bagEnabled)); }, [bagEnabled]);
   useEffect(() => {
     let disposed = false;
     const refresh = async () => {
       try {
         const response = await fetch("/api/v1/rosbag/status", { cache: "no-store" });
-        if (!disposed && response.ok) setBagStatus(await response.json());
+        if (!disposed && response.ok) { const payload = await response.json(); setBagStatus(payload); setBagEnabled(Boolean(payload.recording_control_enabled)); }
       } catch { if (!disposed) setBagStatus({ state: "offline", recording: false, control_enabled: false }); }
     };
     void refresh(); const timer = window.setInterval(refresh, 1500);
@@ -216,6 +215,13 @@ export function App() {
       setBagStatus(result.status || bagStatus); notify(result.message); if (command === "stop") void refreshBagSessions();
     } catch (error) { notify(error.message, "warning"); }
   };
+  const changeBagEnabled = async (enabled) => {
+    try {
+      const response = await fetch("/api/v1/rosbag/enabled", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.detail || "ROS Bag 기록 설정을 변경하지 못했습니다.");
+      setBagEnabled(Boolean(result.recording_control_enabled)); setBagStatus(result);
+    } catch (error) { notify(error.message, "warning"); }
+  };
   const sendCommand = async (command, enabled = false) => {
     const response = await fetch(`/api/v1/commands/${command}`, {
       method: "POST",
@@ -355,7 +361,7 @@ export function App() {
         {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}
-        {active === "rosbag" && <RosbagPage status={bagStatus} enabled={bagEnabled} onEnabledChange={setBagEnabled} sessions={bagSessions} onRefreshSessions={refreshBagSessions} onControl={controlBag} />}
+        {active === "rosbag" && <RosbagPage status={bagStatus} enabled={bagEnabled} onEnabledChange={changeBagEnabled} sessions={bagSessions} onRefreshSessions={refreshBagSessions} onControl={controlBag} />}
         {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} spatialState={spatialState} />}
         {active === "help" && <HelpPage onNavigate={navigate} />}
       </main>

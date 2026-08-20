@@ -99,6 +99,10 @@ class BagRecorderControlRequest(BaseModel):
     allow_experimental: bool = False
 
 
+class BagRecorderEnabledRequest(BaseModel):
+    enabled: bool
+
+
 class SystemModeRequest(BaseModel):
     mode: Literal["mapping", "rgbd_mapping", "patrol"]
     mapping_profile: Literal["toolbox", "toolbox_rtabmap"] = "toolbox"
