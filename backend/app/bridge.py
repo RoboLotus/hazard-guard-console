@@ -5,6 +5,7 @@ import math
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -116,6 +117,20 @@ class RosBridge:
         self._equipment_config_lock = threading.RLock()
         self._baseline_reset_client = None
         self._baseline_reset_request_type = None
+        self._bag_control_client = None
+        self._bag_control_request_type = None
+        self._bag_status: dict[str, Any] = {"state": "offline", "recording": False, "control_enabled": False}
+        self._bag_status_lock = threading.RLock()
+        self._dispenser_command_publisher = None
+        self._dispenser_string_type = None
+        self._dispenser_result_handler = None
+        self._dispenser_result_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="dispenser-ledger",
+        )
+        self._dispenser_lock = threading.RLock()
+        self._dispenser_status_client = None
+        self._dispenser_status_request_type = None
 
         sensor_specs = [
             ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0, 1.0),
@@ -161,6 +176,14 @@ class RosBridge:
             from cv_bridge import CvBridge
             from hazard_guard_interfaces.msg import PersonSafetyState, RobotTelemetry
             from hazard_guard_interfaces.srv import RobotCommand
+            try:
+                from hazard_guard_interfaces.srv import BagRecorderControl
+            except ImportError:
+                BagRecorderControl = None
+            try:
+                from hazard_guard_interfaces.srv import DispenserRequestStatus
+            except ImportError:
+                DispenserRequestStatus = None
             from nav_msgs.msg import OccupancyGrid, Odometry
             from nav2_msgs.action import ComputePathToPose, NavigateToPose
             from rclpy.action import ActionClient
@@ -226,12 +249,39 @@ class RosBridge:
             self._equipment_config_publisher = self._node.create_publisher(
                 String, "/hazard_guard/thermal/equipment_config", map_qos,
             )
+            self._dispenser_string_type = String
+            self._dispenser_command_publisher = self._node.create_publisher(
+                String, "/hazard_guard/dispenser/command", 10,
+            )
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/dispenser/result",
+                self._on_dispenser_result,
+                10,
+            )
+            if DispenserRequestStatus is not None:
+                self._dispenser_status_client = self._node.create_client(
+                    DispenserRequestStatus,
+                    "/hazard_guard/dispenser/request_status",
+                )
+                self._dispenser_status_request_type = DispenserRequestStatus.Request
             self._node.create_subscription(
                 String,
                 "/hazard_guard/thermal/equipment_config/status",
                 self._on_equipment_config_status,
                 map_qos,
             )
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/bag/status_json",
+                self._on_bag_status,
+                10,
+            )
+            if BagRecorderControl is not None:
+                self._bag_control_client = self._node.create_client(
+                    BagRecorderControl, "/hazard_guard/bag/control"
+                )
+                self._bag_control_request_type = BagRecorderControl.Request
             self._node.create_subscription(
                 String,
                 "/hazard_guard/thermal/trend",
@@ -389,6 +439,122 @@ class RosBridge:
             return
         with self._equipment_config_lock:
             self._equipment_config_status = payload
+
+    def _on_bag_status(self, message: Any) -> None:
+        try:
+            payload = json.loads(message.data)
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return
+        if isinstance(payload, dict):
+            with self._bag_status_lock:
+                self._bag_status = payload
+
+    def bag_status(self) -> dict[str, Any]:
+        with self._bag_status_lock:
+            return json.loads(json.dumps(self._bag_status))
+
+    def bag_control(self, command: str, profile: str = "", session_name: str = "", allow_experimental: bool = False) -> dict[str, Any]:
+        client, request_type = self._bag_control_client, self._bag_control_request_type
+        if not self.active or client is None or request_type is None:
+            return {"accepted": False, "message": "ROS Bag 제어 서비스가 비활성화되어 있습니다."}
+        if not client.wait_for_service(timeout_sec=0.75):
+            return {"accepted": False, "message": "ROS Bag 제어 서비스를 찾을 수 없습니다."}
+        request = request_type()
+        request.command, request.profile, request.session_name = command, profile, session_name
+        request.allow_experimental = bool(allow_experimental)
+        future = client.call_async(request)
+        done = threading.Event()
+        future.add_done_callback(lambda _: done.set())
+        if not done.wait(timeout=3.0):
+            return {"accepted": False, "message": "ROS Bag 제어 응답 시간이 초과되었습니다."}
+        try:
+            response = future.result()
+            payload = json.loads(response.status_json) if response.status_json else self.bag_status()
+            if isinstance(payload, dict):
+                with self._bag_status_lock:
+                    self._bag_status = payload
+            return {"accepted": bool(response.accepted), "message": str(response.message), "status": self.bag_status()}
+        except Exception as exc:
+            return {"accepted": False, "message": f"ROS Bag 제어 오류: {exc}"}
+
+    def set_dispenser_result_handler(self, handler) -> None:
+        """Attach the persistent API ledger without importing FastAPI here."""
+
+        with self._dispenser_lock:
+            self._dispenser_result_handler = handler
+
+    def _on_dispenser_result(self, message: Any) -> None:
+        try:
+            payload = json.loads(message.data)
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict):
+            return
+        with self._dispenser_lock:
+            handler = self._dispenser_result_handler
+        if handler is None:
+            return
+        try:
+            self._dispenser_result_executor.submit(
+                self._persist_dispenser_result, handler, payload
+            )
+        except RuntimeError as exc:
+            self._set_error(f"디스펜서 결과 작업 큐가 종료되었습니다: {exc}")
+
+    def _persist_dispenser_result(self, handler, payload: dict[str, Any]) -> None:
+        try:
+            handler(payload)
+        except Exception as exc:
+            self._set_error(f"디스펜서 결과 기록 실패: {exc}")
+
+    def publish_dispenser_drop(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Publish only a replay-safe JSON request, never an unkeyed drop."""
+
+        publisher = self._dispenser_command_publisher
+        message_type = self._dispenser_string_type
+        if not self.active or publisher is None or message_type is None:
+            return {
+                "accepted": False,
+                "message": "ROS 디스펜서 브리지가 연결되지 않았습니다.",
+            }
+        message = message_type()
+        message.data = json.dumps(
+            {
+                "command": "drop",
+                "request_id": request["request_id"],
+                "detection_id": request.get("detection_id"),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        publisher.publish(message)
+        return {"accepted": True, "message": "디스펜서 요청을 발행했습니다."}
+
+    def lookup_dispenser_request(self, request_id: str) -> dict[str, Any] | None:
+        """Recover one missed terminal result after a WebUI process restart."""
+
+        client = self._dispenser_status_client
+        request_type = self._dispenser_status_request_type
+        if not self.active or client is None or request_type is None:
+            return None
+        if not client.wait_for_service(timeout_sec=0.75):
+            return None
+        request = request_type()
+        request.request_id = request_id
+        future = client.call_async(request)
+        completed = threading.Event()
+        future.add_done_callback(lambda _: completed.set())
+        if not completed.wait(timeout=2.0):
+            return None
+        try:
+            response = future.result()
+            if not response.found:
+                return None
+            payload = json.loads(response.record_json)
+            return payload if isinstance(payload, dict) else None
+        except (Exception, ValueError, json.JSONDecodeError):
+            return None
 
     def thermal_equipment_config_status(self) -> dict[str, Any]:
         with self._equipment_config_lock:
@@ -1363,11 +1529,16 @@ class RosBridge:
             self._node.destroy_node()
         if self._context is not None and self._context.ok():
             self._context.shutdown()
+        self._dispenser_result_executor.shutdown(wait=True, cancel_futures=False)
         self.active = False
         self._teleop_publisher = None
         self._teleop_twist_type = None
         self._initial_pose_publisher = None
         self._initial_pose_type = None
+        self._dispenser_command_publisher = None
+        self._dispenser_string_type = None
+        self._dispenser_status_client = None
+        self._dispenser_status_request_type = None
 
 
 telemetry_store = TelemetryStore()

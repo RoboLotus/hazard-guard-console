@@ -12,6 +12,7 @@ design-qa.md
 .env
 .env.*
 !.env.example
+runtime.env
 *.local
 
 # Frontend

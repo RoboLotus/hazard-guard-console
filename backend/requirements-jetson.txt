@@ -1,0 +1,8 @@
+# Native Jetson runtime dependencies only.
+#
+# Create the venv with --system-site-packages so the backend reuses the
+# JetPack/ROS-provided rclpy, cv_bridge, NumPy and OpenCV ABI. Do not add
+# PyPI numpy, opencv-python or torch to this file.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+pydantic>=2.10,<3

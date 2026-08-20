@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import hashlib
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -88,6 +89,44 @@ class MockCommand(BaseModel):
 
 class CommandRequest(BaseModel):
     enabled: bool = False
+
+
+class BagRecorderControlRequest(BaseModel):
+    command: Literal["start", "stop"]
+    profile: Literal[
+        "navigation-core", "rgbd-mapping", "patrol-core", "thermal-calibration", "patrol-thermal"
+    ] = "navigation-core"
+    session_name: str = Field("field-session", min_length=1, max_length=80)
+    allow_experimental: bool = False
+
+
+class BagRecorderEnabledRequest(BaseModel):
+    enabled: bool
+
+
+class DispenserDropRequest(BaseModel):
+    request_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+    detection_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+    operator_approved: bool = False
+
+    @model_validator(mode="after")
+    def require_idempotency_key(self):
+        if not self.request_id and not self.detection_id:
+            raise ValueError("request_id or detection_id is required")
+        if not self.request_id:
+            digest = hashlib.sha256(self.detection_id.encode("utf-8")).hexdigest()
+            self.request_id = f"detection:{digest[:32]}"
+        return self
 
 
 class SystemModeRequest(BaseModel):
