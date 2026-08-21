@@ -11,6 +11,7 @@ import {
   matchesMapFrame,
   sensorLegend,
   thermalDetectionsToEvents,
+  gasEventsToEvents,
   temperatureColor,
 } from "../src/spatial.js";
 
@@ -25,6 +26,48 @@ const mapSpec = {
 test("converts ROS map coordinates to the top-left image grid", () => {
   assert.deepEqual(mapToGrid(-5, -2.5, mapSpec), { x: 0, y: 100 });
   assert.deepEqual(mapToGrid(5, 2.5, mapSpec), { x: 200, y: 0 });
+});
+
+test("builds a VOC watch event without requiring CO", () => {
+  const [event] = gasEventsToEvents([{
+    event_id: "gas-bunker-voc_watch",
+    source_id: "bunker",
+    source_name: "폐기물 적치 구역",
+    state: "voc_watch",
+    level: "watch",
+    reason: "voc_rise_requires_stationary_recheck",
+    frame_id: "odom",
+    x: -1.2,
+    y: -0.8,
+    voc_index: 148,
+    co_ppm: 0.4,
+    co2_ppm: 455,
+    simulated: true,
+  }]);
+  assert.equal(event.level, "watch");
+  assert.match(event.detail, /VOC 148/);
+  assert.match(event.threshold, /정지 재측정/);
+});
+
+test("shows thermal corroboration on a fused gas event", () => {
+  const [event] = gasEventsToEvents([{
+    event_id: "fusion-bunker-warning",
+    equipment_id: "bunker_waste_pile",
+    source_name: "폐기물 적치 구역",
+    level: "warning",
+    reason: "voc_and_thermal_watch_corroborated",
+    voc_index: 164,
+    co_ppm: 0.4,
+    co2_ppm: 460,
+    thermal_status: "watch",
+    thermal_temperature_c: 52.4,
+    search_samples: 8,
+    search_location_count: 2,
+  }]);
+  assert.equal(event.level, "warning");
+  assert.equal(event.equipmentId, "bunker_waste_pile");
+  assert.match(event.detail, /열화상 52.4°C/);
+  assert.match(event.detail, /이동 지점 2곳/);
 });
 
 test("only overlays spatial values in the active map frame", () => {

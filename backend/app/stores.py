@@ -333,6 +333,8 @@ class SpatialStore:
         }
         self._trail: list[dict[str, Any]] = []
         self._detections: dict[str, dict[str, Any]] = {}
+        self._gas_status: dict[str, Any] = {}
+        self._gas_events: dict[str, dict[str, Any]] = {}
         self._started_monotonic = time.monotonic()
         self._last_mock_update = 0.0
         self._live_initialized = False
@@ -435,6 +437,23 @@ class SpatialStore:
     def clear_trail(self) -> None:
         with self._lock:
             self._trail.clear()
+
+    def update_gas_status(self, payload: dict[str, Any]) -> None:
+        """Store live gas state and retain each non-normal transition as an event."""
+
+        with self._lock:
+            item = {
+                **payload,
+                "updated_at": str(payload.get("updated_at") or utc_now()),
+            }
+            self._gas_status = item
+            if str(item.get("level") or "info") == "info":
+                return
+            event_id = str(item.get("event_id") or f"gas-{uuid.uuid4()}")
+            self._gas_events[event_id] = item
+            if len(self._gas_events) > 50:
+                oldest = next(iter(self._gas_events))
+                self._gas_events.pop(oldest, None)
 
     def reset_for_mapping(self, map_id: str) -> None:
         """Discard overlays from the previous SLAM run while awaiting /map."""
@@ -659,6 +678,8 @@ class SpatialStore:
                     ),
                     "detections": detections,
                 },
+                "gas_status": dict(self._gas_status),
+                "gas_events": [dict(item) for item in self._gas_events.values()],
                 "updated_at": utc_now(),
             }
 

@@ -340,3 +340,70 @@ export function thermalDetectionsToEvents(detections = []) {
       return `${right.date} ${right.time}`.localeCompare(`${left.date} ${left.time}`);
     });
 }
+
+export function gasEventsToEvents(gasEvents = []) {
+  const reasonLabels = {
+    voc_rise_requires_stationary_recheck: "VOC 급상승 정지 재측정",
+    persistent_voc_requires_local_search: "지속 VOC 이상 위치 탐색 필요",
+    co_confirms_combustion_risk: "CO 동반 연소 위험",
+    co_critical_with_gas_plume: "고농도 CO 긴급 위험",
+    gas_clearance_hold: "가스 정상화 확인 대기",
+    co_absolute_critical: "CO 절대 긴급 기준 초과",
+    thermal_absolute_critical: "동일 설비 절대 위험온도 초과",
+    voc_co_thermal_corroborated: "VOC·CO·열화상 3중 확인",
+    co_and_thermal_warning_corroborated: "CO·열화상 복합 경고 확인",
+    co_warning: "CO 경고 기준 초과",
+    thermal_warning: "동일 설비 열화상 경고",
+    voc_and_thermal_watch_corroborated: "VOC·열화상 복합 이상 확인",
+    persistent_voc_across_locations: "다지점 VOC 지속 이상",
+    voc_early_watch: "VOC 조기 이상 관찰",
+    thermal_watch: "동일 설비 열화상 관찰",
+  };
+  return gasEvents
+    .filter((event) => ["watch", "warning", "critical"].includes(event?.level))
+    .map((event) => {
+      const timestamp = eventTimestamp(event.updated_at);
+      const peakX = event.peak_x == null ? Number.NaN : Number(event.peak_x);
+      const peakY = event.peak_y == null ? Number.NaN : Number(event.peak_y);
+      const x = Number.isFinite(peakX) ? peakX : Number(event.x);
+      const y = Number.isFinite(peakY) ? peakY : Number(event.y);
+      const coordinate = Number.isFinite(x) && Number.isFinite(y)
+        ? `${event.frame_id || "odom"} (${x.toFixed(2)}, ${y.toFixed(2)})`
+        : "측정 위치 미확인";
+      const voc = Number(event.voc_index);
+      const co = Number(event.co_ppm);
+      const co2 = Number(event.co2_ppm);
+      const values = [
+        Number.isFinite(voc) ? `VOC ${voc.toFixed(0)}` : null,
+        Number.isFinite(co) ? `CO ${co.toFixed(1)} ppm` : null,
+        Number.isFinite(co2) ? `CO₂ ${co2.toFixed(0)} ppm` : null,
+      ].filter(Boolean).join(" · ");
+      const samples = Number(event.search_samples);
+      const locations = Number(event.search_location_count);
+      const thermalTemperature = Number(event.thermal_temperature_c);
+      const thermalDetail = Number.isFinite(thermalTemperature)
+        ? ` · 열화상 ${thermalTemperature.toFixed(1)}°C (${event.thermal_status || "확인"})`
+        : "";
+      const reason = reasonLabels[event.reason] || "가스 이상 확인 필요";
+      return {
+        id: event.event_id || `gas-${event.source_id || Date.now()}`,
+        code: `GAS-${String(event.source_id || "UNKNOWN").toUpperCase()}`,
+        level: event.level,
+        status: "new",
+        title: event.title || "가스 이상 감지",
+        ...timestamp,
+        location: `${event.source_name || "가스 측정 구역"} · ${coordinate}`,
+        temperature: null,
+        threshold: reason,
+        detail: `${reason}. ${values}${thermalDetail}${Number.isFinite(samples) ? ` · 측정 ${samples}회` : ""}${Number.isFinite(locations) ? ` · 이동 지점 ${locations}곳` : ""}`,
+        acknowledged: false,
+        assignee: "미지정",
+        note: event.simulated
+          ? "시뮬레이션 가스 확산 및 센서 지연 모델에서 생성된 이벤트입니다."
+          : "로봇 가스 센서에서 생성된 이벤트입니다.",
+        equipmentId: event.equipment_id || null,
+        source: "gas_fusion",
+        simulated: Boolean(event.simulated),
+      };
+    });
+}

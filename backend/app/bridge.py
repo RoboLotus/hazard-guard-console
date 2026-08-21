@@ -146,6 +146,7 @@ class RosBridge:
             ("point_cloud", "RTAB-Map 컬러 클라우드", os.getenv("HAZARD_GUARD_POINT_CLOUD_TOPIC", "/hazard_guard/rtabmap/cloud_surface"), ("3d",), 3.0, 0.5),
             ("thermal_cloud", "열화상 3D 클라우드", os.getenv("HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/points"), ("3d",), 4.0, 0.5),
             ("person_safety", "사람 안전 감속", "/hazard_guard/person/safety_state", (), 2.0, 2.0),
+            ("gas", "VOC·CO·CO2 가스 감지", "/hazard_guard/gas/status", ("patrol",), 3.0, 2.0),
         ]
         for sensor_id, label, topic, required_for, stale_after, expected_hz in sensor_specs:
             self.diagnostics.register(
@@ -287,6 +288,12 @@ class RosBridge:
                 "/hazard_guard/thermal/trend",
                 self._media_adapter.on_thermal_trend,
                 10,
+            )
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/gas/status",
+                self._observe("gas", self._on_gas_status),
+                map_qos,
             )
             self._node.create_subscription(
                 Image,
@@ -917,6 +924,15 @@ class RosBridge:
 
     def _on_person_safety(self, message: Any) -> None:
         self.store.update({"person_safety": person_safety_payload(message)})
+
+    def _on_gas_status(self, message: Any) -> None:
+        try:
+            payload = json.loads(message.data)
+        except (AttributeError, TypeError, ValueError):
+            self._set_error("Malformed /hazard_guard/gas/status payload")
+            return
+        if isinstance(payload, dict):
+            self.spatial.update_gas_status(payload)
 
     def command(self, command: str, enabled: bool) -> dict[str, Any]:
         if not self.active or not self._client.wait_for_service(timeout_sec=0.5):

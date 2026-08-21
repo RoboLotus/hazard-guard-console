@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle, Warning } from "@phosphor-icons/react";
-import { fallbackSpatialState, thermalDetectionsToEvents } from "./spatial.js";
+import { fallbackSpatialState, gasEventsToEvents, thermalDetectionsToEvents } from "./spatial.js";
 import { systemModeLabels } from "./components/Common.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import { navigationLabels } from "./data/dashboardData.js";
@@ -110,7 +110,15 @@ export function App() {
   }, []);
   useEffect(() => {
     if (spatialState?.source !== "ros" || spatialState?.mock) return;
-    const nextEvents = thermalDetectionsToEvents(spatialState?.heatmap?.detections);
+    const gasEvents = gasEventsToEvents(spatialState?.gas_events);
+    const activeFusionEquipment = (
+      ["watch", "warning", "critical"].includes(spatialState?.gas_status?.level)
+      && spatialState?.gas_status?.thermal_status !== "unavailable"
+    ) ? spatialState.gas_status.equipment_id : null;
+    const thermalEvents = thermalDetectionsToEvents(
+      spatialState?.heatmap?.detections,
+    ).filter((event) => event.equipmentId !== activeFusionEquipment);
+    const nextEvents = [...gasEvents, ...thermalEvents];
     setEvents((current) => nextEvents.map((nextEvent) => {
       const previous = current.find((event) => event.id === nextEvent.id);
       if (!previous || previous.level !== nextEvent.level) return nextEvent;
@@ -136,7 +144,7 @@ export function App() {
         warningCount ? `경고 ${warningCount}건` : null,
         watchCount ? `관찰 ${watchCount}건` : null,
       ].filter(Boolean).join(" · ");
-      notify(`열화상 위험 이벤트가 발생했습니다: ${summary}`, criticalCount ? "warning" : "info");
+      notify(`위험 이벤트가 발생했습니다: ${summary}`, criticalCount ? "warning" : "info");
     }
   }, [spatialState]);
   useEffect(() => {
