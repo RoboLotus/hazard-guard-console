@@ -17,6 +17,7 @@ def test_equipment_store_starts_with_four_defaults_and_persists(tmp_path):
     settings = store.get()
     assert len(settings.equipment) == 4
     assert settings.equipment[0].display_name == "폐기물 적치 구역"
+    assert settings.equipment[0].critical_temperature_c == 60.0
     assert settings.equipment[0].adaptive_threshold_enabled is True
 
     settings.equipment[0].display_name = "1번 적치 구역"
@@ -29,6 +30,41 @@ def test_equipment_store_starts_with_four_defaults_and_persists(tmp_path):
     assert len(history) == 1
     assert history[0]["reason"] == "manual"
     assert store.metadata()["revision_id"] == history[0]["revision_id"]
+
+
+def test_legacy_waste_default_is_migrated_without_overwriting_custom_value(
+    tmp_path,
+):
+    path = tmp_path / "equipment.json"
+    document = {
+        "schema_version": 1,
+        "equipment": [
+            {
+                "id": "bunker_waste_pile",
+                "display_name": "폐기물 적치 구역",
+                "enabled": True,
+                "critical_temperature_c": 49.0,
+                "adaptive_delta_c": 10.0,
+                "adaptive_threshold_enabled": True,
+                "roi": {
+                    "min": [-1.95, -0.95, 0.02],
+                    "max": [-1.45, -0.45, 0.35],
+                },
+            }
+        ],
+    }
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    migrated = ThermalEquipmentSettingsStore(path).get()
+
+    assert migrated.equipment[0].critical_temperature_c == 60.0
+
+    document["equipment"][0]["critical_temperature_c"] = 55.0
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    customized = ThermalEquipmentSettingsStore(path).get()
+
+    assert customized.equipment[0].critical_temperature_c == 55.0
 
 
 def test_legacy_equipment_settings_default_adaptive_policy_to_enabled(
