@@ -154,6 +154,73 @@ def test_system_mode_switch_routes_validated_mode_to_manager(monkeypatch):
     assert response.json()["state"] == "starting"
 
 
+def test_rgbd_mode_disables_thermal_status_identity_until_patrol(monkeypatch):
+    reset_sessions = []
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda **_kwargs: {"mode": "idle", "pid": None},
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "switch_mode",
+        lambda mode, **_kwargs: {
+            "accepted": True,
+            "mode": mode,
+            "state": "starting",
+            "pid": 321,
+            "active_map_session_id": "session-rgbd",
+            "thermal_map_session_id": "session-rgbd",
+            "mapping_session_id": None,
+            "patrol_slam": False,
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "reset_thermal_map_stream",
+        reset_sessions.append,
+    )
+
+    response = client.put(
+        "/api/v1/system/mode",
+        json={"mode": "rgbd_mapping"},
+    )
+
+    assert response.status_code == 200
+    assert reset_sessions == [None]
+
+
+def test_failed_patrol_resets_cache_when_geometry_was_refreshed(monkeypatch):
+    reset_sessions = []
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda **_kwargs: {"mode": "idle", "pid": None},
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "switch_mode",
+        lambda _mode, **_kwargs: {
+            "accepted": False,
+            "mode": "idle",
+            "state": "failed",
+            "thermal_map_session_id": "session-refreshed",
+            "thermal_cache_reset_required": True,
+            "message": "launch failed",
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "reset_thermal_map_stream",
+        reset_sessions.append,
+    )
+
+    response = client.put("/api/v1/system/mode", json={"mode": "patrol"})
+
+    assert response.status_code == 409
+    assert reset_sessions == [None]
+
+
 def test_system_mode_rejects_unknown_mode():
     response = client.put("/api/v1/system/mode", json={"mode": "teleop"})
     assert response.status_code == 422
@@ -257,6 +324,43 @@ def test_saved_cloud_is_served_inline(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert response.content == b"ply\n"
     assert response.headers["content-disposition"].startswith("inline")
+
+
+def test_refreshed_active_cloud_resets_thermal_session_cache(
+    monkeypatch,
+    tmp_path,
+):
+    cloud = tmp_path / "cloud.ply"
+    cloud.write_bytes(b"ply\n")
+    reset_sessions = []
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "export_map_cloud",
+        lambda _world_id, _session_id: {
+            "accepted": True,
+            "path": cloud,
+            "geometry_refreshed": True,
+            "message": "refreshed",
+        },
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda **_kwargs: {
+            "active_map_session_id": "session-1",
+            "thermal_map_session_id": "session-1",
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "reset_thermal_map_stream",
+        reset_sessions.append,
+    )
+
+    response = client.get("/api/v1/system/maps/facility/session-1/cloud.ply")
+
+    assert response.status_code == 200
+    assert reset_sessions == [None]
 
 
 def test_media_status_is_explicit_when_ros_streams_are_unavailable():
@@ -693,3 +797,123 @@ def test_thermal_cloud_is_a_separate_stream_from_the_colour_one():
     assert status["source"] == "test:/thermal_cloud"
     # The colour window the robot node paints with, so the legend can name it.
     assert status["min_temp_c"] < status["max_temp_c"]
+
+
+def test_thermal_cloud_status_exposes_cumulative_session_artifacts(
+    monkeypatch,
+    tmp_path,
+):
+    cloud_path = tmp_path / "cloud.ply"
+    state_path = tmp_path / "thermal_layer.npz"
+    cloud_path.write_bytes(b"ply\n")
+    state_path.write_bytes(b"state")
+    monkeypatch.setenv(
+        "HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/map"
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda **_kwargs: {
+            "thermal_map_session_id": "session-thermal",
+            "thermal_map_status": "active",
+            "thermal_map_message": "ready",
+            "thermal_map_cloud_path": str(cloud_path),
+            "thermal_map_state_path": str(state_path),
+        },
+    )
+    main_module.thermal_map_status_store.reset("session-thermal")
+    main_module.thermal_map_status_store.update(
+        SimpleNamespace(
+            data='{"session_id":"session-thermal",'
+            '"cumulative":true,"fixed_map_available":true,'
+            '"fingerprint":"fixed-map","observed_voxel_count":77,'
+            '"match_ratio":0.81,"rejected_observation_count":4,'
+            '"snapshot_truncated":true,"surface_range_rejected_count":9,'
+            '"dropped_pending_observation_count":2,'
+            '"localization_ready":true,'
+            '"localization_stable_sample_count":6,'
+            '"last_observation_at":"2026-08-23T10:00:00+00:00",'
+            '"persisted_at":"2026-08-23T10:00:01+00:00",'
+            '"map_error":"","state_error":""}'
+        )
+    )
+
+    status = client.get("/api/v1/spatial/cloud/thermal/status").json()
+
+    assert status["cumulative"] is True
+    assert status["session_id"] == "session-thermal"
+    assert status["fixed_map_available"] is True
+    assert status["state_available"] is True
+    assert status["persisted_at"] is not None
+    assert status["map_status"] == "active"
+    assert status["status_available"] is True
+    assert status["observed_voxel_count"] == 77
+    assert status["match_ratio"] == 0.81
+    assert status["rejected_observation_count"] == 4
+    assert status["snapshot_truncated"] is True
+    assert status["surface_range_rejected_count"] == 9
+    assert status["dropped_pending_observation_count"] == 2
+    assert status["localization_ready"] is True
+    assert status["localization_stable_sample_count"] == 6
+    assert status["observation_age_sec"] > 0
+    assert status["observation_fresh"] is False
+
+
+def test_cumulative_status_without_node_observation_never_uses_cache_time(
+    monkeypatch,
+    tmp_path,
+):
+    cloud_path = tmp_path / "cloud.ply"
+    cloud_path.write_bytes(b"ply\n")
+    monkeypatch.setenv(
+        "HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/map"
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda **_kwargs: {
+            "thermal_map_session_id": "session-no-status",
+            "thermal_map_status": "ready",
+            "thermal_map_cloud_path": str(cloud_path),
+            "thermal_map_state_path": str(tmp_path / "thermal_layer.npz"),
+        },
+    )
+    main_module.thermal_map_status_store.reset("session-no-status")
+    main_module.thermal_cloud_store.clear(source="/hazard_guard/thermal/map")
+
+    status = client.get("/api/v1/spatial/cloud/thermal/status").json()
+
+    assert status["status_available"] is False
+    assert status["last_observation_at"] is None
+    assert status["age_sec"] is None
+    assert status["observation_fresh"] is False
+
+
+def test_thermal_websocket_bridge_defaults_to_accumulated_map_topic():
+    assert (
+        bridge.ros_bridge._thermal_cloud_adapter._source_default
+        == "/hazard_guard/thermal/map"
+    )
+
+
+def test_thermal_status_fingerprint_change_clears_cached_cloud():
+    main_module.thermal_map_status_store.reset("session-new")
+    main_module.thermal_cloud_store.update(
+        POINT_RECORD.pack(1.0, 1.0, 1.0, 255, 0, 0, 255),
+        point_count=1,
+        color_available=True,
+        frame_id="map",
+        source="/hazard_guard/thermal/map",
+    )
+    previous_sequence, _ = main_module.thermal_cloud_store.packet_after(None)
+
+    bridge.ros_bridge._on_thermal_map_status(
+        SimpleNamespace(
+            data='{"session_id":"session-new","fingerprint":"new-map"}'
+        )
+    )
+
+    _, packet = main_module.thermal_cloud_store.packet_after(previous_sequence)
+    point_count = int.from_bytes(packet[12:16], "little")
+    assert point_count == 0
+    assert main_module.thermal_cloud_store.status()["available"] is False

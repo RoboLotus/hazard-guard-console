@@ -94,6 +94,27 @@ def test_cloud_without_rgb_uses_a_clear_fallback_color():
     assert store.status()["color_available"] is False
 
 
+def test_clear_emits_empty_generation_for_connected_and_new_viewers():
+    store = PointCloudStore(source="ros:/hazard_guard/thermal/map")
+    store.update(
+        POINT_RECORD.pack(1.0, 2.0, 3.0, 255, 0, 0, 255),
+        point_count=1,
+        color_available=True,
+        frame_id="map",
+        source="/hazard_guard/thermal/map",
+    )
+    previous_sequence, _ = store.packet_after(None)
+
+    store.clear(source="/hazard_guard/thermal/map")
+
+    sequence, packet = store.packet_after(previous_sequence)
+    header = PACKET_HEADER.unpack_from(packet)
+    assert sequence != previous_sequence
+    assert header[5] == 0
+    assert store.status()["available"] is False
+    assert store.status()["point_count"] == 0
+
+
 def test_radiometric_thermal_cloud_is_colored_and_kept_opaque(monkeypatch):
     monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "10")
     monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "60")

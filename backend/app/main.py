@@ -3,6 +3,7 @@ import math
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +19,7 @@ from .bridge import (
     spatial_store,
     telemetry_store,
     thermal_cloud_store,
+    thermal_map_status_store,
 )
 from .mode_manager import system_mode_manager
 from .dispenser_requests import (
@@ -50,6 +52,24 @@ from .settings_store import (
     ThresholdSettingsStore,
     default_thermal_equipment_settings,
 )
+
+
+thermal_map_status_store.reset(
+    system_mode_manager.snapshot(detect_external=False).get(
+        "thermal_map_session_id"
+    )
+)
+system_mode_manager.set_thermal_status_provider(thermal_map_status_store.snapshot)
+
+
+def reset_thermal_map_stream(session_id: str | None) -> None:
+    thermal_map_status_store.reset(session_id)
+    thermal_cloud_store.clear(
+        source=os.getenv(
+            "HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
+            "/hazard_guard/thermal/map",
+        )
+    )
 
 
 @asynccontextmanager
@@ -359,13 +379,29 @@ def update_system_mode(request: SystemModeRequest):
         current_pose = spatial_store.snapshot().get("pose") or {}
         if current_pose.get("available") and not current_pose.get("mock"):
             system_mode_manager.set_localization_pose(current_pose)
+    previous = system_mode_manager.snapshot(detect_external=False)
     result = system_mode_manager.switch_mode(
         request.mode,
         mapping_profile=request.mapping_profile,
         patrol_slam=request.patrol_slam,
     )
     if not result["accepted"]:
+        if result.get("thermal_cache_reset_required"):
+            # Geometry changed but no node was launched. Keep the receiver
+            # disarmed so a delayed same-session transient status cannot
+            # repopulate the old PointCloud2 snapshot.
+            reset_thermal_map_stream(None)
         raise HTTPException(status_code=409, detail=result["message"])
+    if (
+        previous.get("mode") != result.get("mode")
+        or previous.get("pid") != result.get("pid")
+    ):
+        reset_thermal_map_stream(
+            str(result.get("thermal_map_session_id"))
+            if result.get("thermal_map_session_id")
+            and request.mode == "patrol"
+            else None
+        )
     # A patrol that keeps mapping starts from an empty SLAM map, so it needs the
     # mapping reset rather than the localization one.
     if (
@@ -441,6 +477,7 @@ def select_simulation_world(request: WorldSelectionRequest):
         raise HTTPException(status_code=409, detail=result["message"])
     media_store.clear("map")
     spatial_store.reset_for_mapping(f"{request.world_id}:waiting")
+    reset_thermal_map_stream(None)
     return result
 
 
@@ -457,6 +494,7 @@ def select_active_system_map(request: MapSelectionRequest):
     result = system_mode_manager.select_map(request.world_id, request.session_id)
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
+    reset_thermal_map_stream(None)
     return result
 
 
@@ -482,6 +520,15 @@ def system_map_cloud(world_id: str, session_id: str, download: bool = False):
     result = system_mode_manager.export_map_cloud(world_id, session_id)
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
+    if result.get("geometry_refreshed"):
+        mode = system_mode_manager.snapshot(detect_external=False)
+        if session_id in {
+            mode.get("active_map_session_id"),
+            mode.get("thermal_map_session_id"),
+        }:
+            # No updater node is expected during a manual export. Leave the
+            # receiver disarmed until a successful patrol transition arms it.
+            reset_thermal_map_stream(None)
     disposition = "attachment" if download else "inline"
     return FileResponse(
         result["path"],
@@ -511,11 +558,122 @@ def point_cloud_status():
 def thermal_cloud_status():
     # The colour window is the robot node's, and there is no channel back from
     # it - so both sides read the same defaults, overridable in one place.
-    return {
-        **thermal_cloud_store.status(),
+    mode = system_mode_manager.snapshot(detect_external=False)
+    cloud_status = thermal_cloud_store.status()
+    node_status = thermal_map_status_store.snapshot()
+    session_id = mode.get("thermal_map_session_id")
+    status_matches_session = bool(
+        node_status.get("available")
+        and session_id
+        and node_status.get("session_id") == session_id
+    )
+    cloud_path_value = mode.get("thermal_map_cloud_path")
+    state_path_value = mode.get("thermal_map_state_path")
+    cloud_path = Path(str(cloud_path_value)) if cloud_path_value else None
+    state_path = Path(str(state_path_value)) if state_path_value else None
+    backend_fixed_map_ready = bool(
+        mode.get("thermal_map_status")
+        in {"ready", "active", "saved", "persistence_unknown"}
+        and cloud_path
+        and cloud_path.is_file()
+        and cloud_path.stat().st_size > 0
+    )
+    state_available = bool(
+        state_path and state_path.is_file() and state_path.stat().st_size > 0
+    )
+    persisted_at = (
+        datetime.fromtimestamp(state_path.stat().st_mtime, timezone.utc).isoformat()
+        if state_available and state_path is not None
+        else None
+    )
+    topic = os.getenv(
+        "HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/map"
+    )
+    node_fields = (
+        "frame_id",
+        "geometry_voxel_count",
+        "observed_voxel_count",
+        "published_voxel_count",
+        "match_ratio",
+        "rejected_observation_count",
+        "accepted_frame_count",
+        "rejected_frame_count",
+        "last_result",
+        "last_observation_at",
+        "fingerprint",
+        "state_restored",
+        "persistence_enabled",
+        "state_path",
+        "map_error",
+        "state_error",
+        "local_alignment_enabled",
+        "snapshot_truncated",
+        "surface_range_rejected_count",
+        "dropped_pending_observation_count",
+        "localization_ready",
+        "localization_stable_sample_count",
+    )
+    node_details = (
+        {name: node_status.get(name) for name in node_fields}
+        if status_matches_session
+        else {}
+    )
+    observation_age = (
+        node_status.get("observation_age_sec")
+        if status_matches_session
+        else None
+    )
+    node_persisted_at = (
+        node_status.get("persisted_at") if status_matches_session else None
+    )
+    result = {
+        **cloud_status,
+        **node_details,
         "min_temp_c": float(os.getenv("HAZARD_GUARD_THERMAL_MIN_C", "10.0")),
         "max_temp_c": float(os.getenv("HAZARD_GUARD_THERMAL_MAX_C", "60.0")),
+        "cumulative": (
+            bool(node_status.get("cumulative"))
+            if status_matches_session
+            else topic == "/hazard_guard/thermal/map"
+        ),
+        "session_id": session_id,
+        "status_available": status_matches_session,
+        "status_age_sec": (
+            node_status.get("status_age_sec")
+            if status_matches_session
+            else None
+        ),
+        # The 1 Hz snapshot receipt age is not sensor freshness. Only the
+        # timestamp of the last accepted thermal observation is authoritative.
+        "age_sec": observation_age,
+        "observation_age_sec": observation_age,
+        "stale_after_sec": (
+            node_status.get("stale_after_sec")
+            if status_matches_session
+            else float(
+                os.getenv("HAZARD_GUARD_THERMAL_MAP_STALE_SEC", "15.0")
+            )
+        ),
+        "observation_fresh": bool(
+            status_matches_session and node_status.get("observation_fresh")
+        ),
+        "fixed_map_available": bool(
+            backend_fixed_map_ready
+            and (
+                not status_matches_session
+                or node_status.get("fixed_map_available")
+            )
+        ),
+        "state_available": state_available,
+        "persisted_at": node_persisted_at or persisted_at,
+        "map_status": mode.get("thermal_map_status"),
+        "map_message": mode.get("thermal_map_message"),
     }
+    if topic == "/hazard_guard/thermal/map" and not status_matches_session:
+        # An empty PointCloudStore generation has a fresh updated_at of its
+        # own. It is a cache reset, not a thermal observation timestamp.
+        result["last_observation_at"] = None
+    return result
 
 
 @app.get("/api/v1/system/sensors")

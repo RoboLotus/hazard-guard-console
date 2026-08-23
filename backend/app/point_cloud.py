@@ -83,6 +83,24 @@ class PointCloudStore:
                 return None
             return self._sequence, self._packet
 
+    def clear(
+        self,
+        *,
+        source: str | None = None,
+        frame_id: str = "map",
+    ) -> None:
+        """Publish an empty generation so connected browsers drop stale XYZ."""
+
+        with self._lock:
+            current_source = str(self._metadata.get("source") or "cleared")
+        self.update(
+            b"",
+            point_count=0,
+            color_available=False,
+            frame_id=frame_id,
+            source=source or current_source,
+        )
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             metadata = dict(self._metadata)
