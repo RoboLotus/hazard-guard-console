@@ -317,6 +317,9 @@ ros2 launch hazard_guard_simulation rtabmap_sim.launch.py \
 
 이 화면은 RViz 화면을 캡처하거나 전송하지 않습니다. ROS의 원본
 `PointCloud2` 데이터를 직접 변환하므로 RViz를 실행하지 않아도 동작합니다.
+열화상 cloud가 packed `rgb`를 제공하면 그 색을 그대로 사용하고, 이전 형식처럼
+`temperature_c`만 제공하면 backend가 고정 10~60 °C 범위의 heat map RGB로
+변환합니다. 브라우저에는 alpha 255의 불투명 point record로 전달합니다.
 상태 확인 API는 `/api/v1/spatial/cloud/status`입니다. 다른 토픽을 사용할
 때는 백엔드 실행 전에 `HAZARD_GUARD_POINT_CLOUD_TOPIC`을 지정할 수 있습니다.
 

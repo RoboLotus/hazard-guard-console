@@ -67,13 +67,14 @@ class RosBridge:
         self.thermal_cloud = thermal_cloud
         self.diagnostics = diagnostics
         self._point_cloud_adapter = PointCloudAdapter(point_cloud, self._set_error)
-        # The thermal map arrives already coloured by temperature, so the same
-        # adapter carries it - only the topic differs.
+        # New robot clouds carry packed RGB. The temperature fallback keeps
+        # older radiometric-only PointCloud2 recordings visible as a heat map.
         self._thermal_cloud_adapter = PointCloudAdapter(
             thermal_cloud,
             self._set_error,
             source_env="HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
             source_default="/hazard_guard/thermal/points",
+            temperature_colors=True,
         )
         self._media_adapter = RosMediaAdapter(
             media,

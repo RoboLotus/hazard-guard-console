@@ -94,6 +94,48 @@ def test_cloud_without_rgb_uses_a_clear_fallback_color():
     assert store.status()["color_available"] is False
 
 
+def test_radiometric_thermal_cloud_is_colored_and_kept_opaque(monkeypatch):
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "10")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "60")
+    store = PointCloudStore(source="ros:/hazard_guard/thermal/points")
+    adapter = PointCloudAdapter(
+        store,
+        lambda _message: None,
+        temperature_colors=True,
+    )
+    adapter._minimum_interval = 0
+    message = SimpleNamespace(
+        fields=[
+            field("x", 0, 7),
+            field("y", 4, 7),
+            field("z", 8, 7),
+            field("temperature_c", 12, 7),
+        ],
+        width=2,
+        height=1,
+        point_step=16,
+        row_step=32,
+        is_bigendian=False,
+        data=(
+            struct.pack("<ffff", 0.0, 0.0, 1.0, 10.0)
+            + struct.pack("<ffff", 0.0, 0.0, 2.0, 60.0)
+        ),
+        header=SimpleNamespace(frame_id="map"),
+    )
+
+    adapter.on_cloud(message)
+
+    _, packet = store.packet_after(None)
+    frame_id_bytes = PACKET_HEADER.unpack_from(packet)[3]
+    first_offset = PACKET_HEADER.size + frame_id_bytes
+    cold = POINT_RECORD.unpack_from(packet, first_offset)
+    hot = POINT_RECORD.unpack_from(packet, first_offset + POINT_RECORD.size)
+    assert cold[5] > cold[3]
+    assert hot[3] > hot[5]
+    assert cold[6] == hot[6] == 255
+    assert store.status()["color_available"] is True
+
+
 def test_packet_rejects_an_unbounded_frame_id():
     store = PointCloudStore()
 

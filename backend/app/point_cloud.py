@@ -115,11 +115,13 @@ class PointCloudAdapter:
         on_error: Callable[[str], None],
         source_env: str = "HAZARD_GUARD_POINT_CLOUD_TOPIC",
         source_default: str = "/hazard_guard/rtabmap/cloud_surface",
+        temperature_colors: bool = False,
     ) -> None:
         self.store = store
         self._on_error = on_error
         self._source_env = source_env
         self._source_default = source_default
+        self._temperature_colors = temperature_colors
         self._last_update = 0.0
         self._minimum_interval = float(
             os.getenv("HAZARD_GUARD_POINT_CLOUD_INTERVAL_SEC", "0.75")
@@ -127,6 +129,24 @@ class PointCloudAdapter:
         self._maximum_points = int(
             os.getenv("HAZARD_GUARD_POINT_CLOUD_MAX_POINTS", "20000")
         )
+        self._temperature_min_c = float(
+            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "10.0")
+        )
+        self._temperature_max_c = float(
+            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "60.0")
+        )
+
+    def _temperature_rgb(self, temperature_c: float) -> tuple[int, int, int]:
+        span = max(self._temperature_max_c - self._temperature_min_c, 1.0e-6)
+        value = min(
+            1.0,
+            max(0.0, (temperature_c - self._temperature_min_c) / span),
+        )
+        channels = [
+            min(1.0, max(0.0, 1.5 - abs(4.0 * value - center)))
+            for center in (3.0, 2.0, 1.0)
+        ]
+        return tuple(round(channel * 255) for channel in channels)
 
     @staticmethod
     def _unpack_scalar(
@@ -171,7 +191,15 @@ class PointCloudAdapter:
 
             packed_color = fields.get("rgb") or fields.get("rgba")
             split_color = all(channel in fields for channel in ("r", "g", "b"))
-            color_available = packed_color is not None or split_color
+            temperature_field = fields.get("temperature_c") or fields.get(
+                "temperature"
+            )
+            temperature_color = (
+                self._temperature_colors and temperature_field is not None
+            )
+            color_available = (
+                packed_color is not None or split_color or temperature_color
+            )
             endian = ">" if bool(message.is_bigendian) else "<"
             data = memoryview(message.data)
             sample_step = max(1, math.ceil(total_points / self._maximum_points))
@@ -211,6 +239,14 @@ class PointCloudAdapter:
                         ))
                         for channel in ("r", "g", "b")
                     )
+                elif temperature_color:
+                    temperature_c = float(self._unpack_scalar(
+                        data,
+                        base + temperature_field.offset,
+                        temperature_field.datatype,
+                        endian,
+                    ))
+                    red, green, blue = self._temperature_rgb(temperature_c)
                 else:
                     red, green, blue = 75, 145, 220
 
