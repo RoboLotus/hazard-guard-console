@@ -62,9 +62,13 @@ export default function SimulationMapManager({
     () => sessions.find((session) => session.id === draftSessionId),
     [sessions, draftSessionId],
   );
-  const modeActive = ["starting", "running", "stopping", "external"].includes(
-    systemMode?.state,
-  );
+  const modeActive = [
+    "preparing",
+    "starting",
+    "running",
+    "stopping",
+    "external",
+  ].includes(systemMode?.state);
   // Both modes that run SLAM Toolbox have a live /map worth storing; plain
   // AMCL patrol would only re-dump the map it was started from.
   const mapping = systemMode?.mode === "mapping" || Boolean(systemMode?.patrol_slam);

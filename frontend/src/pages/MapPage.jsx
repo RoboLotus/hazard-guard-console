@@ -125,7 +125,9 @@ export default function MapPage({
     systemMode?.mode,
   );
   const patrolModeReady = Boolean(systemMode?.navigation_ready);
-  const modeTransitioning = ["starting", "stopping"].includes(systemMode?.state);
+  const modeTransitioning = ["preparing", "starting", "stopping"].includes(
+    systemMode?.state,
+  );
   const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
   const heatDetections = spatialState?.heatmap?.detections || [];
   const trendWarnings = heatDetections.filter((item) => ["warning", "critical"].includes(item.trend_status)).length;
@@ -414,7 +416,7 @@ export default function MapPage({
 
   return (
     <div className="detail-page map-page">
-      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="2D 점유 지도, RTAB-Map RGB-D 컬러 포인트클라우드, 캘리브레이션으로 온도를 입힌 열화상 3D 지도를 전환해 확인합니다.">
+      <DetailHeading eyebrow="DIGITAL TWIN" title="지도 관제" description="2D 점유 지도와 RTAB-Map RGB-D 지도, 완성된 3D 표면에 관측 온도를 누적한 열화상 계층을 전환해 확인합니다.">
         <div className="map-dimension-switch" aria-label="지도 표시 방식">
           <button type="button" className={mapDimension === "2d" ? "active" : ""} aria-pressed={mapDimension === "2d"} onClick={() => changeMapDimension("2d")}>
             <MapTrifold size={16} />2D 지도
@@ -511,7 +513,7 @@ export default function MapPage({
               <div><dt>LiDAR</dt><dd className="healthy">{telemetry?.lidar_status === "error" ? "확인 필요" : "정상"}</dd></div>
               <div><dt>사람 안전</dt><dd className={personSafetyClass}>{personSafetyLabel}{personSafety?.distance_valid ? ` · ${personSafety.nearest_distance_m.toFixed(1)}m` : ""}</dd></div>
               <div><dt>운용 대상</dt><dd>{physicalTarget ? "실물 ROSMASTER M1" : "Gazebo 시뮬레이션"}</dd></div>
-              <div><dt>지도 소스</dt><dd>{mapDimension === "thermal" ? "열화상 × Depth 캘리브레이션" : mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
+              <div><dt>지도 소스</dt><dd>{mapDimension === "thermal" ? "고정 3D 맵 × 누적 열화상" : mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
               <div><dt>로봇 위치</dt><dd>{spatialState?.pose?.available ? `X ${spatialState.pose.x.toFixed(2)} · Y ${spatialState.pose.y.toFixed(2)}` : "확인 중"}</dd></div>
               <div><dt>Nav2 상태</dt><dd className={navigationStatus?.status === "executing" ? "healthy" : ""}>{navStatusLabels[navigationStatus?.status] || "확인 중"}</dd></div>
             </dl>

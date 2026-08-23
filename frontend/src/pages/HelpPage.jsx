@@ -162,7 +162,11 @@ export default function HelpPage({ onNavigate }) {
             </div>
             <div className="help-callout neutral">
               <Cube size={20} weight="fill" />
-              <div><strong>2D와 3D는 같은 세션의 서로 다른 주행 단계입니다.</strong><p>첫 주행에서 SLAM Toolbox가 2D 지도를 완성하고, 두 번째 주행에서는 저장 지도 localization이 좌표를 담당합니다. RTAB-Map은 map→odom을 발행하거나 ICP·loop closure로 별도 주행 좌표를 만들지 않고 RGB-D 기록만 담당합니다.</p></div>
+              <div><strong>2D와 3D는 같은 세션의 서로 다른 주행 단계입니다.</strong><p>첫 주행에서 SLAM Toolbox가 2D 지도를 완성하고, 두 번째 주행에서는 저장 지도 localization이 좌표를 담당합니다. 2단계는 전용 <code>rgbd-map.db</code>를 새로 사용하므로 1단계 RTAB-Map 좌표와 섞이지 않으며, RTAB-Map은 map→odom을 발행하지 않습니다.</p></div>
+            </div>
+            <div className="help-callout info">
+              <Cube size={20} weight="fill" />
+              <div><strong>이전 형식의 3D 세션은 2단계만 다시 수집합니다.</strong><p>전용 DB와 map 좌표계 provenance가 없는 기존 결과에는 누적 열화상을 적용하지 않습니다. 저장된 2D 지도는 그대로 두고 <strong>2단계 · RGB-D 3D 수집</strong>만 한 번 다시 완료하세요.</p></div>
             </div>
             <div className="help-callout warning">
               <WarningCircle size={20} weight="fill" />
@@ -226,8 +230,8 @@ export default function HelpPage({ onNavigate }) {
               <article>
                 <ThermometerHot size={21} weight="fill" />
                 <strong>3D 열화상</strong>
-                <p>열화상-Depth 캘리브레이션으로 구한 외부 파라미터를 써서 Depth 표면에 온도를 입힌 라이브 3D 지도입니다. 색은 고정된 온도 구간(기본 10~60°C)이라 프레임이 달라도 같은 온도는 같은 색입니다.</p>
-                <ul><li>파랑이 차갑고 빨강이 뜨겁습니다</li><li>열화상-Depth 투영 포인트를 실시간으로 표시합니다</li><li>설비 판정용 복셀 크기는 Robot의 ROI 설정을 따릅니다</li><li>저장 세션 다시 보기는 아직 없습니다</li></ul>
+                <p>3D 수집을 마친 고정 표면에 순찰 중 관측한 온도를 누적한 계층입니다. 화면은 Robot이 만든 최신 누적 스냅샷으로 교체되며, 브라우저가 프레임을 임의로 이어 붙이지 않습니다.</p>
+                <ul><li>다시 보이는 표면만 최신 온도로 갱신됩니다</li><li>보지 않는 영역은 마지막 측정을 유지합니다</li><li>기존 3D 표면과 일치하지 않는 Depth 관측은 반영하지 않습니다</li><li>파랑이 차갑고 빨강이 뜨거우며 같은 온도는 같은 색입니다</li></ul>
               </article>
             </div>
           </HelpSection>
