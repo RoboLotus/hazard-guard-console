@@ -279,7 +279,8 @@ def test_physical_patrol_passes_selected_map_to_hardware_launch(
     assert "initial_pose_x:=1.25" in command
     assert "initial_pose_y:=-0.4" in command
     assert "initial_pose_yaw:=0.75" in command
-    assert "use_person_safety:=false" in command
+    assert "use_person_safety:=true" in command
+    assert "person_device:=0" in command
     assert "enable_thermal_pipeline:=false" in command
     assert all("start_simulation" not in argument for argument in command)
 
@@ -350,6 +351,20 @@ def test_physical_rgbd_mapping_disables_yolo_but_keeps_camera(
     assert command.count("use_person_safety:=false") == 1
     assert "use_person_safety:=true" not in command
     assert "start_person_camera:=true" in command
+
+
+def test_physical_patrol_cannot_disable_person_safety(monkeypatch, tmp_path):
+    map_path = tmp_path / "runtime" / "maps" / "facility.yaml"
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("HAZARD_GUARD_MAP_PATH", str(map_path))
+    monkeypatch.setenv("HAZARD_GUARD_PERSON_SAFETY_ENABLED", "0")
+    manager = SystemModeManager()
+
+    command = manager._launch_arguments("patrol")
+
+    assert "use_person_safety:=true" in command
 
 
 def test_physical_runtime_never_starts_gazebo(monkeypatch, tmp_path):

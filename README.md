@@ -135,8 +135,8 @@ Jetson을 재부팅하면 다시 등록해야 합니다. 실제 시각 운용 �
 ### 실물 순찰의 사람 안전·열화상 기능
 
 실물 Jetson에서 FastAPI가 순찰 모드를 시작할 때 아래 환경 변수를
-`physical_patrol.launch.py` 인자로 전달합니다. 두 기능은 실물 검증 전까지
-기본적으로 꺼져 있으므로 명시적으로 활성화해야 합니다.
+`physical_patrol.launch.py` 인자로 전달합니다. YOLO 사람 안전 기능은 실물
+순찰에서 항상 활성화되며, 열화상 기능은 명시적으로 활성화해야 합니다.
 
 ```bash
 export HAZARD_GUARD_DEPLOYMENT_TARGET=physical
@@ -148,7 +148,7 @@ export ROS_DOMAIN_ID=0
 export ROS_LOCALHOST_ONLY=1
 
 # YOLO11n 사람 탐지 → 안전 감독 → Nav2 감속/정지
-export HAZARD_GUARD_PERSON_SAFETY_ENABLED=1
+# 실물 순찰에서는 비활성화할 수 없습니다.
 export HAZARD_GUARD_PERSON_MODEL_PATH=/absolute/path/to/yolo11n.engine
 export HAZARD_GUARD_PERSON_DEVICE=cuda:0
 export HAZARD_GUARD_PERSON_RATE_HZ=6.0

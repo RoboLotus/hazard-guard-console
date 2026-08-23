@@ -692,10 +692,10 @@ class SystemModeManager:
     ) -> list[str]:
         """Translate deployment settings into the physical patrol contract."""
 
+        # Physical patrol always runs person safety. Callers such as RGB-D
+        # mapping may explicitly disable inference while keeping the camera up.
         safety_enabled = (
-            env_flag("HAZARD_GUARD_PERSON_SAFETY_ENABLED")
-            if person_safety_enabled is None
-            else person_safety_enabled
+            True if person_safety_enabled is None else person_safety_enabled
         )
         values = {
             "use_person_safety": (
@@ -709,7 +709,7 @@ class SystemModeManager:
             "person_model_path": os.getenv(
                 "HAZARD_GUARD_PERSON_MODEL_PATH", "yolo11n.pt"
             ),
-            "person_device": os.getenv("HAZARD_GUARD_PERSON_DEVICE", ""),
+            "person_device": os.getenv("HAZARD_GUARD_PERSON_DEVICE", "0"),
             "person_confidence": os.getenv(
                 "HAZARD_GUARD_PERSON_CONFIDENCE", "0.4"
             ),
