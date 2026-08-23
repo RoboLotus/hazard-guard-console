@@ -29,10 +29,8 @@ def allow_test_dispenser_request(monkeypatch):
     )
 
 
-def test_same_http_request_is_published_once_and_restored(monkeypatch, tmp_path):
-    store = DispenserRequestStore(tmp_path / "backend-requests.json")
+def test_direct_drop_endpoint_is_disabled(monkeypatch):
     calls = []
-    monkeypatch.setattr(main_module, "dispenser_request_store", store)
     monkeypatch.setattr(
         main_module.ros_bridge,
         "publish_dispenser_drop",
@@ -41,45 +39,25 @@ def test_same_http_request_is_published_once_and_restored(monkeypatch, tmp_path)
 
     client = TestClient(app)
     payload = {"request_id": "beacon-request-1", "detection_id": "thermal-1"}
-    first = client.post("/api/v1/dispenser/requests/drop", json=payload)
-    replay = client.post("/api/v1/dispenser/requests/drop", json=payload)
+    response = client.post("/api/v1/dispenser/requests/drop", json=payload)
 
-    assert first.status_code == 202
-    assert first.json()["dispatched"] is True
-    assert replay.status_code == 202
-    assert replay.json()["replayed"] is True
-    assert replay.json()["dispatched"] is False
-    assert len(calls) == 1
-
-    reloaded = DispenserRequestStore(tmp_path / "backend-requests.json")
-    restored = reloaded.get("beacon-request-1")
-    assert restored["state"] == "recovery_required"
+    assert response.status_code == 410
+    assert "위험 이벤트" in response.json()["detail"]
+    assert calls == []
 
 
-def test_detection_id_blocks_a_new_network_request_id(monkeypatch, tmp_path):
+def test_direct_drop_endpoint_does_not_create_a_ledger_record(tmp_path, monkeypatch):
     store = DispenserRequestStore(tmp_path / "backend-requests.json")
-    calls = []
     monkeypatch.setattr(main_module, "dispenser_request_store", store)
-    monkeypatch.setattr(
-        main_module.ros_bridge,
-        "publish_dispenser_drop",
-        lambda request: calls.append(request) or {"accepted": True, "message": "sent"},
-    )
     client = TestClient(app)
 
-    client.post(
+    response = client.post(
         "/api/v1/dispenser/requests/drop",
         json={"request_id": "beacon-request-1", "detection_id": "thermal-1"},
     )
-    duplicate = client.post(
-        "/api/v1/dispenser/requests/drop",
-        json={"request_id": "beacon-request-2", "detection_id": "thermal-1"},
-    )
 
-    assert duplicate.status_code == 202
-    assert duplicate.json()["request_id"] == "beacon-request-1"
-    assert duplicate.json()["replayed"] is True
-    assert len(calls) == 1
+    assert response.status_code == 410
+    assert store.get("beacon-request-1") is None
 
 
 def test_request_id_reuse_with_different_detection_is_conflict(tmp_path):

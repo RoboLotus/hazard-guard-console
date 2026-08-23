@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   Camera,
   Cube,
@@ -17,6 +17,7 @@ import {
   downloadAsset,
 } from "../components/Common.jsx";
 import MapPanel from "../components/MapPanel.jsx";
+import { incidentMapMarkers } from "../incidents.js";
 import SimulationMapManager from "../components/SimulationMapManager.jsx";
 import WaypointMissionPanel from "../WaypointMissionPanel.jsx";
 import {
@@ -61,6 +62,7 @@ export default function MapPage({
   onSaveAndStop,
   onStopSystemMode,
   notify,
+  incidents = [],
 }) {
   const [goalMode, setGoalMode] = useState(false);
   const [mapDimension, setMapDimension] = useState("2d");
@@ -115,6 +117,10 @@ export default function MapPage({
       }
     : spatialState;
   const mapSpec = resolveMapSpec(mediaStatus, mapSpatialState);
+  const beaconMarkers = useMemo(
+    () => incidentMapMarkers(incidents),
+    [incidents],
+  );
   const currentMapSignature = routeMapSignature(mapSpec);
   const mapMismatch = Boolean(
     mapLive
@@ -444,6 +450,7 @@ export default function MapPage({
             waypoints={waypoints}
             selectedWaypointId={selectedWaypointId}
             onWaypointSelect={setSelectedWaypointId}
+            incidentMarkers={beaconMarkers}
             onGoalCandidate={selectGoal}
             onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")}
             waitingForMap={!mapLive && (physicalTarget || systemMode?.mode === "mapping")}

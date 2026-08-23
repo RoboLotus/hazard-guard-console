@@ -581,6 +581,16 @@ class RosBridge:
             "confidence": float(message.confidence),
             "simulated": bool(message.simulated),
             "message": str(message.message),
+            "beacon_pose_available": bool(
+                getattr(message, "beacon_pose_available", False)
+            ),
+            "beacon_frame_id": str(
+                getattr(message, "beacon_frame_id", "")
+            ),
+            "beacon_x": float(getattr(message, "beacon_x", 0.0)),
+            "beacon_y": float(getattr(message, "beacon_y", 0.0)),
+            "beacon_z": float(getattr(message, "beacon_z", 0.0)),
+            "beacon_yaw": float(getattr(message, "beacon_yaw", 0.0)),
             "observed_at": observed_at,
         }
 

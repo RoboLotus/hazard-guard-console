@@ -135,10 +135,13 @@ export function beaconSlots(battery, count = 3) {
     }
     return {
       slot: index + 1,
-      connected: Boolean(beacon.connected),
+      connected: Boolean(beacon.connected) && !battery?.stale,
       availableForDrop: Boolean(beacon.available_for_drop) && !battery?.stale,
+      installed: Boolean(beacon.installed),
       batteryState: battery?.stale ? "stale" : (beacon.battery_state || "unknown"),
-      percent: Number.isFinite(Number(beacon.percent)) ? Math.round(Number(beacon.percent)) : null,
+      percent: !battery?.stale && beacon.percent != null && Number.isFinite(Number(beacon.percent))
+        ? Math.round(Number(beacon.percent))
+        : null,
       address: beacon.address,
     };
   });
@@ -175,8 +178,9 @@ export function normalizeDispenserBattery(battery) {
 export function incidentMapMarkers(incidents = []) {
   return incidents.flatMap((incident) => {
     if (!String(incident.decision || "").startsWith("drop_then_")) return [];
-    const x = Number(incident.x);
-    const y = Number(incident.y);
+    if (!incident.beacon_pose_available) return [];
+    const x = Number(incident.beacon_x);
+    const y = Number(incident.beacon_y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
     const requiresCheck = ["field_check_required", "hardware_error"].includes(incident.state);
     const installed = [
@@ -187,9 +191,9 @@ export function incidentMapMarkers(incidents = []) {
       id: incident.incident_id,
       x,
       y,
-      frame_id: incident.frame_id || "map",
+      frame_id: incident.beacon_frame_id || "map",
       state: requiresCheck ? "check" : "installed",
-      label: requiresCheck ? "배출 확인 필요" : "비콘 추정 위치",
+      label: requiresCheck ? "배출 위치 확인 필요" : "비콘 설치 위치",
     }];
   });
 }

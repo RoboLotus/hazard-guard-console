@@ -68,6 +68,19 @@ test("battery slots retain three-card UI with missing devices", () => {
   assert.equal(slots.length, 3);
   assert.equal(slots[0].availableForDrop, true);
   assert.equal(slots[1].connected, false);
+  const staleSlots = beaconSlots({
+    stale: true,
+    beacons: [{ connected: true, available_for_drop: true, percent: 72 }],
+  });
+  assert.equal(staleSlots[0].connected, false);
+  assert.equal(staleSlots[0].availableForDrop, false);
+  assert.equal(staleSlots[0].percent, null);
+  const installedSlots = beaconSlots({
+    stale: false,
+    beacons: [{ connected: false, installed: true, percent: 72 }],
+  });
+  assert.equal(installedSlots[0].installed, true);
+  assert.equal(installedSlots[0].availableForDrop, false);
 });
 
 test("battery payload validation fails closed for stale or incomplete data", () => {
@@ -106,12 +119,32 @@ test("battery payload validation fails closed for stale or incomplete data", () 
 
 test("map markers distinguish installed and field-check estimates", () => {
   const installed = incidentMapMarkers([
-    { ...incident, decision: "drop_then_monitor", state: "monitoring" },
+    {
+      ...incident,
+      decision: "drop_then_monitor",
+      state: "monitoring",
+      beacon_pose_available: true,
+      beacon_frame_id: "map",
+      beacon_x: 2.4,
+      beacon_y: -0.8,
+    },
   ]);
   const check = incidentMapMarkers([
-    { ...incident, decision: "drop_then_monitor", state: "field_check_required" },
+    {
+      ...incident,
+      decision: "drop_then_monitor",
+      state: "field_check_required",
+      beacon_pose_available: true,
+      beacon_frame_id: "map",
+      beacon_x: 2.4,
+      beacon_y: -0.8,
+    },
   ]);
 
   assert.equal(installed[0].state, "installed");
+  assert.equal(installed[0].x, 2.4);
   assert.equal(check[0].state, "check");
+  assert.deepEqual(incidentMapMarkers([
+    { ...incident, decision: "drop_then_monitor", state: "monitoring" },
+  ]), []);
 });

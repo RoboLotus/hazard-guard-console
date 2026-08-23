@@ -151,6 +151,12 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .waypoint-marker-map .waypoint-heading-arrow { fill: #1769e0; }
 .waypoint-marker-map.selected .waypoint-heading-line { stroke: #0c4e9c; }
 .waypoint-marker-map.selected .waypoint-heading-arrow { fill: #0c4e9c; }
+.beacon-map-marker circle { fill: #e9f4ff; stroke: #1f70c1; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.beacon-map-marker > svg { color: #1764b5; overflow: visible; }
+.beacon-map-marker.check circle { fill: #fff3df; stroke: #c67b16; stroke-dasharray: 2 1; }
+.beacon-map-marker.check > svg { color: #a9650b; }
+.beacon-map-label rect { fill: rgba(32,49,68,.92); stroke: rgba(255,255,255,.55); stroke-width: .35; }
+.beacon-map-label text { fill: #fff; font: 750 2.25px "Pretendard Variable", Pretendard, sans-serif; }
 .map-live-badge { position: absolute; z-index: 2; top: 11px; left: 11px; padding: 5px 8px; display: flex; align-items: center; gap: 5px; color: #386077; background: rgba(255,255,255,0.92); border: 1px solid rgba(209, 219, 228, 0.9); border-radius: 6px; box-shadow: 0 2px 7px rgba(23, 42, 60, 0.08); font-size: 8px; font-weight: 700; }
 .map-live-badge span { width: 5px; height: 5px; background: var(--success); border-radius: 50%; }
 .map-live-badge.mock { color: #7b8796; }
@@ -182,6 +188,7 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .legend-depth { background: #2675d8; }
 .legend-thermal { background: #e45832; }
 .legend-heat { background: linear-gradient(90deg, #f2b63f, #d8323c); }
+.legend-beacon { background: #1f70c1; }
 .map-footer strong { margin-left: auto; color: #405067; font: 700 9px "Pretendard Variable", Pretendard, sans-serif; }
 
 .camera-stack { min-height: 0; display: grid; grid-template-rows: 1fr 1fr; gap: 12px; }
@@ -232,6 +239,7 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .dock-title > svg { width: clamp(21px, .9vw, 25px); height: clamp(21px, .9vw, 25px); flex: 0 0 auto; }
 .dock-title > span:not(.status-pill):not(.mock-badge) { font-size: clamp(14px, .65vw, 17px); font-weight: 700; }
 .dock-title .status-pill { margin-left: auto; font-size: clamp(10px, .42vw, 12px); }
+.dock-title .status-pill.offline { color: #9a5b16; background: #fff3df; }
 .button-row { margin-top: 0; }
 .operation-buttons { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(6px, .35vw, 9px); }
 .button { min-height: clamp(44px, 3vw, 50px); padding: 0 clamp(6px, .45vw, 12px); display: inline-flex; align-items: center; justify-content: center; gap: clamp(4px, .3vw, 7px); border-radius: 7px; border: 1px solid transparent; font-size: clamp(12px, .52vw, 14px); font-weight: 700; cursor: pointer; transition: 150ms ease; }
@@ -257,9 +265,16 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .meter i { height: 100%; display: block; background: var(--success); border-radius: 4px; }
 .mock-badge { margin-left: auto; padding: 4px 7px; color: #756595; background: #f2eef8; border-radius: 8px; font: 700 clamp(9px, .38vw, 11px) "Pretendard Variable", Pretendard, sans-serif; }
 .device-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(7px, .45vw, 11px); }
-.device-row button { min-width: 0; height: clamp(46px, 3.2vw, 54px); padding: 5px; display: grid; grid-template-columns: auto auto; align-items: center; justify-content: center; gap: 2px 6px; color: #7c8998; background: #f6f7f9; border: 1px dashed #d4dbe3; border-radius: 7px; font-size: clamp(11px, .46vw, 12px); cursor: not-allowed; }
+.device-row button { min-width: 0; height: clamp(46px, 3.2vw, 54px); padding: 5px; display: grid; grid-template-columns: auto auto; align-items: center; justify-content: center; gap: 2px 6px; color: #7c8998; background: #f6f7f9; border: 1px dashed #d4dbe3; border-radius: 7px; font-size: clamp(11px, .46vw, 12px); cursor: not-allowed; opacity: 1; }
 .device-row button svg { width: clamp(17px, .72vw, 21px); height: clamp(17px, .72vw, 21px); }
+.device-row button b { color: inherit; font-size: clamp(11px, .46vw, 12px); }
 .device-row button span { grid-column: 1 / -1; font-size: clamp(9px, .36vw, 10px); color: #9da7b3; }
+.device-row button.connected { color: #426685; background: #f4f8fc; border-style: solid; border-color: #d8e5ef; }
+.device-row button.connected span { color: #6f8497; }
+.device-row button.available { color: #1764b5; background: #edf6ff; border-color: #c8dff4; }
+.device-row button.available span { color: #3777ad; }
+.device-row button.installed { color: #6c5a18; background: #fff9df; border-style: solid; border-color: #eadb93; }
+.device-row button.installed span { color: #846f20; }
 .operation-buttons, .telemetry-grid, .device-row { flex: 1; min-height: 0; align-content: center; align-items: center; }
 
 @container operation-control (max-width: 350px) {

@@ -32,7 +32,6 @@ from .mode_manager import system_mode_manager
 from .dispenser_requests import (
     DispenserRequestStore,
     DispenserRequestStoreError,
-    IdempotencyConflictError,
 )
 from .incidents import (
     IncidentDecisionConflictError,
@@ -915,39 +914,16 @@ def rosbag_sessions():
 
 @app.post("/api/v1/dispenser/requests/drop", status_code=202)
 def request_dispenser_drop(request: DispenserDropRequest):
-    """Record first, then publish once. Replays always return saved state."""
+    """Reject the legacy bypass; operators must approve a latched incident."""
 
-    audit_context = dispenser_safety_context(request)
-    store = require_dispenser_store()
-    try:
-        record, created = store.submit(
-            request_id=request.request_id,
-            detection_id=request.detection_id,
-            audit_context=audit_context,
-        )
-    except IdempotencyConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except DispenserRequestStoreError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"디스펜서 요청 기록을 안전하게 저장할 수 없습니다: {exc}",
-        ) from exc
-    if not created:
-        return {**record, "replayed": True, "dispatched": False}
-
-    dispatch = ros_bridge.publish_dispenser_drop(record)
-    if not dispatch["accepted"]:
-        record = store.transition(
-            record["request_id"],
-            "dispatch_unavailable",
-            result_detail=dispatch["message"],
-        )
-        return {**record, "replayed": False, "dispatched": False}
-
-    record = store.transition(
-        record["request_id"], "dispatched", dispatch_message=dispatch["message"]
+    del request
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "직접 비콘 배출 API는 안전상 비활성화되었습니다. "
+            "위험 이벤트 관리자 승인 흐름을 사용하세요."
+        ),
     )
-    return {**record, "replayed": False, "dispatched": True}
 
 
 @app.get("/api/v1/dispenser/requests/{request_id}")

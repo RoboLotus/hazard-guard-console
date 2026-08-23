@@ -430,8 +430,8 @@ export function App() {
         pendingEvents={visibleEvents.filter((event) => event.status === "new").length}
       />
       <main className="main-content">
-        {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} />}
-        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} />}
+        {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} dispenserBattery={dispenserBattery} incidents={incidents} />}
+        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} incidents={incidents} />}
         {active === "events" && <EventsPage events={visibleEvents} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} dispenserBattery={dispenserBattery} onDecideIncident={decideIncident} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={visibleEvents} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}

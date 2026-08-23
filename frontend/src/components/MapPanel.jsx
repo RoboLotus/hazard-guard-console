@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Bell,
   CaretRight,
   Crosshair,
   NavigationArrow,
@@ -29,6 +30,7 @@ function SpatialMapOverlay({
   layers,
   detail,
   waypoints = [],
+  incidentMarkers = [],
   selectedWaypointId = null,
   onWaypointSelect,
 }) {
@@ -47,6 +49,10 @@ function SpatialMapOverlay({
   const robotAngle = poseMatchesMap ? (-pose.yaw * 180) / Math.PI : 0;
   const waypointPoints = waypoints
     .map((waypoint) => ({ waypoint, point: mapToGrid(waypoint.x, waypoint.y, mapSpec) }))
+    .filter((item) => item.point);
+  const beaconPoints = incidentMarkers
+    .filter((marker) => matchesMapFrame(marker, mapSpec))
+    .map((marker) => ({ marker, point: mapToGrid(marker.x, marker.y, mapSpec) }))
     .filter((item) => item.point);
 
   return (
@@ -211,6 +217,26 @@ function SpatialMapOverlay({
           <text x="0" y=".15">{index + 1}</text>
         </g>
       ))}
+
+      {beaconPoints.map(({ marker, point }) => (
+        <g
+          key={marker.id}
+          className={`beacon-map-marker ${marker.state}`}
+          transform={`translate(${point.x} ${point.y})`}
+          role="img"
+          aria-label={marker.label}
+        >
+          <title>{marker.label}</title>
+          <circle r="4.2" />
+          <Bell x="-2.6" y="-2.6" size="5.2" weight="fill" />
+          {detail && (
+            <g className="beacon-map-label" transform="translate(5.2 -3.8)">
+              <rect x="0" y="-3" width="24" height="7" rx="2" />
+              <text x="2.2" y="1.2">{marker.label}</text>
+            </g>
+          )}
+        </g>
+      ))}
     </svg>
   );
 }
@@ -226,6 +252,7 @@ export default function MapPanel({
   goalCandidate,
   onGoalCandidate,
   waypoints = [],
+  incidentMarkers = [],
   selectedWaypointId = null,
   onWaypointSelect,
   waitingForMap = false,
@@ -405,6 +432,7 @@ export default function MapPanel({
                   layers={layers}
                   detail={detail}
                   waypoints={waypoints}
+                  incidentMarkers={incidentMarkers}
                   selectedWaypointId={selectedWaypointId}
                   onWaypointSelect={onWaypointSelect}
                 />
@@ -447,6 +475,7 @@ export default function MapPanel({
         {depthLegend && <span><i className="legend-depth" />{depthLegend}</span>}
         {thermalLegend && <span><i className="legend-thermal" />{thermalLegend}</span>}
         <span><i className="legend-heat" />열원</span>
+        {incidentMarkers.length > 0 && <span><i className="legend-beacon" />비콘 위치</span>}
         <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : allowMockFallback ? `목업 · ${Math.round(mapView.zoom * 100)}%` : `센서 대기 · ${Math.round(mapView.zoom * 100)}%`}</strong>
       </footer>
     </section>

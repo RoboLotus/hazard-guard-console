@@ -352,6 +352,12 @@ def test_bridge_normalizes_incident_message_and_battery_fails_closed(monkeypatch
         confidence=0.9,
         simulated=False,
         message="approval needed",
+        beacon_pose_available=True,
+        beacon_frame_id="map",
+        beacon_x=0.8,
+        beacon_y=1.7,
+        beacon_z=0.0,
+        beacon_yaw=0.2,
     )
     main_module.ros_bridge._persist_incident_status(
         captured.append, main_module.ros_bridge._incident_payload(message)
@@ -359,6 +365,8 @@ def test_bridge_normalizes_incident_message_and_battery_fails_closed(monkeypatch
 
     assert captured[0]["incident_id"] == "incident-1"
     assert captured[0]["decision"] is None
+    assert captured[0]["beacon_pose_available"] is True
+    assert captured[0]["beacon_x"] == pytest.approx(0.8)
     assert captured[0]["observed_at"].startswith("2025-")
     main_module.ros_bridge._on_dispenser_battery(
         SimpleNamespace(
