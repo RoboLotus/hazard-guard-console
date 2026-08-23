@@ -540,6 +540,45 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .event-preview-grid span { position: absolute; inset: auto 6px 6px; font-size: 8px; font-weight: 700; text-align: left; text-shadow: 0 1px 3px #000; }
 .event-detail-actions { min-height: 58px; padding: 10px 16px; display: flex; justify-content: flex-end; gap: 7px; border-top: 1px solid #e9edf1; }
 .event-detail-actions .button { min-height: 36px; font-size: 9px; }
+.incident-dialog-backdrop { position: fixed; z-index: 180; inset: 0; padding: 20px; display: grid; place-items: center; background: rgba(17,32,47,.48); backdrop-filter: blur(2px); }
+.incident-dialog { width: min(620px, 100%); max-height: calc(100vh - 40px); padding: 0; overflow: auto; box-shadow: 0 22px 70px rgba(15,35,55,.28); }
+.incident-dialog > header { padding: 18px 20px 15px; display: grid; grid-template-columns: 40px minmax(0,1fr) auto; gap: 11px; align-items: start; border-bottom: 1px solid #e9edf1; }
+.incident-dialog-icon { width: 40px; height: 40px; display: grid; place-items: center; color: #b52e39; background: #ffedef; border-radius: 10px; }
+.incident-dialog header span { color: #b34a52; font-size: 7px; font-weight: 850; letter-spacing: .75px; }
+.incident-dialog h2 { margin: 3px 0 4px; color: #263b51; font-size: 17px; }
+.incident-dialog header p { margin: 0; color: #748396; font-size: 9px; }
+.incident-dialog-summary { margin: 14px 20px 0; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); overflow: hidden; background: #f7f9fb; border: 1px solid #e1e7ed; border-radius: 9px; }
+.incident-dialog-summary > div { min-width: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.incident-dialog-summary > div + div { border-left: 1px solid #e1e7ed; }
+.incident-dialog-summary span { color: #8794a3; font-size: 7px; font-weight: 750; }
+.incident-dialog-summary strong { overflow: hidden; color: #344a61; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.incident-dialog fieldset { margin: 15px 20px 0; padding: 0; border: 0; }
+.incident-dialog legend, .incident-admin-token > span { margin-bottom: 7px; display: flex; align-items: center; gap: 5px; color: #53667b; font-size: 8px; font-weight: 800; }
+.incident-action-options { display: grid; gap: 7px; }
+.incident-action-options label { min-height: 58px; padding: 10px; display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 10px; align-items: center; background: #fff; border: 1px solid #dfe6ed; border-radius: 9px; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+.incident-action-options label:hover:not(.disabled) { border-color: #abc8e8; background: #f8fbff; }
+.incident-action-options label.selected { border-color: #2a75c6; background: #f3f8fe; box-shadow: 0 0 0 2px rgba(42,117,198,.1); }
+.incident-action-options label:has(input:focus-visible) { outline: 2px solid #2a75c6; outline-offset: 2px; }
+.incident-action-options label.disabled { opacity: .52; cursor: not-allowed; }
+.incident-action-options input { position: absolute; opacity: 0; pointer-events: none; }
+.incident-action-options i { width: 34px; height: 34px; display: grid; place-items: center; color: #526d8d; background: #eef3f8; border-radius: 8px; }
+.incident-action-options i.primary { color: #1764b5; background: #e9f3ff; }
+.incident-action-options i.warning { color: #a9650b; background: #fff3df; }
+.incident-action-options span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.incident-action-options strong { color: #30465d; font-size: 10px; }
+.incident-action-options small { color: #7b8998; font-size: 8px; line-height: 1.4; }
+.incident-admin-token { margin: 15px 20px 0; display: block; }
+.incident-admin-token input { width: 100%; height: 40px; padding: 0 11px; color: #32485f; background: #fff; border: 1px solid #d7e0e8; border-radius: 8px; outline: 0; font: 650 9px "Pretendard Variable", Pretendard, sans-serif; }
+.incident-admin-token input:focus { border-color: #2a75c6; box-shadow: 0 0 0 3px rgba(42,117,198,.11); }
+.incident-admin-token > small { margin-top: 6px; display: block; color: #8995a3; font-size: 7px; line-height: 1.4; }
+.incident-dialog-error, .incident-dialog-safety { margin: 11px 20px 0; padding: 9px 10px; display: flex; align-items: flex-start; gap: 7px; border-radius: 8px; font-size: 8px; line-height: 1.45; }
+.incident-dialog-error { color: #a52f39; background: #fff0f1; border: 1px solid #f0c4c8; }
+.incident-dialog-safety { color: #42667f; background: #f1f7fb; border: 1px solid #d5e5f0; }
+.incident-dialog-error svg, .incident-dialog-safety svg { flex: 0 0 auto; }
+.incident-dialog > footer { margin-top: 16px; padding: 12px 20px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid #e9edf1; }
+.incident-dialog > footer .button { min-height: 38px; font-size: 9px; }
+.spin { animation: incident-spin .85s linear infinite; }
+@keyframes incident-spin { to { transform: rotate(360deg); } }
 .resolved-copy { display: flex; align-items: center; gap: 6px; color: var(--success); font-size: 9px; font-weight: 700; }
 .count-badge.large { padding: 7px 10px; font-size: 9px; }
 
@@ -1290,4 +1329,9 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
   .rosbag-actions label { width: 100%; min-width: 0; }
   .rosbag-actions button { width: 100%; }
   .rosbag-sessions article b { margin-left: 0; }
+  .incident-dialog-backdrop { padding: 10px; }
+  .incident-dialog-summary { grid-template-columns: 1fr; }
+  .incident-dialog-summary > div + div { border-top: 1px solid #e1e7ed; border-left: 0; }
+  .incident-dialog > footer { align-items: stretch; flex-direction: column-reverse; }
+  .incident-dialog > footer .button { width: 100%; }
 }

@@ -270,7 +270,7 @@ def test_monitoring_requires_explicit_completion_decision(
         json={"decision": "resume", "operator_id": "operator", "confirmed": True},
         headers=ADMIN_HEADERS,
     )
-    valid = client.post(
+    premature = client.post(
         "/api/v1/incidents/incident-1/decision",
         json={
             "decision": "complete_monitoring",
@@ -281,7 +281,54 @@ def test_monitoring_requires_explicit_completion_decision(
     )
 
     assert invalid.status_code == 409
+    assert premature.status_code == 409
+
+    seed(incident_api, "admin_release_required")
+    valid = client.post(
+        "/api/v1/incidents/incident-1/decision",
+        json={
+            "decision": "complete_monitoring",
+            "operator_id": "operator",
+            "confirmed": True,
+        },
+        headers=ADMIN_HEADERS,
+    )
     assert valid.status_code == 200
+
+
+def test_rejected_decision_replay_remains_a_conflict(monkeypatch, incident_api):
+    calls = []
+
+    def reject(payload):
+        calls.append(payload)
+        return {
+            "delivered": True,
+            "accepted": False,
+            "incident_id": payload["incident_id"],
+            "request_id": payload["request_id"],
+            "decision": payload["decision"],
+            "state": "approval_required",
+            "message": "safety guard rejected",
+        }
+
+    monkeypatch.setattr(main_module.ros_bridge, "decide_incident", reject)
+    payload = {
+        "request_id": "decision-rejected",
+        "decision": "resume",
+        "operator_id": "operator",
+        "confirmed": True,
+    }
+
+    first = client.post(
+        "/api/v1/incidents/incident-1/decision", json=payload, headers=ADMIN_HEADERS
+    )
+    replay = client.post(
+        "/api/v1/incidents/incident-1/decision", json=payload, headers=ADMIN_HEADERS
+    )
+
+    assert first.status_code == 409
+    assert replay.status_code == 409
+    assert len(calls) == 1
 
 
 def test_bridge_normalizes_incident_message_and_battery_fails_closed(monkeypatch):

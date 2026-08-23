@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle, Warning } from "@phosphor-icons/react";
 import { fallbackSpatialState, thermalDetectionsToEvents } from "./spatial.js";
 import { systemModeLabels } from "./components/Common.jsx";
@@ -12,6 +12,7 @@ import ReportsPage from "./pages/ReportsPage.jsx";
 import Settings from "./pages/Settings.jsx";
 import VideoPage from "./pages/VideoPage.jsx";
 import RosbagPage from "./pages/RosbagPage.jsx";
+import { mergeIncidentEvents, normalizeDispenserBattery } from "./incidents.js";
 
 export function App() {
   const [active, setActive] = useState("overview");
@@ -31,6 +32,14 @@ export function App() {
   const [bagStatus, setBagStatus] = useState({ state: "offline", recording: false, control_enabled: false });
   const [bagSessions, setBagSessions] = useState([]);
   const [bagEnabled, setBagEnabled] = useState(false);
+  const [incidents, setIncidents] = useState([]);
+  const [dispenserBattery, setDispenserBattery] = useState({
+    expected: 3,
+    connected: 0,
+    available_for_drop: 0,
+    beacons: [],
+    stale: true,
+  });
   const announcedThermalLevels = useRef(new Map());
 
   const notify = (message, tone = "success") => {
@@ -53,6 +62,45 @@ export function App() {
     void checkHealth();
     const interval = window.setInterval(checkHealth, 5000);
     return () => { disposed = true; window.clearInterval(interval); };
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    let requestSequence = 0;
+    let timer;
+    let controller;
+    const refreshIncidents = async () => {
+      const sequence = ++requestSequence;
+      controller = new AbortController();
+      const requestTimeout = window.setTimeout(() => controller.abort(), 3000);
+      try {
+        const response = await fetch("/api/v1/incidents", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Incident status ${response.status}`);
+        const payload = await response.json();
+        const battery = normalizeDispenserBattery(payload?.battery);
+        if (!battery) throw new Error("Incident response is missing battery status");
+        if (!disposed && sequence === requestSequence) {
+          setIncidents(Array.isArray(payload.incidents) ? payload.incidents : []);
+          setDispenserBattery(battery);
+        }
+      } catch {
+        if (!disposed && sequence === requestSequence) {
+          setDispenserBattery((current) => ({ ...current, stale: true, available_for_drop: 0 }));
+        }
+      } finally {
+        window.clearTimeout(requestTimeout);
+        if (!disposed) timer = window.setTimeout(refreshIncidents, 1000);
+      }
+    };
+    void refreshIncidents();
+    return () => {
+      disposed = true;
+      requestSequence += 1;
+      controller?.abort();
+      window.clearTimeout(timer);
+    };
   }, []);
   useEffect(() => {
     let disposed = false;
@@ -197,6 +245,32 @@ export function App() {
   const navigate = (id) => {
     if (["overview", "map", "events", "video", "report", "rosbag", "settings", "help"].includes(id)) setActive(id);
     else notify(`${navigationLabels[id] || "도움말"} 화면은 다음 단계에서 연결됩니다.`, "info");
+  };
+  const visibleEvents = useMemo(
+    () => mergeIncidentEvents(events, incidents),
+    [events, incidents],
+  );
+  const decideIncident = async ({ incident, decision, adminToken, requestId }) => {
+    const response = await fetch(`/api/v1/incidents/${encodeURIComponent(incident.incident_id)}/decision`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-HazardGuard-Admin-Token": adminToken,
+      },
+      body: JSON.stringify({
+        request_id: requestId,
+        decision,
+        confirmed: true,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || result.state === "rejected") {
+      const error = new Error(result.detail || result.message || "관리자 조치를 수행하지 못했습니다.");
+      error.retryable = response.status >= 500;
+      throw error;
+    }
+    notify(result.message || "관리자 조치를 Robot 임무 관리자에 전달했습니다.");
+    return result;
   };
   const refreshBagSessions = async () => {
     try {
@@ -353,13 +427,13 @@ export function App() {
       <Sidebar
         active={active}
         onNavigate={navigate}
-        pendingEvents={events.filter((event) => event.status === "new").length}
+        pendingEvents={visibleEvents.filter((event) => event.status === "new").length}
       />
       <main className="main-content">
-        {active === "overview" && <Overview events={events} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} />}
+        {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} />}
         {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} />}
-        {active === "events" && <EventsPage events={events} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} />}
-        {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={events} notify={notify} />}
+        {active === "events" && <EventsPage events={visibleEvents} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} dispenserBattery={dispenserBattery} onDecideIncident={decideIncident} />}
+        {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={visibleEvents} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}
         {active === "rosbag" && <RosbagPage status={bagStatus} enabled={bagEnabled} onEnabledChange={changeBagEnabled} sessions={bagSessions} onRefreshSessions={refreshBagSessions} onControl={controlBag} />}
         {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} spatialState={spatialState} />}

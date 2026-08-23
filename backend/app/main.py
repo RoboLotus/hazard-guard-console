@@ -214,7 +214,6 @@ def validate_incident_decision(incident: dict, decision: str) -> None:
         "approval_required": {
             "resume", "drop_then_resume", "drop_then_monitor"
         },
-        "monitoring": {"complete_monitoring"},
         "admin_release_required": {"complete_monitoring"},
         "field_check_required": {"acknowledge_field_check"},
         "hardware_error": {"acknowledge_field_check"},
@@ -476,6 +475,11 @@ def decide_incident(
             operator_id=operator_id,
         )
         if not created and decision_record["state"] in {"accepted", "rejected"}:
+            if decision_record["state"] == "rejected":
+                raise HTTPException(
+                    status_code=409,
+                    detail=decision_record.get("message") or "Robot이 관리자 조치를 거절했습니다.",
+                )
             return {**decision_record, "replayed": True}
         _, claimed = store.claim_dispatch(
             request_id,
