@@ -79,7 +79,7 @@ function EventsPanel({ events, onAcknowledge, onViewAll }) {
               <div className="event-actions">
                 {event.temperature && <b>{event.temperature}</b>}
                 {!event.acknowledged ? (
-                  <button type="button" onClick={() => onAcknowledge(event.id)}><Check size={14} weight="bold" />확인</button>
+                  <button type="button" onClick={() => event.incident ? onViewAll() : onAcknowledge(event.id)}><Check size={14} weight="bold" />{event.incident ? "조치 선택" : "확인"}</button>
                 ) : <span className="ack-label"><Check size={14} />확인됨</span>}
               </div>
             </div>

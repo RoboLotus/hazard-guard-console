@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   CheckCircle,
@@ -16,6 +16,8 @@ import rgbFeed from "../assets/industrial-rgb.webp";
 import thermalFeed from "../assets/industrial-thermal.webp";
 import { DetailHeading } from "../components/Common.jsx";
 import { eventStatusLabels } from "../data/dashboardData.js";
+import IncidentDecisionDialog from "../components/IncidentDecisionDialog.jsx";
+import { incidentActions, incidentStateLabels } from "../incidents.js";
 
 export function EventLevelIcon({ level, size = 19 }) {
   if (level === "critical") return <Siren size={size} weight="fill" />;
@@ -24,11 +26,12 @@ export function EventLevelIcon({ level, size = 19 }) {
   return <CheckCircle size={size} weight="fill" />;
 }
 
-export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo }) {
+export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo, dispenserBattery, onDecideIncident }) {
   const [selectedId, setSelectedId] = useState(events[0]?.id ?? null);
   const [levelFilter, setLevelFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const [approvalIncidentId, setApprovalIncidentId] = useState(null);
   const filtered = events.filter((event) => {
     const matchesLevel = levelFilter === "all" || event.level === levelFilter;
     const matchesStatus = statusFilter === "all" || event.status === statusFilter;
@@ -36,6 +39,13 @@ export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo
     return matchesLevel && matchesStatus && haystack.includes(query.trim().toLowerCase());
   });
   const selected = events.find((event) => event.id === selectedId) || filtered[0] || null;
+  const approvalIncident = events.find(
+    (event) => event.incident?.incident_id === approvalIncidentId,
+  )?.incident || null;
+
+  useEffect(() => {
+    if (approvalIncidentId && !approvalIncident) setApprovalIncidentId(null);
+  }, [approvalIncidentId, approvalIncident]);
 
   const updateStatus = (status) => {
     if (!selected) return;
@@ -84,6 +94,7 @@ export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo
                   <div><dt>측정 온도</dt><dd className={selected.temperature ? "danger-value" : ""}>{selected.temperature || "해당 없음"}</dd></div>
                   <div><dt>판정 기준</dt><dd>{selected.threshold || "상태 정보"}</dd></div>
                   <div><dt>담당자</dt><dd>{selected.assignee}</dd></div>
+                  {selected.incident && <div><dt>Robot 안전 상태</dt><dd>{incidentStateLabels[selected.incident.state] || selected.incident.state}</dd></div>}
                 </dl>
                 <div className="event-note"><NotePencil size={18} /><div><strong>운영 메모</strong><p>{selected.note}</p></div></div>
                 <div className="event-preview-grid">
@@ -92,15 +103,31 @@ export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo
                 </div>
               </div>
               <footer className="event-detail-actions">
-                {selected.status === "new" && <button type="button" className="button secondary" onClick={() => updateStatus("acknowledged")}><Check size={17} weight="bold" />확인 처리</button>}
-                {["new", "acknowledged"].includes(selected.status) && <button type="button" className="button primary" onClick={() => updateStatus("working")}><Play size={17} weight="fill" />처리 시작</button>}
-                {selected.status === "working" && <button type="button" className="button primary" onClick={() => updateStatus("resolved")}><CheckCircle size={17} weight="fill" />해결 완료</button>}
-                {selected.status === "resolved" && <span className="resolved-copy"><CheckCircle size={18} weight="fill" />처리가 완료된 이벤트입니다.</span>}
+                {selected.incident ? (
+                  incidentActions(selected.incident, dispenserBattery).length > 0
+                    ? <button type="button" className="button primary" onClick={() => setApprovalIncidentId(selected.incident.incident_id)}><Check size={17} weight="bold" />관리자 조치 선택</button>
+                    : <span className="resolved-copy"><ClockCounterClockwise size={18} weight="fill" />{incidentStateLabels[selected.incident.state] || "Robot 처리 중"}</span>
+                ) : (
+                  <>
+                    {selected.status === "new" && <button type="button" className="button secondary" onClick={() => updateStatus("acknowledged")}><Check size={17} weight="bold" />확인 처리</button>}
+                    {["new", "acknowledged"].includes(selected.status) && <button type="button" className="button primary" onClick={() => updateStatus("working")}><Play size={17} weight="fill" />처리 시작</button>}
+                    {selected.status === "working" && <button type="button" className="button primary" onClick={() => updateStatus("resolved")}><CheckCircle size={17} weight="fill" />해결 완료</button>}
+                    {selected.status === "resolved" && <span className="resolved-copy"><CheckCircle size={18} weight="fill" />처리가 완료된 이벤트입니다.</span>}
+                  </>
+                )}
               </footer>
             </>
           ) : <div className="empty-state"><ListChecks size={30} /><strong>이벤트를 선택하세요.</strong></div>}
         </aside>
       </div>
+      {approvalIncident && (
+        <IncidentDecisionDialog
+          incident={approvalIncident}
+          battery={dispenserBattery}
+          onClose={() => setApprovalIncidentId(null)}
+          onSubmit={onDecideIncident}
+        />
+      )}
     </div>
   );
 }
