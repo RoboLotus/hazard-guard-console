@@ -169,9 +169,12 @@ export default function PointCloudPanel({
 
     const geometry = new THREE.BufferGeometry();
     const material = new THREE.PointsMaterial({
-      size: 0.035,
+      size: variant === "thermal" ? 0.055 : 0.035,
       sizeAttenuation: true,
       vertexColors: true,
+      transparent: false,
+      opacity: 1,
+      depthWrite: true,
     });
     const points = new THREE.Points(geometry, material);
     scene.add(points);
