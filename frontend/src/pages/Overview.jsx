@@ -18,6 +18,7 @@ import {
 import rgbFeed from "../assets/industrial-rgb.webp";
 import thermalFeed from "../assets/industrial-thermal.webp";
 import MapPanel from "../components/MapPanel.jsx";
+import { beaconSlots, incidentMapMarkers } from "../incidents.js";
 import {
   LiveImage,
   PanelHeader,
@@ -136,22 +137,38 @@ function RobotStatusCard({ telemetry }) {
   );
 }
 
-function WarningDevicesCard() {
+function WarningDevicesCard({ battery }) {
+  const slots = beaconSlots(battery);
+  const connectionLabel = battery?.stale
+    ? "상태 확인 필요"
+    : `${battery?.connected || 0}/${battery?.expected || 3} 연결`;
   return (
     <article className="dock-block devices">
-      <div className="dock-title"><Bell size={18} /><span>후면 경고장치</span><span className="mock-badge">UI MOCK</span></div>
+      <div className="dock-title"><Bell size={18} /><span>후면 경고장치</span><span className={`status-pill ${battery?.stale ? "offline" : "online"}`}>{connectionLabel}</span></div>
       <div className="device-row">
-        {[1, 2, 3].map((slot) => <button type="button" disabled key={slot}><Bell size={16} />장치 {slot}<span>대기</span></button>)}
+        {slots.map((slot) => (
+          <button
+            type="button"
+            disabled
+            key={slot.slot}
+            className={`${slot.installed ? "installed" : slot.connected ? "connected" : "disconnected"} ${slot.availableForDrop ? "available" : ""}`}
+            title={slot.address || `비콘 ${slot.slot}`}
+          >
+            <Bell size={16} weight={slot.connected ? "fill" : "regular"} />
+            <b>비콘 {slot.slot}</b>
+            <span>{slot.installed ? "설치됨" : slot.connected ? (slot.percent == null ? "연결됨" : `배터리 ${slot.percent}%`) : (battery?.stale ? "상태 미확인" : "미연결")}</span>
+          </button>
+        ))}
       </div>
     </article>
   );
 }
 
-function ControlDock({ telemetry, patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
+function ControlDock({ telemetry, battery, patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
   return (
     <section className="control-dock" aria-label="로봇 관제 제어 및 상태">
       <RobotStatusCard telemetry={telemetry} />
-      <WarningDevicesCard />
+      <WarningDevicesCard battery={battery} />
       <OperationControlCard
         patrolState={patrolState}
         controllerEnabled={controllerEnabled}
@@ -163,7 +180,7 @@ function ControlDock({ telemetry, patrolState, controllerEnabled, onTogglePatrol
   );
 }
 
-export default function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, mediaStatus, spatialState, sendCommand }) {
+export default function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, mediaStatus, spatialState, sendCommand, dispenserBattery, incidents }) {
   const [patrolState, setPatrolState] = useState("patrol");
   const [controllerEnabled, setControllerEnabled] = useState(false);
 
@@ -210,7 +227,7 @@ export default function Overview({ events, onAcknowledge, onNavigate, notify, te
   return (
     <div className="overview-layout">
       <div className="dashboard-grid">
-        <MapPanel mediaStatus={mediaStatus} spatialState={spatialState} onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")} onOpen={() => onNavigate("map")} />
+        <MapPanel mediaStatus={mediaStatus} spatialState={spatialState} incidentMarkers={incidentMapMarkers(incidents)} onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")} onOpen={() => onNavigate("map")} />
         <div className="camera-stack">
           <CameraPanel mediaStatus={mediaStatus} onOpen={() => onNavigate("video")} />
           <CameraPanel thermal mediaStatus={mediaStatus} maxTemperature={telemetry?.max_temperature_c ?? 84.6} onOpen={() => onNavigate("video")} />
@@ -219,6 +236,7 @@ export default function Overview({ events, onAcknowledge, onNavigate, notify, te
       </div>
       <ControlDock
         telemetry={telemetry}
+        battery={dispenserBattery}
         patrolState={patrolState}
         controllerEnabled={controllerEnabled}
         onTogglePatrol={togglePatrol}
