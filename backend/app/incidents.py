@@ -330,10 +330,68 @@ class IncidentStore:
             connection.commit()
             return record
 
-    def claim_dispatch(self, request_id: str) -> dict[str, Any]:
-        """Claim or reclaim a Robot call; Robot idempotency makes replay safe."""
+    def claim_dispatch(
+        self,
+        request_id: str,
+        *,
+        owner_id: str,
+        lease_sec: float = 5.0,
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically claim one Robot call across backend workers.
 
-        return self.transition_decision(request_id, state="dispatching")
+        A live lease suppresses concurrent duplicate service calls. An expired
+        lease can be reclaimed after a worker crash because Robot enforces the
+        same request_id idempotency contract.
+        """
+
+        if not IDENTIFIER_PATTERN.fullmatch(str(owner_id)):
+            raise IncidentStoreError("dispatch owner_id 형식이 올바르지 않습니다")
+        if lease_sec <= 0:
+            raise IncidentStoreError("dispatch lease는 0보다 커야 합니다")
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT record_json FROM incident_decisions WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise IncidentStoreError("알 수 없는 관리자 결정 요청입니다")
+            record = self._decode(row[0])
+            current = str(record.get("state") or "")
+            if current == "dispatching":
+                try:
+                    updated_at = datetime.fromisoformat(record["updated_at"])
+                    lease_age = (
+                        datetime.now(timezone.utc) - updated_at
+                    ).total_seconds()
+                except (KeyError, TypeError, ValueError):
+                    lease_age = lease_sec + 1.0
+                if lease_age < lease_sec:
+                    connection.commit()
+                    return record, False
+            elif current not in {"recorded", "transport_unavailable"}:
+                connection.rollback()
+                raise IncidentDecisionConflictError(
+                    f"{current} 상태의 결정은 전송할 수 없습니다"
+                )
+            record.update(
+                state="dispatching",
+                dispatch_owner_id=owner_id,
+                updated_at=utc_now(),
+            )
+            connection.execute(
+                """UPDATE incident_decisions
+                   SET state=?, record_json=?, updated_at=? WHERE request_id=?""",
+                (
+                    record["state"],
+                    self._encode(record),
+                    record["updated_at"],
+                    request_id,
+                ),
+            )
+            connection.commit()
+            return record, True
 
     def get_decision(self, request_id: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as connection:

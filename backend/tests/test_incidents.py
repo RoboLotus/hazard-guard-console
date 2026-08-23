@@ -91,7 +91,7 @@ def test_decision_update_is_persisted_and_auditable(tmp_path):
         operator_id="operator",
     )
 
-    store.claim_dispatch("decision-1")
+    store.claim_dispatch("decision-1", owner_id="worker-1")
     result = store.transition_decision(
         "decision-1",
         state="accepted",
@@ -134,15 +134,19 @@ def test_dispatch_claim_can_be_replayed_after_crash_but_terminal_cannot(tmp_path
         decision="resume",
         operator_id="operator",
     )
-    store.claim_dispatch("decision-1")
+    store.claim_dispatch("decision-1", owner_id="worker-1")
 
     restarted = IncidentStore(path)
-    assert restarted.claim_dispatch("decision-1")["state"] == "dispatching"
+    record, claimed = restarted.claim_dispatch(
+        "decision-1", owner_id="worker-2", lease_sec=0.000001
+    )
+    assert claimed is True
+    assert record["state"] == "dispatching"
     restarted.transition_decision(
         "decision-1", state="accepted", robot_response={"accepted": True}
     )
     with pytest.raises(IncidentDecisionConflictError):
-        restarted.claim_dispatch("decision-1")
+        restarted.claim_dispatch("decision-1", owner_id="worker-3")
 
 
 def test_decision_state_regression_and_unknown_state_are_rejected(tmp_path):
@@ -158,6 +162,29 @@ def test_decision_state_regression_and_unknown_state_are_rejected(tmp_path):
         store.transition_decision("decision-1", state="accepted")
     with pytest.raises(IncidentStoreError):
         store.transition_decision("decision-1", state="made-up")
+
+
+def test_live_dispatch_lease_suppresses_concurrent_service_call(tmp_path):
+    path = tmp_path / "incidents.sqlite3"
+    store = IncidentStore(path)
+    store.upsert_incident(incident_payload())
+    store.begin_decision(
+        request_id="decision-1",
+        incident_id="incident-1",
+        decision="resume",
+        operator_id="operator",
+    )
+
+    first, first_claimed = IncidentStore(path).claim_dispatch(
+        "decision-1", owner_id="worker-1"
+    )
+    second, second_claimed = IncidentStore(path).claim_dispatch(
+        "decision-1", owner_id="worker-2"
+    )
+
+    assert first_claimed is True
+    assert second_claimed is False
+    assert second["dispatch_owner_id"] == first["dispatch_owner_id"]
 
 
 @pytest.mark.parametrize(
