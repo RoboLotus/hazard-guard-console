@@ -239,6 +239,21 @@ class RosBridge:
         self._dispenser_lock = threading.RLock()
         self._dispenser_status_client = None
         self._dispenser_status_request_type = None
+        self._incident_handler = None
+        self._incident_decision_client = None
+        self._incident_decision_request_type = None
+        self._incident_lock = threading.RLock()
+        self._dispenser_battery: dict[str, Any] = {
+            "schema_version": 1,
+            "enabled": False,
+            "expected": 3,
+            "connected": 0,
+            "available_for_drop": 0,
+            "beacons": [],
+            "updated_at": None,
+            "stale": True,
+        }
+        self._dispenser_battery_monotonic = 0.0
 
         sensor_specs = [
             ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0, 1.0),
@@ -292,6 +307,12 @@ class RosBridge:
                 from hazard_guard_interfaces.srv import DispenserRequestStatus
             except ImportError:
                 DispenserRequestStatus = None
+            try:
+                from hazard_guard_interfaces.msg import HazardIncident
+                from hazard_guard_interfaces.srv import HazardDecision
+            except ImportError:
+                HazardIncident = None
+                HazardDecision = None
             from nav_msgs.msg import OccupancyGrid, Odometry
             from nav2_msgs.action import ComputePathToPose, NavigateToPose
             from rclpy.action import ActionClient
@@ -373,6 +394,24 @@ class RosBridge:
                     "/hazard_guard/dispenser/request_status",
                 )
                 self._dispenser_status_request_type = DispenserRequestStatus.Request
+            if HazardIncident is not None and HazardDecision is not None:
+                self._node.create_subscription(
+                    HazardIncident,
+                    "/hazard_guard/incidents/status",
+                    self._on_incident_status,
+                    map_qos,
+                )
+                self._incident_decision_client = self._node.create_client(
+                    HazardDecision,
+                    "/hazard_guard/incidents/decision",
+                )
+                self._incident_decision_request_type = HazardDecision.Request
+            self._node.create_subscription(
+                String,
+                "/hazard_guard/dispenser/battery",
+                self._on_dispenser_battery,
+                map_qos,
+            )
             self._node.create_subscription(
                 String,
                 "/hazard_guard/thermal/equipment_config/status",
@@ -645,6 +684,203 @@ class RosBridge:
         except Exception as exc:
             self._set_error(f"디스펜서 결과 기록 실패: {exc}")
 
+    def set_incident_handler(self, handler) -> None:
+        """Attach the persistent incident ledger without importing FastAPI."""
+
+        with self._incident_lock:
+            self._incident_handler = handler
+
+    @staticmethod
+    def _incident_payload(message: Any) -> dict[str, Any]:
+        stamp = getattr(message, "stamp", None)
+        seconds = int(getattr(stamp, "sec", 0))
+        nanoseconds = int(getattr(stamp, "nanosec", 0))
+        observed_at = (
+            datetime.fromtimestamp(
+                seconds + nanoseconds / 1_000_000_000, timezone.utc
+            ).isoformat()
+            if seconds > 0
+            else None
+        )
+        return {
+            "incident_id": str(message.incident_id),
+            "detection_id": str(message.detection_id),
+            "mission_id": str(message.mission_id),
+            "equipment_id": str(message.equipment_id),
+            "source": str(message.source),
+            "severity": str(message.severity),
+            "state": str(message.state),
+            "decision": str(message.decision) or None,
+            "frame_id": str(message.frame_id),
+            "x": float(message.x),
+            "y": float(message.y),
+            "z": float(message.z),
+            "temperature_c": float(message.temperature_c),
+            "confidence": float(message.confidence),
+            "simulated": bool(message.simulated),
+            "message": str(message.message),
+            "beacon_pose_available": bool(
+                getattr(message, "beacon_pose_available", False)
+            ),
+            "beacon_frame_id": str(
+                getattr(message, "beacon_frame_id", "")
+            ),
+            "beacon_x": float(getattr(message, "beacon_x", 0.0)),
+            "beacon_y": float(getattr(message, "beacon_y", 0.0)),
+            "beacon_z": float(getattr(message, "beacon_z", 0.0)),
+            "beacon_yaw": float(getattr(message, "beacon_yaw", 0.0)),
+            "observed_at": observed_at,
+        }
+
+    def _on_incident_status(self, message: Any) -> None:
+        try:
+            payload = self._incident_payload(message)
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            self._set_error(f"위험 이벤트 상태 변환 실패: {exc}")
+            return
+        with self._incident_lock:
+            handler = self._incident_handler
+        if handler is None:
+            return
+        try:
+            self._dispenser_result_executor.submit(
+                self._persist_incident_status, handler, payload
+            )
+        except RuntimeError as exc:
+            self._set_error(f"위험 이벤트 작업 큐가 종료되었습니다: {exc}")
+
+    def _persist_incident_status(self, handler, payload: dict[str, Any]) -> None:
+        try:
+            handler(payload)
+        except Exception as exc:
+            self._set_error(f"위험 이벤트 기록 실패: {exc}")
+
+    def _on_dispenser_battery(self, message: Any) -> None:
+        try:
+            payload = json.loads(message.data)
+            if not isinstance(payload, dict):
+                return
+            beacons = payload.get("beacons")
+            if not isinstance(beacons, list):
+                return
+            normalized = {
+                "schema_version": int(payload.get("schema_version", 1)),
+                "enabled": bool(payload.get("enabled", False)),
+                "expected": max(0, int(payload.get("expected", 3))),
+                "connected": max(0, int(payload.get("connected", 0))),
+                "available_for_drop": 0,
+                "beacons": [item for item in beacons if isinstance(item, dict)],
+                "updated_at_unix_ms": int(
+                    payload.get("updated_at_unix_ms", 0)
+                ),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "stale": False,
+            }
+            normalized["available_for_drop"] = min(
+                normalized["connected"],
+                normalized["expected"],
+                max(0, int(payload.get("available_for_drop", 0))),
+            )
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return
+        with self._incident_lock:
+            self._dispenser_battery = normalized
+            self._dispenser_battery_monotonic = time.monotonic()
+
+    def dispenser_battery_status(self) -> dict[str, Any]:
+        with self._incident_lock:
+            payload = json.loads(json.dumps(self._dispenser_battery))
+            received_at = self._dispenser_battery_monotonic
+        age_sec = time.monotonic() - received_at if received_at > 0 else None
+        try:
+            stale_after = max(
+                0.1,
+                float(os.getenv("HAZARD_GUARD_DISPENSER_BATTERY_STALE_SEC", "15")),
+            )
+        except ValueError:
+            stale_after = 15.0
+        payload["age_sec"] = round(age_sec, 2) if age_sec is not None else None
+        source_timestamp_ms = int(payload.get("updated_at_unix_ms") or 0)
+        source_age_sec = (
+            time.time() - source_timestamp_ms / 1000.0
+            if source_timestamp_ms > 0
+            else None
+        )
+        payload["source_age_sec"] = (
+            round(source_age_sec, 2) if source_age_sec is not None else None
+        )
+        payload["stale"] = (
+            age_sec is None
+            or age_sec > stale_after
+            or source_age_sec is None
+            or source_age_sec > stale_after
+            or source_age_sec < -5.0
+        )
+        if payload["stale"] or not payload.get("enabled"):
+            payload["available_for_drop"] = 0
+        return payload
+
+    def decide_incident(self, request_data: dict[str, str]) -> dict[str, Any]:
+        client = self._incident_decision_client
+        request_type = self._incident_decision_request_type
+        if not self.active or client is None or request_type is None:
+            return {
+                "delivered": False,
+                "accepted": False,
+                "message": "ROS 위험 이벤트 승인 서비스가 비활성화되어 있습니다.",
+            }
+        if not client.wait_for_service(timeout_sec=0.75):
+            return {
+                "delivered": False,
+                "accepted": False,
+                "message": "ROS 위험 이벤트 승인 서비스를 찾을 수 없습니다.",
+            }
+        request = request_type()
+        request.incident_id = request_data["incident_id"]
+        request.request_id = request_data["request_id"]
+        request.decision = request_data["decision"]
+        request.operator_id = request_data["operator_id"]
+        request.authorization = request_data["authorization"]
+        future = client.call_async(request)
+        completed = threading.Event()
+        future.add_done_callback(lambda _: completed.set())
+        if not completed.wait(timeout=3.0):
+            return {
+                "delivered": False,
+                "accepted": False,
+                "message": "ROS 위험 이벤트 승인 응답 시간이 초과되었습니다.",
+            }
+        try:
+            response = future.result()
+            payload = {
+                "delivered": True,
+                "accepted": bool(response.accepted),
+                "incident_id": str(response.incident_id),
+                "request_id": str(response.request_id),
+                "decision": str(response.decision),
+                "state": str(response.state),
+                "message": str(response.message),
+            }
+            expected = {
+                "incident_id": request_data["incident_id"],
+                "request_id": request_data["request_id"],
+                "decision": request_data["decision"],
+            }
+            if any(payload[key] != value for key, value in expected.items()):
+                return {
+                    **payload,
+                    "delivered": False,
+                    "accepted": False,
+                    "message": "ROS 승인 응답 식별자가 요청과 일치하지 않습니다.",
+                }
+            return payload
+        except Exception as exc:
+            return {
+                "delivered": False,
+                "accepted": False,
+                "message": f"ROS 위험 이벤트 승인 오류: {exc}",
+            }
+
     def publish_dispenser_drop(self, request: dict[str, Any]) -> dict[str, Any]:
         """Publish only a replay-safe JSON request, never an unkeyed drop."""
 
@@ -669,7 +905,9 @@ class RosBridge:
         publisher.publish(message)
         return {"accepted": True, "message": "디스펜서 요청을 발행했습니다."}
 
-    def lookup_dispenser_request(self, request_id: str) -> dict[str, Any] | None:
+    def lookup_dispenser_request(
+        self, request_id: str, detection_id: str = ""
+    ) -> dict[str, Any] | None:
         """Recover one missed terminal result after a WebUI process restart."""
 
         client = self._dispenser_status_client
@@ -680,6 +918,7 @@ class RosBridge:
             return None
         request = request_type()
         request.request_id = request_id
+        request.detection_id = detection_id
         future = client.call_async(request)
         completed = threading.Event()
         future.add_done_callback(lambda _: completed.set())
@@ -687,10 +926,16 @@ class RosBridge:
             return None
         try:
             response = future.result()
-            if not response.found:
+            if not response.found or not response.fingerprint_matches:
                 return None
             payload = json.loads(response.record_json)
-            return payload if isinstance(payload, dict) else None
+            if not isinstance(payload, dict):
+                return None
+            if str(payload.get("request_id") or "") != request_id:
+                return None
+            if str(payload.get("detection_id") or "") != detection_id:
+                return None
+            return payload
         except (Exception, ValueError, json.JSONDecodeError):
             return None
 
@@ -1677,6 +1922,8 @@ class RosBridge:
         self._dispenser_string_type = None
         self._dispenser_status_client = None
         self._dispenser_status_request_type = None
+        self._incident_decision_client = None
+        self._incident_decision_request_type = None
 
 
 telemetry_store = TelemetryStore()

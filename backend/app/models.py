@@ -129,6 +129,29 @@ class DispenserDropRequest(BaseModel):
         return self
 
 
+class IncidentDecisionRequest(BaseModel):
+    request_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+    decision: Literal[
+        "resume",
+        "drop_then_resume",
+        "drop_then_monitor",
+        "complete_monitoring",
+        "acknowledge_field_check",
+    ]
+    operator_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_.:@-]+$",
+    )
+    confirmed: bool = False
+
+
 class SystemModeRequest(BaseModel):
     mode: Literal["mapping", "rgbd_mapping", "patrol"]
     mapping_profile: Literal["toolbox", "toolbox_rtabmap"] = "toolbox"

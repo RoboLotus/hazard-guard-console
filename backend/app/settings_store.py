@@ -12,6 +12,28 @@ from uuid import uuid4
 from .models import ThermalEquipmentSettingsDocument, ThresholdSettings
 
 
+LEGACY_WASTE_CRITICAL_TEMPERATURE_C = 49.0
+DEFAULT_WASTE_CRITICAL_TEMPERATURE_C = 60.0
+
+
+def migrate_legacy_equipment_defaults(
+    value: ThermalEquipmentSettingsDocument,
+) -> ThermalEquipmentSettingsDocument:
+    """Replace only the superseded waste-pile default, preserving custom values."""
+
+    migrated = value.model_copy(deep=True)
+    for equipment in migrated.equipment:
+        if (
+            equipment.id == "bunker_waste_pile"
+            and equipment.critical_temperature_c
+            == LEGACY_WASTE_CRITICAL_TEMPERATURE_C
+        ):
+            equipment.critical_temperature_c = (
+                DEFAULT_WASTE_CRITICAL_TEMPERATURE_C
+            )
+    return migrated
+
+
 class ThresholdSettingsStore:
     """Persist validated fire thresholds outside of the Git worktree."""
 
@@ -64,7 +86,7 @@ def default_thermal_equipment_settings() -> ThermalEquipmentSettingsDocument:
                     "id": "bunker_waste_pile",
                     "display_name": "폐기물 적치 구역",
                     "enabled": True,
-                    "critical_temperature_c": 49.0,
+                    "critical_temperature_c": DEFAULT_WASTE_CRITICAL_TEMPERATURE_C,
                     "adaptive_delta_c": 10.0,
                     "adaptive_threshold_enabled": True,
                     "roi": {
@@ -135,9 +157,10 @@ class ThermalEquipmentSettingsStore:
 
     def _load(self) -> ThermalEquipmentSettingsDocument:
         try:
-            return ThermalEquipmentSettingsDocument.model_validate_json(
+            document = ThermalEquipmentSettingsDocument.model_validate_json(
                 self.path.read_text(encoding="utf-8")
             )
+            return migrate_legacy_equipment_defaults(document)
         except (OSError, ValueError, TypeError):
             return default_thermal_equipment_settings()
 

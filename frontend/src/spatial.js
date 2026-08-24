@@ -303,6 +303,7 @@ export function thermalDetectionsToEvents(detections = []) {
 
       return {
         id: detectionId,
+        detectionId: baseDetectionId,
         code: `THERM-${String(detection.equipment_id || detectionId).toUpperCase()}`,
         level,
         status: "new",

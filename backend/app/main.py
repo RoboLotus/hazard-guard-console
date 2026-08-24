@@ -1,11 +1,20 @@
 import asyncio
+import hmac
 import math
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -25,13 +34,20 @@ from .mode_manager import system_mode_manager
 from .dispenser_requests import (
     DispenserRequestStore,
     DispenserRequestStoreError,
-    IdempotencyConflictError,
+)
+from .incidents import (
+    IncidentDecisionConflictError,
+    IncidentStore,
+    IncidentStoreError,
+    OPERATOR_PATTERN,
+    sign_incident_decision,
 )
 from .models import (
     CommandRequest,
     BagRecorderControlRequest,
     BagRecorderEnabledRequest,
     DispenserDropRequest,
+    IncidentDecisionRequest,
     LocalizationPoseRequest,
     MockCommand,
     MapSelectionRequest,
@@ -111,6 +127,14 @@ if dispenser_request_store is not None:
     ros_bridge.set_dispenser_result_handler(
         dispenser_request_store.apply_robot_result
     )
+try:
+    incident_store: IncidentStore | None = IncidentStore()
+    incident_store_error: str | None = None
+except IncidentStoreError as exc:
+    incident_store = None
+    incident_store_error = str(exc)
+if incident_store is not None:
+    ros_bridge.set_incident_handler(incident_store.upsert_incident)
 
 
 def dispenser_drop_enabled() -> bool:
@@ -189,6 +213,55 @@ def require_dispenser_store() -> DispenserRequestStore:
             ),
         )
     return dispenser_request_store
+
+
+def require_incident_store() -> IncidentStore:
+    if incident_store is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "위험 이벤트 원장을 사용할 수 없습니다: "
+                f"{incident_store_error or 'unknown error'}"
+            ),
+        )
+    return incident_store
+
+
+def validate_incident_decision(incident: dict, decision: str) -> None:
+    state = str(incident.get("state") or "")
+    allowed = {
+        "approval_required": {
+            "resume", "drop_then_resume", "drop_then_monitor"
+        },
+        "admin_release_required": {"complete_monitoring"},
+        "field_check_required": {"acknowledge_field_check"},
+        "hardware_error": {"acknowledge_field_check"},
+    }.get(state, set())
+    if decision not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"현재 이벤트 상태({state})에서 선택할 수 없는 조치입니다.",
+        )
+    if decision.startswith("drop_then_"):
+        battery = ros_bridge.dispenser_battery_status()
+        if battery.get("stale") or int(battery.get("available_for_drop", 0)) < 1:
+            raise HTTPException(
+                status_code=409,
+                detail="배출 가능한 비콘이 없어 배출 조치를 선택할 수 없습니다.",
+            )
+
+
+def require_admin_operator(admin_token: str | None) -> str:
+    expected_token = os.getenv("HAZARD_GUARD_ADMIN_API_TOKEN", "")
+    operator_id = os.getenv("HAZARD_GUARD_ADMIN_OPERATOR_ID", "").strip()
+    if not expected_token or not OPERATOR_PATTERN.fullmatch(operator_id):
+        raise HTTPException(
+            status_code=503,
+            detail="관리자 인증 환경이 설정되지 않아 조치를 차단했습니다.",
+        )
+    if admin_token is None or not hmac.compare_digest(admin_token, expected_token):
+        raise HTTPException(status_code=401, detail="관리자 인증에 실패했습니다.")
+    return operator_id
 
 
 def equipment_settings_response(
@@ -357,7 +430,123 @@ def dispenser_status():
         "drop_enabled": dispenser_drop_enabled(),
         "ledger_available": dispenser_request_store is not None,
         "ledger_error": dispenser_request_store_error,
+        "battery": ros_bridge.dispenser_battery_status(),
     }
+
+
+@app.get("/api/v1/incidents")
+def incidents(limit: int = 100):
+    store = require_incident_store()
+    return {
+        "incidents": store.list(limit=limit),
+        "battery": ros_bridge.dispenser_battery_status(),
+    }
+
+
+@app.get("/api/v1/incidents/{incident_id}")
+def incident_detail(incident_id: str):
+    store = require_incident_store()
+    incident = store.get(incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="위험 이벤트를 찾을 수 없습니다.")
+    return {
+        "incident": incident,
+        "decisions": store.decisions_for(incident_id),
+        "battery": ros_bridge.dispenser_battery_status(),
+    }
+
+
+@app.post("/api/v1/incidents/{incident_id}/decision")
+def decide_incident(
+    incident_id: str,
+    request: IncidentDecisionRequest,
+    admin_token: str | None = Header(
+        None, alias="X-HazardGuard-Admin-Token"
+    ),
+):
+    if not request.confirmed:
+        raise HTTPException(status_code=403, detail="관리자 확인이 필요합니다.")
+    operator_id = require_admin_operator(admin_token)
+    if request.operator_id is not None and request.operator_id != operator_id:
+        raise HTTPException(
+            status_code=403,
+            detail="요청한 운영자와 인증된 운영자가 일치하지 않습니다.",
+        )
+    store = require_incident_store()
+    incident = store.get(incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="위험 이벤트를 찾을 수 없습니다.")
+    secret = os.getenv("HAZARD_GUARD_DISPENSER_APPROVAL_SECRET", "")
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="관리자 승인 서명 키가 설정되지 않아 조치를 차단했습니다.",
+        )
+    request_id = request.request_id or f"decision:{uuid.uuid4().hex}"
+    try:
+        existing = store.get_decision(request_id) if request.request_id else None
+        if existing is None:
+            validate_incident_decision(incident, request.decision)
+        decision_record, created = store.begin_decision(
+            request_id=request_id,
+            incident_id=incident_id,
+            decision=request.decision,
+            operator_id=operator_id,
+        )
+        if not created and decision_record["state"] in {"accepted", "rejected"}:
+            if decision_record["state"] == "rejected":
+                raise HTTPException(
+                    status_code=409,
+                    detail=decision_record.get("message") or "Robot이 관리자 조치를 거절했습니다.",
+                )
+            return {**decision_record, "replayed": True}
+        _, claimed = store.claim_dispatch(
+            request_id,
+            owner_id=f"api-{uuid.uuid4().hex}",
+        )
+        if not claimed:
+            return {**decision_record, "replayed": True}
+    except IncidentDecisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IncidentStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    authorization = sign_incident_decision(
+        secret=secret,
+        incident_id=incident_id,
+        request_id=request_id,
+        decision=request.decision,
+        operator_id=operator_id,
+    )
+    result = ros_bridge.decide_incident(
+        {
+            "incident_id": incident_id,
+            "request_id": request_id,
+            "decision": request.decision,
+            "operator_id": operator_id,
+            "authorization": authorization,
+        }
+    )
+    try:
+        if not result.get("delivered"):
+            store.transition_decision(
+                request_id,
+                state="transport_unavailable",
+                message=str(result.get("message") or "승인 서비스를 사용할 수 없습니다."),
+            )
+            raise HTTPException(status_code=503, detail=result["message"])
+        final_state = "accepted" if result.get("accepted") else "rejected"
+        record = store.transition_decision(
+            request_id,
+            state=final_state,
+            robot_response=result,
+            message=str(result.get("message") or ""),
+        )
+    except IncidentStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if final_state == "rejected":
+        raise HTTPException(status_code=409, detail=result.get("message"))
+    return {**record, "replayed": not created}
 
 
 @app.get("/api/v1/robot/status", response_model=RobotTelemetry)
@@ -883,39 +1072,16 @@ def rosbag_sessions():
 
 @app.post("/api/v1/dispenser/requests/drop", status_code=202)
 def request_dispenser_drop(request: DispenserDropRequest):
-    """Record first, then publish once. Replays always return saved state."""
+    """Reject the legacy bypass; operators must approve a latched incident."""
 
-    audit_context = dispenser_safety_context(request)
-    store = require_dispenser_store()
-    try:
-        record, created = store.submit(
-            request_id=request.request_id,
-            detection_id=request.detection_id,
-            audit_context=audit_context,
-        )
-    except IdempotencyConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except DispenserRequestStoreError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"디스펜서 요청 기록을 안전하게 저장할 수 없습니다: {exc}",
-        ) from exc
-    if not created:
-        return {**record, "replayed": True, "dispatched": False}
-
-    dispatch = ros_bridge.publish_dispenser_drop(record)
-    if not dispatch["accepted"]:
-        record = store.transition(
-            record["request_id"],
-            "dispatch_unavailable",
-            result_detail=dispatch["message"],
-        )
-        return {**record, "replayed": False, "dispatched": False}
-
-    record = store.transition(
-        record["request_id"], "dispatched", dispatch_message=dispatch["message"]
+    del request
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "직접 비콘 배출 API는 안전상 비활성화되었습니다. "
+            "위험 이벤트 관리자 승인 흐름을 사용하세요."
+        ),
     )
-    return {**record, "replayed": False, "dispatched": True}
 
 
 @app.get("/api/v1/dispenser/requests/{request_id}")
@@ -925,7 +1091,9 @@ def dispenser_request_status(request_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail="디스펜서 요청 기록이 없습니다.")
     if record.get("state") == "recovery_required":
-        robot_record = ros_bridge.lookup_dispenser_request(request_id)
+        robot_record = ros_bridge.lookup_dispenser_request(
+            request_id, str(record.get("detection_id") or "")
+        )
         if robot_record is not None:
             restored = store.apply_robot_result(robot_record)
             if restored is not None:
