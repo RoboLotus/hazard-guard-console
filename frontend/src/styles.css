@@ -205,8 +205,8 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .thermal-reading { position: absolute; left: 9px; bottom: 8px; display: flex; flex-direction: column; padding: 5px 7px; color: white; background: rgba(19, 11, 52, .65); border-radius: 5px; }
 .thermal-reading span { font: 600 6px "Pretendard Variable", Pretendard, sans-serif; opacity: .75; }
 .thermal-reading strong { font: 700 12px "Pretendard Variable", Pretendard, sans-serif; margin-top: 1px; }
-.thermal-scale { position: absolute; right: 8px; top: 8px; bottom: 8px; width: 24px; display: grid; grid-template-rows: auto 1fr auto; justify-items: center; gap: 2px; color: #fff; font: 600 6px "Pretendard Variable", Pretendard, sans-serif; text-shadow: 0 1px 2px #000; }
-.thermal-scale i { width: 6px; border-radius: 4px; background: linear-gradient(to bottom, #fff7a1, #ff5a1f, #b700a9, #2812ae, #07134b); }
+.camera-thermal-scale { position: absolute; right: 8px; top: 8px; bottom: 8px; width: 24px; display: grid; grid-template-rows: auto 1fr auto; justify-items: center; gap: 2px; color: #fff; font: 700 7px "Pretendard Variable", Pretendard, sans-serif; text-shadow: 0 1px 2px #000; }
+.camera-thermal-scale i { width: 8px; border: 1px solid rgba(255, 255, 255, .72); border-radius: 4px; background: linear-gradient(to bottom, #7f0000, #ff0000, #ffff00, #00ffff, #0000ff, #00007f); }
 
 .events-panel { display: grid; grid-template-rows: 56px minmax(0,1fr) 39px; }
 .count-badge { padding: 4px 7px; color: #b9303a; background: #fff0f1; border-radius: 10px; font-size: 8px; font-weight: 700; }
@@ -375,6 +375,17 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .point-cloud-robot-status.stale > span { background: #96a2ae; box-shadow: 0 0 0 3px rgba(150,162,174,.12); }
 .point-cloud-robot-status.unavailable { color: #d9bfc1; border-color: rgba(202,118,125,.28); }
 .point-cloud-robot-status.unavailable > span { background: #ca767d; box-shadow: 0 0 0 3px rgba(202,118,125,.12); }
+.thermal-layer-status { position: absolute; z-index: 2; top: 11px; right: 13px; width: min(242px, calc(100% - 26px)); padding: 10px 11px; color: #dceafb; background: rgba(12,21,31,.86); border: 1px solid rgba(83,178,208,.32); border-radius: 8px; box-shadow: 0 5px 18px rgba(0,0,0,.18); pointer-events: none; }
+.thermal-layer-status-heading { display: flex; align-items: center; gap: 7px; }
+.thermal-layer-status-heading > span { width: 7px; height: 7px; flex: 0 0 auto; background: #55d59d; border-radius: 50%; box-shadow: 0 0 0 3px rgba(85,213,157,.13); }
+.thermal-layer-status-heading strong { font-size: 9px; }
+.thermal-layer-status.stale { border-color: rgba(173,185,198,.27); }
+.thermal-layer-status.stale .thermal-layer-status-heading > span { background: #9da9b5; box-shadow: 0 0 0 3px rgba(157,169,181,.12); }
+.thermal-layer-status dl { margin: 9px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); gap: 7px; }
+.thermal-layer-status dl > div { min-width: 0; }
+.thermal-layer-status dt { color: #8298ad; font-size: 7px; font-weight: 700; }
+.thermal-layer-status dd { margin: 2px 0 0; overflow: hidden; color: #eef7ff; font-size: 8px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.thermal-layer-status p { margin: 9px 0 0; padding-top: 8px; color: #9fb1c3; border-top: 1px solid rgba(145,167,188,.15); font-size: 7px; line-height: 1.45; }
 .point-cloud-footer { gap: 18px; }
 .point-cloud-footer strong { margin-left: auto; }
 .point-cloud-color-dot { width: 9px !important; height: 9px !important; background: conic-gradient(#e95e55, #f0c34b, #54b97c, #4f8fe8, #b66bd8, #e95e55) !important; border-radius: 50%; }

@@ -108,6 +108,36 @@ def test_session_can_be_named_archived_and_record_a_cloud_export(tmp_path):
     assert edited["archived"] is True
     assert exported["cloud_available"] is True
     assert exported["cloud_bytes"] == len(b"ply\n")
+    assert exported["cloud_export_status"] == "ready"
+    assert exported["cloud_ready"] is True
+    assert exported["thermal_layer_path"] == str(
+        session["directory"] / "thermal_layer.npz"
+    )
+
+
+def test_session_reports_persisted_cumulative_thermal_layer(tmp_path):
+    worlds = tmp_path / "src" / "hazard_guard_simulation" / "worlds"
+    write_world(worlds / "facility_map.sdf", "facility_map")
+    catalog = WorldCatalog(tmp_path)
+    session = catalog.begin_session("facility_map")
+    state_path = session["directory"] / "thermal_layer.npz"
+    state_path.write_bytes(b"state")
+    catalog.update_session(
+        session["id"],
+        "facility_map",
+        thermal_map_status="saved",
+        thermal_layer_persisted_at="2026-08-23T11:00:00+00:00",
+    )
+
+    saved = catalog.sessions("facility_map")[0]
+
+    assert saved["thermal_map_status"] == "saved"
+    assert saved["thermal_layer_available"] is True
+    assert saved["thermal_layer_bytes"] == len(b"state")
+    assert saved["thermal_layer_persisted_at"] == "2026-08-23T11:00:00+00:00"
+    assert catalog.session_paths("facility_map", session["id"])[
+        "thermal_layer"
+    ] == state_path
 
 
 def test_catalog_rejects_unknown_or_path_like_world_ids(tmp_path):

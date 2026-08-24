@@ -83,6 +83,24 @@ class PointCloudStore:
                 return None
             return self._sequence, self._packet
 
+    def clear(
+        self,
+        *,
+        source: str | None = None,
+        frame_id: str = "map",
+    ) -> None:
+        """Publish an empty generation so connected browsers drop stale XYZ."""
+
+        with self._lock:
+            current_source = str(self._metadata.get("source") or "cleared")
+        self.update(
+            b"",
+            point_count=0,
+            color_available=False,
+            frame_id=frame_id,
+            source=source or current_source,
+        )
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             metadata = dict(self._metadata)
@@ -115,11 +133,13 @@ class PointCloudAdapter:
         on_error: Callable[[str], None],
         source_env: str = "HAZARD_GUARD_POINT_CLOUD_TOPIC",
         source_default: str = "/hazard_guard/rtabmap/cloud_surface",
+        temperature_colors: bool = False,
     ) -> None:
         self.store = store
         self._on_error = on_error
         self._source_env = source_env
         self._source_default = source_default
+        self._temperature_colors = temperature_colors
         self._last_update = 0.0
         self._minimum_interval = float(
             os.getenv("HAZARD_GUARD_POINT_CLOUD_INTERVAL_SEC", "0.75")
@@ -127,6 +147,39 @@ class PointCloudAdapter:
         self._maximum_points = int(
             os.getenv("HAZARD_GUARD_POINT_CLOUD_MAX_POINTS", "20000")
         )
+        self._temperature_min_c = float(
+            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "20.0")
+        )
+        self._temperature_max_c = float(
+            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "40.0")
+        )
+
+    def _temperature_rgb(self, temperature_c: float) -> tuple[int, int, int]:
+        span = max(self._temperature_max_c - self._temperature_min_c, 1.0e-6)
+        value = min(
+            1.0,
+            max(0.0, (temperature_c - self._temperature_min_c) / span),
+        )
+        # High-contrast blue -> cyan -> green -> yellow -> red palette.
+        # Endpoints are full-intensity primary colours so a 20 C surface and
+        # the expected 40 C maximum remain unmistakable in the dark 3D scene.
+        anchors = (
+            (0.0, (0, 0, 255)),
+            (0.25, (0, 255, 255)),
+            (0.5, (0, 255, 0)),
+            (0.75, (255, 255, 0)),
+            (1.0, (255, 0, 0)),
+        )
+        for (low_at, low_rgb), (high_at, high_rgb) in zip(
+            anchors, anchors[1:]
+        ):
+            if value <= high_at:
+                mix = (value - low_at) / (high_at - low_at)
+                return tuple(
+                    round(low + (high - low) * mix)
+                    for low, high in zip(low_rgb, high_rgb)
+                )
+        return anchors[-1][1]
 
     @staticmethod
     def _unpack_scalar(
@@ -171,7 +224,15 @@ class PointCloudAdapter:
 
             packed_color = fields.get("rgb") or fields.get("rgba")
             split_color = all(channel in fields for channel in ("r", "g", "b"))
-            color_available = packed_color is not None or split_color
+            temperature_field = fields.get("temperature_c") or fields.get(
+                "temperature"
+            )
+            temperature_color = (
+                self._temperature_colors and temperature_field is not None
+            )
+            color_available = (
+                packed_color is not None or split_color or temperature_color
+            )
             endian = ">" if bool(message.is_bigendian) else "<"
             data = memoryview(message.data)
             sample_step = max(1, math.ceil(total_points / self._maximum_points))
@@ -195,7 +256,19 @@ class PointCloudAdapter:
                 if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
                     continue
 
-                if packed_color is not None:
+                # For a thermal stream the radiometric value is authoritative.
+                # Recolour it here even when the ROS producer also supplied a
+                # packed RGB field, so the WebUI's configured 20-40 C window is
+                # applied consistently to both old and new map publishers.
+                if temperature_color:
+                    temperature_c = float(self._unpack_scalar(
+                        data,
+                        base + temperature_field.offset,
+                        temperature_field.datatype,
+                        endian,
+                    ))
+                    red, green, blue = self._temperature_rgb(temperature_c)
+                elif packed_color is not None:
                     red, green, blue = self._packed_rgb(
                         data,
                         base + packed_color.offset,

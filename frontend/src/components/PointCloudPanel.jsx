@@ -4,7 +4,12 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { CurrentTime, PanelHeader } from "./Common.jsx";
-import { parsePointCloudPacket } from "../pointCloud.js";
+import {
+  formatThermalLayerAge,
+  parsePointCloudPacket,
+  replacePointCloudGeometrySnapshot,
+  resolveThermalLayerPresentation,
+} from "../pointCloud.js";
 import {
   resolvePointCloudRobotState,
   selectPointCloudPose,
@@ -20,8 +25,8 @@ const INITIAL_STATUS = {
 };
 
 // Both variants are the same viewer over the same packet format; only the
-// stream and the words around it change. The thermal cloud is built on the
-// robot by projecting depth through the calibrated thermal extrinsic.
+// stream and the words around it change. Thermal packets are authoritative
+// cumulative snapshots built on the robot against the frozen 3D surface.
 const VARIANTS = {
   rgb: {
     socketPath: "/ws/pointcloud",
@@ -37,15 +42,15 @@ const VARIANTS = {
   },
   thermal: {
     socketPath: "/ws/pointcloud/thermal",
-    eyebrow: "THERMAL MAP",
-    title: "3D 열화상 포인트클라우드",
-    ariaLabel: "열화상 3D 포인트클라우드",
+    eyebrow: "CUMULATIVE THERMAL LAYER",
+    title: "고정 3D 맵 누적 열화상",
+    ariaLabel: "고정 3D 표면의 누적 열화상 계층",
     icon: ThermometerHot,
-    liveLabel: "열화상 실시간",
-    idleLabel: "최근 열화상 지도",
-    emptyTitle: "열화상 3D 지도 데이터를 기다리고 있습니다",
+    liveLabel: "관측 영역 갱신 중",
+    idleLabel: "마지막 측정 유지",
+    emptyTitle: "누적 열화상 계층을 기다리고 있습니다",
     emptyBody:
-      "캘리브레이션된 열화상-Depth 외부 파라미터로 Depth 표면에 온도를 입힙니다. 로봇을 움직이면 관측한 면부터 채워집니다.",
+      "순찰이 시작되면 고정 3D 표면과 일치한 영역의 온도만 갱신합니다. 보지 않는 영역은 마지막 측정을 그대로 유지합니다.",
     supportsArchive: false,
   },
 };
@@ -132,6 +137,7 @@ export default function PointCloudPanel({
   const [status, setStatus] = useState(INITIAL_STATUS);
   const [clockTick, setClockTick] = useState(Date.now());
   const [temperatureWindow, setTemperatureWindow] = useState(null);
+  const [thermalApiStatus, setThermalApiStatus] = useState(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockTick(Date.now()), 1000);
@@ -169,9 +175,12 @@ export default function PointCloudPanel({
 
     const geometry = new THREE.BufferGeometry();
     const material = new THREE.PointsMaterial({
-      size: 0.035,
+      size: variant === "thermal" ? 0.055 : 0.035,
       sizeAttenuation: true,
       vertexColors: true,
+      transparent: false,
+      opacity: 1,
+      depthWrite: true,
     });
     const points = new THREE.Points(geometry, material);
     scene.add(points);
@@ -221,21 +230,43 @@ export default function PointCloudPanel({
   }, []);
 
   useEffect(() => {
+    const currentScene = sceneRef.current;
+    if (!currentScene) return;
+    currentScene.material.size = variant === "thermal" ? 0.055 : 0.035;
+    currentScene.material.needsUpdate = true;
+    currentScene.renderer.domElement.setAttribute("aria-label", spec.ariaLabel);
+  }, [spec.ariaLabel, variant]);
+
+  useEffect(() => {
     if (variant !== "thermal") return undefined;
     let disposed = false;
-    fetch("/api/v1/spatial/cloud/thermal/status", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((body) => {
-        if (!disposed && body) {
-          setTemperatureWindow([body.min_temp_c, body.max_temp_c]);
-        }
-      })
-      .catch(() => {});
-    return () => { disposed = true; };
+    const loadStatus = () => {
+      fetch("/api/v1/spatial/cloud/thermal/status", { cache: "no-store" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body) => {
+          if (disposed || !body) return;
+          setThermalApiStatus(body);
+          const minimum = Number(body.min_temp_c);
+          const maximum = Number(body.max_temp_c);
+          if (Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum) {
+            setTemperatureWindow([minimum, maximum]);
+          }
+        })
+        .catch(() => {});
+    };
+    loadStatus();
+    const timer = window.setInterval(loadStatus, 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
   }, [variant]);
 
   useEffect(() => {
     if (archived) return undefined;
+    // A session reset deliberately emits an empty authoritative snapshot.
+    // Keep the first-fit pending until the first non-empty cloud arrives.
+    firstCloudRef.current = true;
     let disposed = false;
     let socket;
     let reconnectTimer;
@@ -252,16 +283,14 @@ export default function PointCloudPanel({
           const cloud = parsePointCloudPacket(data);
           const scene = sceneRef.current;
           if (!scene) return;
-          scene.geometry.setAttribute(
-            "position",
+          replacePointCloudGeometrySnapshot(
+            scene.geometry,
             new THREE.BufferAttribute(cloud.positions, 3),
-          );
-          scene.geometry.setAttribute(
-            "color",
             new THREE.BufferAttribute(cloud.colors, 3),
           );
-          scene.geometry.computeBoundingSphere();
-          if (firstCloudRef.current) {
+          if (cloud.pointCount === 0) {
+            firstCloudRef.current = true;
+          } else if (firstCloudRef.current) {
             firstCloudRef.current = false;
             fitRef.current();
           }
@@ -385,8 +414,26 @@ export default function PointCloudPanel({
   const cloudFresh = Boolean(
     status.updatedAt && clockTick - status.updatedAt.getTime() < 5000,
   );
+  const thermalLayer = resolveThermalLayerPresentation(
+    thermalApiStatus || {},
+    status,
+    clockTick,
+  );
+  const thermalLayerAge = formatThermalLayerAge(
+    thermalLayer.updatedAtMs,
+    clockTick,
+  );
+  const thermalActivityLabel = thermalLayer.updatedAtMs === null
+    ? "열화상 계층 대기"
+    : thermalLayer.stale ? "마지막 측정 유지" : "관측 영역 갱신 중";
+  const fixedMapLabel = thermalLayer.fixedMapAvailable === false
+    ? "고정 맵 대기"
+    : thermalLayer.fixedMapAvailable === true ? "고정 3D 맵" : "기준 맵 확인 중";
   const rgbdMode = systemMode?.mode === "rgbd_mapping"
     || systemMode?.mapping_profile === "toolbox_rtabmap";
+  const displayedCloudFresh = variant === "thermal"
+    ? thermalLayer.updatedAtMs !== null && !thermalLayer.stale
+    : cloudFresh;
   const connectionLabel = archived
     ? status.connection === "connected" && status.pointCount
       ? "저장된 3D 세션"
@@ -394,13 +441,32 @@ export default function PointCloudPanel({
     : ({
     connecting: "연결 중",
     connected: status.pointCount
-      ? (cloudFresh ? spec.liveLabel : spec.idleLabel)
+      ? (displayedCloudFresh ? spec.liveLabel : spec.idleLabel)
       : "포인트 대기 중",
     disconnected: "연결 끊김",
   }[status.connection]);
   const robotStatusClass = robotState.visible
     ? (robotState.stale ? "stale" : "live")
     : "unavailable";
+  let emptyTitle;
+  let emptyBody;
+  if (archived) {
+    emptyTitle = "저장된 3D 지도를 준비하고 있습니다";
+    emptyBody = "RTAB-Map DB에서 브라우저용 컬러 PLY를 생성하고 있습니다.";
+  } else if (variant === "thermal") {
+    emptyTitle = thermalLayer.fixedMapAvailable === false
+      ? "먼저 고정 3D 지도를 생성하세요"
+      : spec.emptyTitle;
+    emptyBody = thermalLayer.fixedMapAvailable === false
+      ? "2단계 RGB-D 3D 수집을 완료하면 해당 표면을 기준으로 열화상 누적을 시작할 수 있습니다."
+      : spec.emptyBody;
+  } else if (rgbdMode) {
+    emptyTitle = spec.emptyTitle;
+    emptyBody = spec.emptyBody;
+  } else {
+    emptyTitle = "2단계 RGB-D 3D 수집을 시작하세요";
+    emptyBody = "2D 지도를 저장한 뒤 지도 운용 모드에서 2단계 RGB-D 3D 수집을 시작하세요.";
+  }
   const EmptyIcon = spec.icon;
 
   return (
@@ -415,7 +481,7 @@ export default function PointCloudPanel({
       )} />
       <div className="point-cloud-stage">
         <div ref={mountRef} className="point-cloud-canvas" />
-        <div className={`map-live-badge ${status.connection === "connected" && status.pointCount && (archived || cloudFresh) ? "" : "mock"}`}>
+        <div className={`map-live-badge ${status.connection === "connected" && status.pointCount && (archived || displayedCloudFresh) ? "" : "mock"}`}>
           <span />{connectionLabel}
         </div>
         {Boolean(status.pointCount) && (
@@ -429,17 +495,43 @@ export default function PointCloudPanel({
             )}
           </div>
         )}
+        {variant === "thermal" && (
+          <aside
+            className={`thermal-layer-status ${thermalLayer.stale ? "stale" : "live"}`}
+            aria-label="누적 열화상 계층 상태"
+          >
+            <div className="thermal-layer-status-heading">
+              <span />
+              <strong>{thermalActivityLabel}</strong>
+            </div>
+            <dl>
+              <div>
+                <dt>기준 형상</dt>
+                <dd>{fixedMapLabel}</dd>
+              </div>
+              <div>
+                <dt>관측 복셀</dt>
+                <dd>{thermalLayer.observedVoxelCount.toLocaleString("ko-KR")}</dd>
+              </div>
+              <div>
+                <dt>마지막 갱신</dt>
+                <dd>{thermalLayerAge}</dd>
+              </div>
+              {thermalLayer.matchRatio !== null && (
+                <div>
+                  <dt>표면 매칭</dt>
+                  <dd>{(thermalLayer.matchRatio * 100).toFixed(0)}%</dd>
+                </div>
+              )}
+            </dl>
+            <p>다시 보이는 표면만 최신 온도로 갱신하고, 보지 않는 영역은 마지막 측정을 유지합니다.</p>
+          </aside>
+        )}
         {!status.pointCount && (
           <div className="point-cloud-empty">
             <EmptyIcon size={38} weight="duotone" />
-            <strong>{archived ? "저장된 3D 지도를 준비하고 있습니다" : rgbdMode ? spec.emptyTitle : "2단계 RGB-D 3D 수집을 시작하세요"}</strong>
-            <span>
-              {archived
-                ? "RTAB-Map DB에서 브라우저용 컬러 PLY를 생성하고 있습니다."
-                : rgbdMode
-                ? spec.emptyBody
-                : "2D 지도를 저장한 뒤 지도 운용 모드에서 2단계 RGB-D 3D 수집을 시작하세요."}
-            </span>
+            <strong>{emptyTitle}</strong>
+            <span>{emptyBody}</span>
           </div>
         )}
         {status.error && <div className="point-cloud-error">{status.error}</div>}
@@ -462,10 +554,17 @@ export default function PointCloudPanel({
           {archived
             ? `저장 세션 · ${archived.name || archived.id}`
             : variant === "thermal"
-            ? `열화상-Depth 투영 · ${status.frameId || "좌표계 미확인"} 좌표계 · 실시간`
+            ? `고정 3D 표면 · 누적 열화상 계층 · ${status.frameId || "좌표계 미확인"} 좌표계`
             : `${status.frameId || "좌표계 미확인"} 좌표계 · Z축 높이`}
         </span>
-        <strong>{status.pointCount.toLocaleString("ko-KR")} points{status.updatedAt ? ` · ${status.updatedAt.toLocaleTimeString("ko-KR", { hour12: false })}` : ""}</strong>
+        <strong>
+          {variant === "thermal"
+            ? `관측 복셀 ${thermalLayer.observedVoxelCount.toLocaleString("ko-KR")}`
+            : `${status.pointCount.toLocaleString("ko-KR")} points`}
+          {variant === "thermal"
+            ? thermalLayer.updatedAtMs === null ? "" : ` · ${thermalLayerAge}`
+            : status.updatedAt ? ` · ${status.updatedAt.toLocaleTimeString("ko-KR", { hour12: false })}` : ""}
+        </strong>
       </footer>
     </section>
   );

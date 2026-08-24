@@ -94,6 +94,111 @@ def test_cloud_without_rgb_uses_a_clear_fallback_color():
     assert store.status()["color_available"] is False
 
 
+def test_clear_emits_empty_generation_for_connected_and_new_viewers():
+    store = PointCloudStore(source="ros:/hazard_guard/thermal/map")
+    store.update(
+        POINT_RECORD.pack(1.0, 2.0, 3.0, 255, 0, 0, 255),
+        point_count=1,
+        color_available=True,
+        frame_id="map",
+        source="/hazard_guard/thermal/map",
+    )
+    previous_sequence, _ = store.packet_after(None)
+
+    store.clear(source="/hazard_guard/thermal/map")
+
+    sequence, packet = store.packet_after(previous_sequence)
+    header = PACKET_HEADER.unpack_from(packet)
+    assert sequence != previous_sequence
+    assert header[5] == 0
+    assert store.status()["available"] is False
+    assert store.status()["point_count"] == 0
+
+
+def test_radiometric_thermal_cloud_is_colored_and_kept_opaque(monkeypatch):
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "10")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "60")
+    store = PointCloudStore(source="ros:/hazard_guard/thermal/points")
+    adapter = PointCloudAdapter(
+        store,
+        lambda _message: None,
+        temperature_colors=True,
+    )
+    adapter._minimum_interval = 0
+    message = SimpleNamespace(
+        fields=[
+            field("x", 0, 7),
+            field("y", 4, 7),
+            field("z", 8, 7),
+            field("temperature_c", 12, 7),
+        ],
+        width=2,
+        height=1,
+        point_step=16,
+        row_step=32,
+        is_bigendian=False,
+        data=(
+            struct.pack("<ffff", 0.0, 0.0, 1.0, 10.0)
+            + struct.pack("<ffff", 0.0, 0.0, 2.0, 60.0)
+        ),
+        header=SimpleNamespace(frame_id="map"),
+    )
+
+    adapter.on_cloud(message)
+
+    _, packet = store.packet_after(None)
+    frame_id_bytes = PACKET_HEADER.unpack_from(packet)[3]
+    first_offset = PACKET_HEADER.size + frame_id_bytes
+    cold = POINT_RECORD.unpack_from(packet, first_offset)
+    hot = POINT_RECORD.unpack_from(packet, first_offset + POINT_RECORD.size)
+    assert cold[3:6] == (0, 0, 255)
+    assert hot[3:6] == (255, 0, 0)
+    assert cold[6] == hot[6] == 255
+    assert store.status()["color_available"] is True
+
+
+def test_thermal_temperature_overrides_prepacked_color(monkeypatch):
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "20")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "40")
+    store = PointCloudStore(source="ros:/hazard_guard/thermal/map")
+    adapter = PointCloudAdapter(
+        store,
+        lambda _message: None,
+        temperature_colors=True,
+    )
+    adapter._minimum_interval = 0
+    misleading_green = (0 << 16) | (255 << 8) | 0
+    message = SimpleNamespace(
+        fields=[
+            field("x", 0, 7),
+            field("y", 4, 7),
+            field("z", 8, 7),
+            field("rgb", 12, 7),
+            field("temperature_c", 16, 7),
+        ],
+        width=2,
+        height=1,
+        point_step=20,
+        row_step=40,
+        is_bigendian=False,
+        data=(
+            struct.pack("<fffIf", 0.0, 0.0, 1.0, misleading_green, 20.0)
+            + struct.pack("<fffIf", 0.0, 0.0, 2.0, misleading_green, 40.0)
+        ),
+        header=SimpleNamespace(frame_id="map"),
+    )
+
+    adapter.on_cloud(message)
+
+    _, packet = store.packet_after(None)
+    frame_id_bytes = PACKET_HEADER.unpack_from(packet)[3]
+    first_offset = PACKET_HEADER.size + frame_id_bytes
+    cold = POINT_RECORD.unpack_from(packet, first_offset)
+    hot = POINT_RECORD.unpack_from(packet, first_offset + POINT_RECORD.size)
+    assert cold[3:6] == (0, 0, 255)
+    assert hot[3:6] == (255, 0, 0)
+
+
 def test_packet_rejects_an_unbounded_frame_id():
     store = PointCloudStore()
 

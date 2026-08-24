@@ -44,6 +44,111 @@ def person_safety_payload(message: Any) -> dict[str, Any]:
         ).isoformat(),
     }
 
+
+class ThermalMapStatusStore:
+    """Session-scoped cache for the frozen thermal-map node's JSON status."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._payload: dict[str, Any] | None = None
+        self._session_id: str | None = None
+        self._received_monotonic: float | None = None
+
+    def reset(self, session_id: str | None = None) -> None:
+        with self._lock:
+            self._payload = None
+            self._session_id = session_id
+            self._received_monotonic = None
+
+    def update(self, message: Any) -> bool:
+        """Store one status and report whether cloud identity must reset."""
+
+        try:
+            payload = json.loads(message.data)
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        with self._lock:
+            payload_session_id = str(payload.get("session_id") or "")
+            if self._session_id is None:
+                # None is an explicit disabled state used during mapping and
+                # RGB-D collection. Never let a delayed patrol status adopt
+                # an identity on its own.
+                return False
+            if payload_session_id != self._session_id:
+                # A transient-local status from the previous patrol can arrive
+                # after a session switch. Never relabel it as the new session.
+                return False
+            if not payload_session_id:
+                return False
+            previous = self._payload
+            previous_fingerprint = (
+                str(previous.get("fingerprint") or "")
+                if previous is not None
+                else None
+            )
+            next_fingerprint = str(payload.get("fingerprint") or "")
+            identity_changed = (
+                previous_fingerprint is None
+                or previous_fingerprint != next_fingerprint
+            )
+            self._payload = dict(payload)
+            self._received_monotonic = time.monotonic()
+            return identity_changed
+
+    @staticmethod
+    def _age_seconds(value: Any) -> float | None:
+        if not value:
+            return None
+        try:
+            timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            return round(
+                max(
+                    0.0,
+                    (datetime.now(timezone.utc) - timestamp).total_seconds(),
+                ),
+                2,
+            )
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            payload = dict(self._payload or {})
+            session_id = self._session_id
+            received_monotonic = self._received_monotonic
+        if not payload:
+            return {
+                "available": False,
+                "session_id": session_id,
+                "observation_age_sec": None,
+                "observation_fresh": False,
+            }
+        observation_age = self._age_seconds(payload.get("last_observation_at"))
+        stale_after = max(
+            0.1,
+            float(os.getenv("HAZARD_GUARD_THERMAL_MAP_STALE_SEC", "15.0")),
+        )
+        payload.update(
+            available=True,
+            session_id=session_id,
+            observation_age_sec=observation_age,
+            observation_fresh=(
+                observation_age is not None and observation_age <= stale_after
+            ),
+            stale_after_sec=stale_after,
+            status_age_sec=(
+                round(max(0.0, time.monotonic() - received_monotonic), 2)
+                if received_monotonic is not None
+                else None
+            ),
+        )
+        return payload
+
+
 class RosBridge:
     """Optional ROS 2 adapter. ROS imports happen only when explicitly enabled."""
 
@@ -57,6 +162,7 @@ class RosBridge:
         point_cloud: PointCloudStore,
         thermal_cloud: PointCloudStore,
         diagnostics: SensorDiagnosticsStore,
+        thermal_map_status: ThermalMapStatusStore | None = None,
     ) -> None:
         self.store = store
         self.media = media
@@ -65,15 +171,17 @@ class RosBridge:
         self.spatial = spatial
         self.point_cloud = point_cloud
         self.thermal_cloud = thermal_cloud
+        self.thermal_map_status = thermal_map_status or ThermalMapStatusStore()
         self.diagnostics = diagnostics
         self._point_cloud_adapter = PointCloudAdapter(point_cloud, self._set_error)
-        # The thermal map arrives already coloured by temperature, so the same
-        # adapter carries it - only the topic differs.
+        # New robot clouds carry packed RGB. The temperature fallback keeps
+        # older radiometric-only PointCloud2 recordings visible as a heat map.
         self._thermal_cloud_adapter = PointCloudAdapter(
             thermal_cloud,
             self._set_error,
             source_env="HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
-            source_default="/hazard_guard/thermal/points",
+            source_default="/hazard_guard/thermal/map",
+            temperature_colors=True,
         )
         self._media_adapter = RosMediaAdapter(
             media,
@@ -159,7 +267,7 @@ class RosBridge:
             ("imu", "IMU", os.getenv("HAZARD_GUARD_IMU_TOPIC", "/imu/data_raw"), ("mapping", "patrol"), 2.0, 10.0),
             ("odom", "Odometry", os.getenv("HAZARD_GUARD_ODOM_TOPIC", "/odom"), ("mapping", "patrol", "3d"), 2.0, 10.0),
             ("point_cloud", "RTAB-Map 컬러 클라우드", os.getenv("HAZARD_GUARD_POINT_CLOUD_TOPIC", "/hazard_guard/rtabmap/cloud_surface"), ("3d",), 3.0, 0.5),
-            ("thermal_cloud", "열화상 3D 클라우드", os.getenv("HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/points"), ("3d",), 4.0, 0.5),
+            ("thermal_cloud", "누적 열화상 3D 지도", os.getenv("HAZARD_GUARD_THERMAL_CLOUD_TOPIC", "/hazard_guard/thermal/map"), ("3d",), 4.0, 0.5),
             ("person_safety", "사람 안전 감속", "/hazard_guard/person/safety_state", (), 2.0, 2.0),
         ]
         for sensor_id, label, topic, required_for, stale_after, expected_hz in sensor_specs:
@@ -312,6 +420,15 @@ class RosBridge:
             )
             self._node.create_subscription(
                 String,
+                os.getenv(
+                    "HAZARD_GUARD_THERMAL_MAP_STATUS_TOPIC",
+                    "/hazard_guard/thermal/map/status",
+                ),
+                self._on_thermal_map_status,
+                map_qos,
+            )
+            self._node.create_subscription(
+                String,
                 "/hazard_guard/bag/status_json",
                 self._on_bag_status,
                 10,
@@ -346,17 +463,27 @@ class RosBridge:
                 PointCloud2,
                 os.getenv(
                     "HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
-                    "/hazard_guard/thermal/points",
+                    "/hazard_guard/thermal/map",
                 ),
-                self._observe("thermal_cloud", self._thermal_cloud_adapter.on_cloud),
+                self._observe("thermal_cloud", self._on_thermal_cloud),
                 qos_profile_sensor_data,
             )
+            thermal_display_topic = os.getenv(
+                "HAZARD_GUARD_THERMAL_DISPLAY_TOPIC", ""
+            ).strip()
+            if thermal_display_topic:
+                thermal_display_callback = (
+                    self._media_adapter.on_thermal_color_image
+                )
+            else:
+                thermal_display_topic = os.getenv(
+                    "HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"
+                )
+                thermal_display_callback = self._media_adapter.on_thermal_image
             self._node.create_subscription(
                 Image,
-                os.getenv(
-                    "HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"
-                ),
-                self._observe("thermal", self._media_adapter.on_thermal_image),
+                thermal_display_topic,
+                self._observe("thermal", thermal_display_callback),
                 qos_profile_sensor_data,
             )
             diagnostic_topics = [
@@ -478,6 +605,27 @@ class RosBridge:
             return
         with self._equipment_config_lock:
             self._equipment_config_status = payload
+
+    def _on_thermal_map_status(self, message: Any) -> None:
+        if self.thermal_map_status.update(message):
+            self.thermal_cloud.clear(
+                source=os.getenv(
+                    "HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
+                    "/hazard_guard/thermal/map",
+                )
+            )
+
+    def _on_thermal_cloud(self, message: Any) -> None:
+        # PointCloud2 has no session identifier. Do not admit a transient old
+        # snapshot until a status carrying the expected session_id is accepted.
+        status = self.thermal_map_status.snapshot()
+        if not (
+            status.get("available")
+            and status.get("fixed_map_available")
+            and status.get("fingerprint")
+        ):
+            return
+        self._thermal_cloud_adapter.on_cloud(message)
 
     def _on_bag_status(self, message: Any) -> None:
         try:
@@ -1794,7 +1942,8 @@ navigation_store = NavigationStore()
 route_mission_store = RouteMissionStore()
 spatial_store = SpatialStore()
 point_cloud_store = PointCloudStore()
-thermal_cloud_store = PointCloudStore(source="ros:/hazard_guard/thermal/points")
+thermal_cloud_store = PointCloudStore(source="ros:/hazard_guard/thermal/map")
+thermal_map_status_store = ThermalMapStatusStore()
 sensor_diagnostics_store = SensorDiagnosticsStore()
 ros_bridge = RosBridge(
     telemetry_store,
@@ -1805,4 +1954,5 @@ ros_bridge = RosBridge(
     point_cloud_store,
     thermal_cloud_store,
     sensor_diagnostics_store,
+    thermal_map_status_store,
 )

@@ -131,6 +131,7 @@ export const systemModeLabels = {
 const systemStateLabels = {
   disabled: "터미널 제어",
   stopped: "정지",
+  preparing: "3D 지도 준비 중",
   starting: "시작 중",
   running: "실행 중",
   stopping: "종료 중",
@@ -148,7 +149,7 @@ export function SystemModeControl({ systemMode, busy, onChange, onInitializeLoca
     && ["running", "external"].includes(state)
     && !navigationReady
   );
-  const changing = busy || ["starting", "stopping"].includes(state);
+  const changing = busy || ["preparing", "starting", "stopping"].includes(state);
   const unavailable = !controlEnabled || changing;
   const stateTone = (state === "running" && !navigationPreparing)
     ? "success"

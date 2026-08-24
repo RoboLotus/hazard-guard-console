@@ -451,6 +451,27 @@ class RosMediaAdapter:
         except Exception as exc:
             self._on_error(f"Thermal camera conversion failed: {exc}")
 
+    def on_thermal_color_image(self, message: Any) -> None:
+        """Store the ThermoEye SDK-rendered bitmap without recolouring it."""
+        if self._cv_bridge is None:
+            return
+        try:
+            frame = self._cv_bridge.imgmsg_to_cv2(
+                message,
+                desired_encoding="bgr8",
+            )
+            height, width = frame.shape[:2]
+            self._thermal_stream_seen = True
+            self._store_jpeg(
+                "thermal",
+                frame,
+                width,
+                height,
+                "ros:/thermal_camera/image_color",
+            )
+        except Exception as exc:
+            self._on_error(f"Thermal SDK color stream conversion failed: {exc}")
+
     def _store_jpeg(
         self,
         kind: str,

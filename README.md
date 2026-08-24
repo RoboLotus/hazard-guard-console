@@ -135,8 +135,8 @@ Jetson을 재부팅하면 다시 등록해야 합니다. 실제 시각 운용 �
 ### 실물 순찰의 사람 안전·열화상 기능
 
 실물 Jetson에서 FastAPI가 순찰 모드를 시작할 때 아래 환경 변수를
-`physical_patrol.launch.py` 인자로 전달합니다. 두 기능은 실물 검증 전까지
-기본적으로 꺼져 있으므로 명시적으로 활성화해야 합니다.
+`physical_patrol.launch.py` 인자로 전달합니다. YOLO 사람 안전 기능은 실물
+순찰에서 항상 활성화되며, 열화상 기능은 명시적으로 활성화해야 합니다.
 
 ```bash
 export HAZARD_GUARD_DEPLOYMENT_TARGET=physical
@@ -148,7 +148,7 @@ export ROS_DOMAIN_ID=0
 export ROS_LOCALHOST_ONLY=1
 
 # YOLO11n 사람 탐지 → 안전 감독 → Nav2 감속/정지
-export HAZARD_GUARD_PERSON_SAFETY_ENABLED=1
+# 실물 순찰에서는 비활성화할 수 없습니다.
 export HAZARD_GUARD_PERSON_MODEL_PATH=/absolute/path/to/yolo11n.engine
 export HAZARD_GUARD_PERSON_DEVICE=cuda:0
 export HAZARD_GUARD_PERSON_RATE_HZ=6.0
@@ -317,6 +317,9 @@ ros2 launch hazard_guard_simulation rtabmap_sim.launch.py \
 
 이 화면은 RViz 화면을 캡처하거나 전송하지 않습니다. ROS의 원본
 `PointCloud2` 데이터를 직접 변환하므로 RViz를 실행하지 않아도 동작합니다.
+열화상 cloud가 packed `rgb`를 제공하면 그 색을 그대로 사용하고, 이전 형식처럼
+`temperature_c`만 제공하면 backend가 고정 10~60 °C 범위의 heat map RGB로
+변환합니다. 브라우저에는 alpha 255의 불투명 point record로 전달합니다.
 상태 확인 API는 `/api/v1/spatial/cloud/status`입니다. 다른 토픽을 사용할
 때는 백엔드 실행 전에 `HAZARD_GUARD_POINT_CLOUD_TOPIC`을 지정할 수 있습니다.
 

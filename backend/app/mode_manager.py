@@ -6,10 +6,10 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .process_control import ProcessController
-from .world_catalog import WorldCatalog
+from .world_catalog import RGBD_DATABASE_FILE, WorldCatalog
 
 
 def utc_now() -> str:
@@ -36,9 +36,11 @@ class SystemModeManager:
     MODES = {"mapping", "rgbd_mapping", "patrol"}
     MAPPING_PROFILES = {"toolbox", "toolbox_rtabmap"}
     DEPLOYMENT_TARGETS = {"simulation", "physical"}
+    RGBD_WORKFLOW = "saved-map-second-pass-v2-dedicated-db"
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._cloud_export_lock = threading.RLock()
         self._process: subprocess.Popen[Any] | None = None
         self._simulation_process: subprocess.Popen[Any] | None = None
         self._generation = 0
@@ -101,6 +103,21 @@ class SystemModeManager:
             active_session.get("id") if active_session is not None else None
         )
         self._rgbd_session_id: str | None = None
+        self._rgbd_finalize_pending_id: str | None = None
+        self._thermal_map_session_id: str | None = (
+            str(active_session["id"]) if active_session is not None else None
+        )
+        self._thermal_map_cloud_path: Path | None = (
+            Path(active_session["cloud_path"])
+            if active_session is not None
+            else None
+        )
+        self._thermal_map_state_path: Path | None = (
+            Path(active_session["thermal_layer_path"])
+            if active_session is not None
+            else None
+        )
+        self._thermal_status_provider: Callable[[], dict[str, Any]] | None = None
         self._gui = os.getenv("HAZARD_GUARD_SIMULATION_GUI", "true").lower() in {
             "1",
             "true",
@@ -139,6 +156,24 @@ class SystemModeManager:
             "mapping_session_id": None,
             "active_map_session_id": self._active_map_session_id,
             "rgbd_session_id": None,
+            "thermal_map_session_id": self._thermal_map_session_id,
+            "thermal_map_enabled": False,
+            "thermal_map_status": (
+                str(active_session.get("thermal_map_status") or "not_ready")
+                if active_session is not None
+                else "not_ready"
+            ),
+            "thermal_map_message": None,
+            "thermal_map_cloud_path": (
+                str(self._thermal_map_cloud_path)
+                if self._thermal_map_cloud_path is not None
+                else None
+            ),
+            "thermal_map_state_path": (
+                str(self._thermal_map_state_path)
+                if self._thermal_map_state_path is not None
+                else None
+            ),
             "mapping_profile": self._mapping_profile,
             "patrol_slam": self._patrol_slam,
             "rtabmap_database_path": None,
@@ -166,6 +201,12 @@ class SystemModeManager:
     def enabled(self) -> bool:
         return self._enabled
 
+    def set_thermal_status_provider(
+        self,
+        provider: Callable[[], dict[str, Any]],
+    ) -> None:
+        self._thermal_status_provider = provider
+
     def _map_files_available(self) -> bool:
         return self._world_catalog.map_available(self._map_path)
 
@@ -187,6 +228,7 @@ class SystemModeManager:
         session_directory = self._map_path.parent
         database_path = session_directory / "rtabmap.db"
         cloud_path = session_directory / "cloud.ply"
+        thermal_layer_path = session_directory / "thermal_layer.npz"
         return {
             "directory": str(session_directory),
             "yaml": str(self._map_path),
@@ -195,6 +237,9 @@ class SystemModeManager:
                 str(database_path) if database_path.is_file() else None
             ),
             "point_cloud": str(cloud_path) if cloud_path.is_file() else None,
+            "thermal_layer": (
+                str(thermal_layer_path) if thermal_layer_path.is_file() else None
+            ),
         }
 
     def set_localization_pose(self, pose: Any) -> dict[str, float] | None:
@@ -278,37 +323,151 @@ class SystemModeManager:
         }
 
     def export_map_cloud(self, world_id: str, session_id: str) -> dict[str, Any]:
+        # Serialize manual export, automatic RGB-D finalization, and patrol
+        # preparation. The subprocess itself never runs under ``self._lock``.
+        with self._cloud_export_lock:
+            return self._export_map_cloud(world_id, session_id)
+
+    def _thermal_metadata_contract_valid(
+        self,
+        metadata: dict[str, Any],
+    ) -> bool:
+        return bool(
+            metadata.get("rgbd_status") == "saved"
+            and metadata.get("rgbd_workflow") == self.RGBD_WORKFLOW
+            and metadata.get("cloud_frame_id") == "map"
+            and metadata.get("rtabmap_database_file") == RGBD_DATABASE_FILE
+            and metadata.get("rgbd_database_file") == RGBD_DATABASE_FILE
+        )
+
+    def _export_map_cloud(
+        self,
+        world_id: str,
+        session_id: str,
+    ) -> dict[str, Any]:
         with self._lock:
+            process = self._process
+            managed_session_id = (
+                self._rgbd_session_id or self._data.get("rgbd_session_id")
+            )
             current_mapping = (
                 self._data.get("mode") in {"mapping", "rgbd_mapping"}
                 and self._data.get("state") in {"starting", "running", "stopping"}
-                and self._current_session_id == session_id
+                and (
+                    self._current_session_id == session_id
+                    or managed_session_id == session_id
+                )
+                and process is not None
             )
-        if current_mapping:
+            rgbd_finalization_pending = (
+                self._rgbd_finalize_pending_id == session_id
+            )
+            current_thermal_use = (
+                self._data.get("mode") == "patrol"
+                and self._data.get("state")
+                in {"starting", "running", "stopping"}
+                and self._thermal_map_session_id == session_id
+                and process is not None
+            )
+            external_stack = bool(
+                self._data.get("state") == "external"
+                and self._data.get("mode")
+                in {"mapping", "rgbd_mapping", "patrol"}
+            )
+        if (
+            current_mapping
+            or current_thermal_use
+            or rgbd_finalization_pending
+            or external_stack
+        ):
             return {
                 "accepted": False,
-                "message": "현재 3D 세션을 저장 후 종료한 뒤 내보내세요.",
+                "message": (
+                    "터미널에서 실행 중인 ROS 지도·순찰 스택을 종료한 뒤 "
+                    "3D 지도를 내보내세요."
+                    if external_stack
+                    else (
+                        "현재 누적 열화상 순찰을 종료한 뒤 3D 지도를 내보내세요."
+                        if current_thermal_use
+                        else "현재 3D 세션을 저장 후 종료한 뒤 내보내세요."
+                    )
+                ),
             }
         try:
             paths = self._world_catalog.session_paths(world_id, session_id)
         except KeyError:
             return {"accepted": False, "message": "지도 세션을 찾지 못했습니다."}
+        metadata = self._world_catalog.session_metadata(world_id, session_id)
+        thermal_contract_valid = self._thermal_metadata_contract_valid(metadata)
         database_path = paths["database"]
         cloud_path = paths["cloud"]
-        if cloud_path.is_file() and cloud_path.stat().st_size > 0:
+        cloud_available = cloud_path.is_file() and cloud_path.stat().st_size > 0
+        database_available = (
+            database_path.is_file() and database_path.stat().st_size > 0
+        )
+        export_status = str(metadata.get("cloud_export_status") or "")
+        database_newer = bool(
+            cloud_available
+            and database_available
+            and database_path.stat().st_mtime_ns > cloud_path.stat().st_mtime_ns
+        )
+        requires_refresh = export_status in {"stale", "exporting", "failed"}
+        if cloud_available and not requires_refresh and not database_newer:
+            self._world_catalog.record_cloud_export(
+                world_id, session_id, cloud_path
+            )
+            if (
+                thermal_contract_valid
+                and metadata.get("thermal_map_status") != "active"
+            ):
+                self._world_catalog.update_session(
+                    session_id,
+                    world_id,
+                    thermal_map_status="ready",
+                    thermal_map_error=None,
+                )
+            elif not thermal_contract_valid:
+                self._world_catalog.update_session(
+                    session_id,
+                    world_id,
+                    thermal_map_status="incompatible",
+                    thermal_map_error=(
+                        "이 PLY는 전용 map 좌표계 RGB-D DB에서 생성됐다는 "
+                        "provenance가 없어 누적 열화상에는 사용하지 않습니다."
+                    ),
+                )
             return {
                 "accepted": True,
                 "path": cloud_path,
+                "geometry_refreshed": False,
                 "message": "저장된 3D 지도 파일을 준비했습니다.",
             }
-        if not database_path.is_file() or database_path.stat().st_size <= 0:
+        if not database_available:
+            message = "선택한 세션에는 RTAB-Map 3D 데이터가 없습니다."
+            self._world_catalog.update_session(
+                session_id,
+                world_id,
+                cloud_export_status="failed",
+                cloud_export_error=message,
+                thermal_map_status="failed",
+                thermal_map_error=message,
+            )
             return {
                 "accepted": False,
-                "message": "선택한 세션에는 RTAB-Map 3D 데이터가 없습니다.",
+                "message": message,
             }
         output_name = "cloud-export"
         expected_path = paths["directory"] / f"{output_name}_cloud.ply"
+        self._world_catalog.update_session(
+            session_id,
+            world_id,
+            cloud_export_status="exporting",
+            cloud_export_error=None,
+            thermal_map_status="waiting_for_cloud",
+            thermal_map_error=None,
+        )
         try:
+            expected_path.unlink(missing_ok=True)
             result = self._process_controller.run(
                 [
                     "rtabmap-export",
@@ -331,26 +490,214 @@ class SystemModeManager:
                 check=False,
             )
         except (OSError, subprocess.SubprocessError) as exc:
+            message = f"3D 지도 내보내기 도구를 실행하지 못했습니다: {exc}"
+            self._world_catalog.update_session(
+                session_id,
+                world_id,
+                cloud_export_status="failed",
+                cloud_export_error=message,
+                thermal_map_status="failed",
+                thermal_map_error=message,
+            )
             return {
                 "accepted": False,
-                "message": f"3D 지도 내보내기 도구를 실행하지 못했습니다: {exc}",
+                "message": message,
             }
-        if result.returncode != 0 or not expected_path.is_file():
+        if (
+            result.returncode != 0
+            or not expected_path.is_file()
+            or expected_path.stat().st_size <= 0
+        ):
             detail = (result.stderr or result.stdout).strip().splitlines()
+            message = "3D 지도 파일을 생성하지 못했습니다." + (
+                f" {detail[-1]}" if detail else ""
+            )
+            self._world_catalog.update_session(
+                session_id,
+                world_id,
+                cloud_export_status="failed",
+                cloud_export_error=message,
+                thermal_map_status="failed",
+                thermal_map_error=message,
+            )
             return {
                 "accepted": False,
-                "message": "3D 지도 파일을 생성하지 못했습니다."
-                + (f" {detail[-1]}" if detail else ""),
+                "message": message,
             }
+        try:
+            self._world_catalog.quarantine_thermal_layer(world_id, session_id)
+        except OSError as exc:
+            expected_path.unlink(missing_ok=True)
+            message = f"기존 열화상 계층을 보존하지 못해 3D 지도 교체를 중단했습니다: {exc}"
+            self._world_catalog.update_session(
+                session_id,
+                world_id,
+                cloud_export_status="failed",
+                cloud_export_error=message,
+                thermal_map_status="failed",
+                thermal_map_error=message,
+            )
+            return {"accepted": False, "message": message}
         expected_path.replace(cloud_path)
         self._world_catalog.record_cloud_export(world_id, session_id, cloud_path)
+        self._world_catalog.update_session(
+            session_id,
+            world_id,
+            thermal_map_status=(
+                "ready" if thermal_contract_valid else "incompatible"
+            ),
+            thermal_map_error=(
+                None
+                if thermal_contract_valid
+                else (
+                    "이 PLY는 전용 map 좌표계 RGB-D DB에서 생성됐다는 "
+                    "provenance가 없어 누적 열화상에는 사용하지 않습니다."
+                )
+            ),
+        )
         return {
             "accepted": True,
             "path": cloud_path,
+            "geometry_refreshed": True,
             "message": "저장된 RTAB-Map DB에서 컬러 PLY 지도를 생성했습니다.",
         }
 
+    def _prepare_rgbd_collection(self, session: dict[str, Any]) -> Path:
+        """Select a clean map-frame-only DB while preserving prior artifacts."""
+
+        world_id = self._active_world["id"]
+        session_id = str(session["id"])
+        metadata = self._world_catalog.session_metadata(world_id, session_id)
+        paths = self._world_catalog.session_paths(world_id, session_id)
+        self._world_catalog.quarantine_rgbd_artifacts(world_id, session_id)
+        dedicated_database = paths["rgbd_database"]
+        current_database_file = metadata.get("rtabmap_database_file")
+        mapping_database_file = metadata.get(
+            "mapping_rtabmap_database_file"
+        )
+        if (
+            not mapping_database_file
+            and current_database_file
+            and str(current_database_file) != dedicated_database.name
+        ):
+            mapping_database_file = str(current_database_file)
+        self._world_catalog.update_session(
+            session_id,
+            world_id,
+            mapping_rtabmap_database_file=mapping_database_file,
+            rgbd_database_file=dedicated_database.name,
+            rtabmap_database_file=dedicated_database.name,
+            rgbd_status="preparing",
+            rgbd_workflow=self.RGBD_WORKFLOW,
+            cloud_frame_id="map",
+            cloud_voxel_size_m=0.03,
+            rgbd_finished_at=None,
+            cloud_export_status="stale",
+            cloud_export_error=None,
+            thermal_map_status="waiting_for_cloud",
+            thermal_map_error=None,
+            thermal_layer_status="stale",
+        )
+        return dedicated_database
+
+    def _prepare_frozen_thermal_map(self) -> dict[str, Any]:
+        """Synchronously prepare thermal geometry before launching patrol."""
+
+        session = self._active_map_session()
+        if session is None:
+            return {
+                "enabled": False,
+                "session_id": None,
+                "cloud_path": None,
+                "state_path": None,
+                "message": "선택된 지도 세션이 없어 누적 열화상 지도를 비활성화합니다.",
+            }
+        session_id = str(session["id"])
+        dedicated_database = Path(session["storage_directory"]) / RGBD_DATABASE_FILE
+        if (
+            session.get("rgbd_status") != "saved"
+            or session.get("rgbd_workflow") != self.RGBD_WORKFLOW
+            or session.get("cloud_frame_id") != "map"
+            or session.get("rtabmap_database_file") != RGBD_DATABASE_FILE
+            or session.get("rgbd_database_file") != RGBD_DATABASE_FILE
+            or Path(str(session.get("rtabmap_database_path") or ""))
+            != dedicated_database
+        ):
+            message = (
+                "선택한 세션은 전용 DB를 사용한 저장 2D 지도 기반 RGB-D "
+                "3D 수집 결과이거나 map 좌표계임이 확인되지 않아 누적 "
+                "열화상을 비활성화합니다. 해당 세션에서 3D 수집을 다시 "
+                "완료하세요."
+            )
+            self._world_catalog.update_session(
+                session_id,
+                self._active_world["id"],
+                thermal_map_status="failed",
+                thermal_map_error=message,
+            )
+            return {
+                "enabled": False,
+                "session_id": session_id,
+                "cloud_path": Path(session["cloud_path"]),
+                "state_path": Path(session["thermal_layer_path"]),
+                "message": message,
+            }
+        try:
+            paths = self._world_catalog.session_paths(
+                self._active_world["id"], session_id
+            )
+        except KeyError:
+            return {
+                "enabled": False,
+                "session_id": session_id,
+                "cloud_path": None,
+                "state_path": None,
+                "message": "지도 세션 저장 경로를 확인할 수 없어 누적 열화상을 비활성화합니다.",
+            }
+        with self._lock:
+            self._update_locked(
+                mode="patrol",
+                state="preparing",
+                managed=False,
+                pid=None,
+                thermal_map_session_id=session_id,
+                thermal_map_enabled=False,
+                thermal_map_status="exporting",
+                thermal_map_message=(
+                    "첫 순찰을 위해 고정 3D 지도를 내보내는 중입니다. "
+                    "지도 크기에 따라 최대 수 분 걸릴 수 있습니다."
+                ),
+                thermal_map_cloud_path=str(paths["cloud"]),
+                thermal_map_state_path=str(paths["thermal_layer"]),
+                message=(
+                    "고정 3D 지도를 내보내고 누적 열화상 계층을 "
+                    "준비하고 있습니다."
+                ),
+            )
+        exported = self.export_map_cloud(self._active_world["id"], session_id)
+        if not exported.get("accepted"):
+            return {
+                "enabled": False,
+                "session_id": session_id,
+                "cloud_path": paths["cloud"],
+                "state_path": paths["thermal_layer"],
+                "geometry_refreshed": False,
+                "message": str(exported.get("message") or "3D 지도를 준비하지 못했습니다."),
+            }
+        return {
+            "enabled": True,
+            "session_id": session_id,
+            "cloud_path": Path(exported["path"]),
+            "state_path": paths["thermal_layer"],
+            "geometry_refreshed": bool(exported.get("geometry_refreshed")),
+            "message": "고정 3D 지도 기반 누적 열화상을 준비했습니다.",
+        }
+
     def select_world(self, world_id: str) -> dict[str, Any]:
+        with self._cloud_export_lock:
+            return self._select_world(world_id)
+
+    def _select_world(self, world_id: str) -> dict[str, Any]:
         if self._deployment_target != "simulation":
             with self._lock:
                 return self._update_locked(
@@ -361,6 +708,7 @@ class SystemModeManager:
             if self._process is not None or self._data["state"] in {
                 "starting",
                 "running",
+                "preparing",
                 "stopping",
                 "external",
             }:
@@ -397,6 +745,9 @@ class SystemModeManager:
         self._current_session_id = None
         self._active_map_session_id = None
         self._rgbd_session_id = None
+        self._thermal_map_session_id = None
+        self._thermal_map_cloud_path = None
+        self._thermal_map_state_path = None
         self._map_path = (
             self._world_catalog.active_map_path(world_id)
             or self._workspace / "runtime" / "maps" / world_id / "unavailable.yaml"
@@ -417,10 +768,20 @@ class SystemModeManager:
                 mapping_session_id=None,
                 active_map_session_id=None,
                 rgbd_session_id=None,
+                thermal_map_session_id=None,
+                thermal_map_enabled=False,
+                thermal_map_status="not_ready",
+                thermal_map_message=None,
+                thermal_map_cloud_path=None,
+                thermal_map_state_path=None,
                 message=f"시뮬레이션 환경을 '{world['label']}'로 변경했습니다.",
             )
 
     def select_map(self, world_id: str, session_id: str) -> dict[str, Any]:
+        with self._cloud_export_lock:
+            return self._select_map(world_id, session_id)
+
+    def _select_map(self, world_id: str, session_id: str) -> dict[str, Any]:
         if world_id != self._active_world["id"]:
             with self._lock:
                 return self._update_locked(
@@ -428,7 +789,13 @@ class SystemModeManager:
                     message="현재 선택된 환경의 지도만 순찰 지도에 지정할 수 있습니다.",
                 )
         with self._lock:
-            if self._data["state"] in {"starting", "running", "stopping", "external"}:
+            if self._data["state"] in {
+                "starting",
+                "running",
+                "preparing",
+                "stopping",
+                "external",
+            }:
                 return self._update_locked(
                     accepted=False,
                     message="SLAM 또는 순찰 모드를 종료한 뒤 순찰 지도를 변경하세요.",
@@ -454,12 +821,39 @@ class SystemModeManager:
         )
         self._active_map_session_id = session_id
         self._rgbd_session_id = None
+        self._thermal_map_session_id = session_id
+        self._thermal_map_cloud_path = (
+            Path(selected_session["cloud_path"]) if selected_session else None
+        )
+        self._thermal_map_state_path = (
+            Path(selected_session["thermal_layer_path"])
+            if selected_session
+            else None
+        )
         with self._lock:
             return self._update_locked(
                 accepted=True,
                 map_path=str(self._map_path),
                 active_map_session_id=session_id,
                 rgbd_session_id=None,
+                thermal_map_session_id=session_id,
+                thermal_map_enabled=False,
+                thermal_map_status=(
+                    str(selected_session.get("thermal_map_status") or "not_ready")
+                    if selected_session
+                    else "not_ready"
+                ),
+                thermal_map_message=None,
+                thermal_map_cloud_path=(
+                    str(self._thermal_map_cloud_path)
+                    if self._thermal_map_cloud_path is not None
+                    else None
+                ),
+                thermal_map_state_path=(
+                    str(self._thermal_map_state_path)
+                    if self._thermal_map_state_path is not None
+                    else None
+                ),
                 message="선택한 SLAM 결과를 순찰용 지도로 지정했습니다.",
             )
 
@@ -491,17 +885,15 @@ class SystemModeManager:
             if process is not None:
                 exit_code = process.poll()
                 if exit_code is not None:
-                    self._process = None
+                    # The monitor owns process-group cleanup and session
+                    # finalization. Keeping the handle here prevents a status
+                    # poll from opening a DB-export race before descendants
+                    # have closed RTAB-Map.
                     self._update_locked(
-                        state="stopped" if exit_code == 0 else "failed",
-                        managed=False,
-                        pid=None,
+                        state="stopping",
+                        managed=True,
                         exit_code=exit_code,
-                        message=(
-                            "ROS 운용 모드가 종료되었습니다."
-                            if exit_code == 0
-                            else f"ROS 운용 모드가 오류 코드 {exit_code}로 종료되었습니다."
-                        ),
+                        message="ROS 자식 프로세스 종료와 세션 저장을 마무리하고 있습니다.",
                     )
                 return dict(self._data)
 
@@ -562,6 +954,7 @@ class SystemModeManager:
         *,
         mapping_profile: str | None = None,
         rtabmap_database_path: Path | None = None,
+        thermal_map_config: dict[str, Any] | None = None,
     ) -> list[str]:
         selected_profile = mapping_profile or self._mapping_profile
         database_path = rtabmap_database_path or self._rtabmap_database_path
@@ -587,7 +980,7 @@ class SystemModeManager:
             if mode == "rgbd_mapping":
                 selected_database = (
                     database_path
-                    or self._map_path.parent / "rtabmap.db"
+                    or self._map_path.parent / RGBD_DATABASE_FILE
                 )
                 return [
                     "ros2",
@@ -599,6 +992,7 @@ class SystemModeManager:
                     f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
                     f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
                     f"rtabmap_database_path:={selected_database}",
+                    "rtabmap_reset_database:=true",
                     f"rtabmap_storage_path:={selected_database.parent}",
                     "rgbd_cloud_stamp_mode:="
                     + os.getenv("HAZARD_GUARD_RGBD_STAMP_MODE", "offset"),
@@ -612,6 +1006,14 @@ class SystemModeManager:
                         person_safety_enabled=False,
                     ),
                 ]
+            frozen_thermal_arguments = ["enable_frozen_thermal_map:=false"]
+            if thermal_map_config and thermal_map_config.get("enabled"):
+                frozen_thermal_arguments = [
+                    "enable_frozen_thermal_map:=true",
+                    f"thermal_map_cloud_path:={thermal_map_config['cloud_path']}",
+                    f"thermal_map_state_path:={thermal_map_config['state_path']}",
+                    f"thermal_map_session_id:={thermal_map_config['session_id']}",
+                ]
             return [
                 "ros2",
                 "launch",
@@ -622,6 +1024,7 @@ class SystemModeManager:
                 f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
                 f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
                 f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
+                *frozen_thermal_arguments,
                 *self._physical_patrol_feature_arguments(),
             ]
 
@@ -654,7 +1057,7 @@ class SystemModeManager:
             ]
         if mode == "rgbd_mapping":
             selected_database = (
-                database_path or self._map_path.parent / "rtabmap.db"
+                database_path or self._map_path.parent / RGBD_DATABASE_FILE
             )
             return [
                 "ros2",
@@ -667,8 +1070,7 @@ class SystemModeManager:
                 f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
                 f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
                 f"rtabmap_database_path:={selected_database}",
-                "rtabmap_reset_database:="
-                + ("false" if selected_database.is_file() else "true"),
+                "rtabmap_reset_database:=true",
             ]
         return [
             "ros2",
@@ -692,10 +1094,10 @@ class SystemModeManager:
     ) -> list[str]:
         """Translate deployment settings into the physical patrol contract."""
 
+        # Physical patrol always runs person safety. Callers such as RGB-D
+        # mapping may explicitly disable inference while keeping the camera up.
         safety_enabled = (
-            env_flag("HAZARD_GUARD_PERSON_SAFETY_ENABLED")
-            if person_safety_enabled is None
-            else person_safety_enabled
+            True if person_safety_enabled is None else person_safety_enabled
         )
         values = {
             "use_person_safety": (
@@ -709,7 +1111,7 @@ class SystemModeManager:
             "person_model_path": os.getenv(
                 "HAZARD_GUARD_PERSON_MODEL_PATH", "yolo11n.pt"
             ),
-            "person_device": os.getenv("HAZARD_GUARD_PERSON_DEVICE", ""),
+            "person_device": os.getenv("HAZARD_GUARD_PERSON_DEVICE", "0"),
             "person_confidence": os.getenv(
                 "HAZARD_GUARD_PERSON_CONFIDENCE", "0.4"
             ),
@@ -927,6 +1329,8 @@ class SystemModeManager:
         )
         if mode == "rgbd_mapping":
             self._finalize_rgbd_session()
+        elif mode == "patrol":
+            self._finalize_thermal_map_session()
         with self._lock:
             if self._generation != generation or self._process is not process:
                 return
@@ -1069,6 +1473,8 @@ class SystemModeManager:
             if process is None:
                 return
             self._generation += 1
+            if self._data.get("mode") == "rgbd_mapping":
+                self._rgbd_finalize_pending_id = self._rgbd_session_id
             self._update_locked(state="stopping", message="현재 ROS 모드를 종료하고 있습니다.")
         self._terminate_process_group(
             process,
@@ -1083,6 +1489,22 @@ class SystemModeManager:
             self._ignore_external_until = time.monotonic() + 10.0
 
     def switch_mode(
+        self,
+        mode: str,
+        mapping_profile: str | None = None,
+        patrol_slam: bool = False,
+    ) -> dict[str, Any]:
+        # One transition guard covers DB export decisions and ROS launch. This
+        # prevents a new RGB-D writer from starting between an export-lock
+        # probe and the actual launch.
+        with self._cloud_export_lock:
+            return self._switch_mode(
+                mode,
+                mapping_profile=mapping_profile,
+                patrol_slam=patrol_slam,
+            )
+
+    def _switch_mode(
         self,
         mode: str,
         mapping_profile: str | None = None,
@@ -1168,6 +1590,8 @@ class SystemModeManager:
         self._stop_managed_process()
         if current_mode == "rgbd_mapping":
             self._finalize_rgbd_session()
+        elif current_mode == "patrol":
+            self._finalize_thermal_map_session()
 
         if (
             mode in {"patrol", "rgbd_mapping"}
@@ -1205,6 +1629,7 @@ class SystemModeManager:
 
         pending_session: dict[str, Any] | None = None
         rgbd_session: dict[str, Any] | None = None
+        rgbd_database_path: Path | None = None
         if mode == "mapping":
             pending_session = self._world_catalog.begin_session(
                 self._active_world["id"], requested_profile
@@ -1232,13 +1657,36 @@ class SystemModeManager:
                             "지도 파일에서 사용할 세션을 먼저 지정하세요."
                         ),
                     )
-            self._world_catalog.update_session(
-                rgbd_session["id"],
-                self._active_world["id"],
-                rtabmap_database_file="rtabmap.db",
-                rgbd_status="collecting",
-                rgbd_started_at=utc_now(),
-            )
+            try:
+                rgbd_database_path = self._prepare_rgbd_collection(
+                    rgbd_session
+                )
+            except (KeyError, OSError) as exc:
+                message = (
+                    "기존 RGB-D 자료를 안전하게 보존하지 못해 새 3D 수집을 "
+                    f"시작하지 않았습니다: {exc}"
+                )
+                self._world_catalog.update_session(
+                    rgbd_session["id"],
+                    self._active_world["id"],
+                    rgbd_status="failed",
+                    cloud_export_status="failed",
+                    cloud_export_error=message,
+                    thermal_map_status="failed",
+                    thermal_map_error=message,
+                )
+                with self._lock:
+                    return self._update_locked(
+                        mode="idle",
+                        state="failed",
+                        accepted=False,
+                        managed=False,
+                        pid=None,
+                        message=message,
+                    )
+        thermal_map_config: dict[str, Any] | None = None
+        if mode == "patrol" and self._deployment_target == "physical":
+            thermal_map_config = self._prepare_frozen_thermal_map()
         self._patrol_slam = keep_mapping
         command = self._launch_arguments(
             mode,
@@ -1246,12 +1694,9 @@ class SystemModeManager:
             rtabmap_database_path=(
                 pending_session["rtabmap_database_path"]
                 if pending_session is not None
-                else (
-                    Path(rgbd_session["storage_directory"]) / "rtabmap.db"
-                    if rgbd_session is not None
-                    else None
-                )
+                else rgbd_database_path
             ),
+            thermal_map_config=thermal_map_config,
         )
         try:
             process = self._process_controller.start_logged(
@@ -1264,13 +1709,25 @@ class SystemModeManager:
                     self._active_world["id"], pending_session["id"]
                 )
             if rgbd_session is not None:
+                message = f"RGB-D 3D 수집 launch를 시작하지 못했습니다: {exc}"
                 self._world_catalog.update_session(
                     rgbd_session["id"],
                     self._active_world["id"],
                     rgbd_status="failed",
+                    cloud_export_status="failed",
+                    cloud_export_error=message,
+                    thermal_map_status="failed",
+                    thermal_map_error=message,
+                )
+            if thermal_map_config and thermal_map_config.get("enabled"):
+                self._world_catalog.update_session(
+                    str(thermal_map_config["session_id"]),
+                    self._active_world["id"],
+                    thermal_map_status="launch_failed",
+                    thermal_map_error=str(exc),
                 )
             with self._lock:
-                return self._update_locked(
+                failed = self._update_locked(
                     mode="idle",
                     state="failed",
                     accepted=False,
@@ -1278,6 +1735,43 @@ class SystemModeManager:
                     pid=None,
                     message=f"ROS launch를 시작하지 못했습니다: {exc}",
                 )
+                return {
+                    **failed,
+                    "thermal_cache_reset_required": bool(
+                        thermal_map_config
+                        and thermal_map_config.get("geometry_refreshed")
+                    ),
+                }
+        if rgbd_session is not None:
+            self._world_catalog.update_session(
+                rgbd_session["id"],
+                self._active_world["id"],
+                rtabmap_database_file=rgbd_database_path.name,
+                rgbd_database_file=rgbd_database_path.name,
+                rgbd_status="collecting",
+                rgbd_workflow=self.RGBD_WORKFLOW,
+                cloud_frame_id="map",
+                cloud_voxel_size_m=0.03,
+                rgbd_started_at=utc_now(),
+                rgbd_finished_at=None,
+                cloud_export_status="stale",
+                cloud_export_error=None,
+                thermal_map_status="waiting_for_cloud",
+                thermal_map_error=None,
+                thermal_layer_status="stale",
+            )
+        if thermal_map_config and thermal_map_config.get("enabled"):
+            self._world_catalog.update_session(
+                str(thermal_map_config["session_id"]),
+                self._active_world["id"],
+                thermal_layer_file=Path(
+                    thermal_map_config["state_path"]
+                ).name,
+                thermal_layer_status="active",
+                thermal_map_status="active",
+                thermal_map_error=None,
+                thermal_map_started_at=utc_now(),
+            )
         with self._lock:
             if pending_session is not None:
                 self._mapping_profile = requested_profile
@@ -1291,9 +1785,21 @@ class SystemModeManager:
                 self._current_session_id = None
                 self._active_map_session_id = rgbd_session["id"]
                 self._rgbd_session_id = rgbd_session["id"]
-                self._rtabmap_database_path = (
-                    Path(rgbd_session["storage_directory"]) / "rtabmap.db"
+                self._rtabmap_database_path = rgbd_database_path
+            if mode == "patrol" and thermal_map_config is not None:
+                self._thermal_map_session_id = thermal_map_config.get(
+                    "session_id"
                 )
+                self._thermal_map_cloud_path = thermal_map_config.get(
+                    "cloud_path"
+                )
+                self._thermal_map_state_path = thermal_map_config.get(
+                    "state_path"
+                )
+            else:
+                self._thermal_map_session_id = None
+                self._thermal_map_cloud_path = None
+                self._thermal_map_state_path = None
             self._generation += 1
             generation = self._generation
             self._process = process
@@ -1309,6 +1815,37 @@ class SystemModeManager:
                 mapping_session_id=self._current_session_id,
                 active_map_session_id=self._active_map_session_id,
                 rgbd_session_id=self._rgbd_session_id,
+                thermal_map_session_id=self._thermal_map_session_id,
+                thermal_map_enabled=bool(
+                    thermal_map_config and thermal_map_config.get("enabled")
+                ),
+                thermal_map_status=(
+                    "active"
+                    if thermal_map_config and thermal_map_config.get("enabled")
+                    else (
+                        "failed"
+                        if thermal_map_config is not None
+                        else "disabled"
+                        if mode == "patrol"
+                        and self._deployment_target == "physical"
+                        else "not_applicable"
+                    )
+                ),
+                thermal_map_message=(
+                    thermal_map_config.get("message")
+                    if thermal_map_config is not None
+                    else None
+                ),
+                thermal_map_cloud_path=(
+                    str(self._thermal_map_cloud_path)
+                    if self._thermal_map_cloud_path is not None
+                    else None
+                ),
+                thermal_map_state_path=(
+                    str(self._thermal_map_state_path)
+                    if self._thermal_map_state_path is not None
+                    else None
+                ),
                 mapping_profile=self._mapping_profile,
                 patrol_slam=self._patrol_slam,
                 rtabmap_database_path=(
@@ -1334,6 +1871,14 @@ class SystemModeManager:
                             if keep_mapping
                             else "AMCL·Nav2 순찰 모드를 시작하고 있습니다."
                         )
+                    )
+                    + (
+                        " 누적 열화상 지도는 비활성 상태입니다: "
+                        + str(thermal_map_config.get("message"))
+                        if mode == "patrol"
+                        and thermal_map_config is not None
+                        and not thermal_map_config.get("enabled")
+                        else ""
                     )
                 ),
             )
@@ -1365,11 +1910,20 @@ class SystemModeManager:
             )
 
     def stop(self) -> dict[str, Any]:
+        # A patrol transition can synchronously export the fixed PLY before it
+        # owns a process. Waiting on the same guard prevents a Stop request
+        # from returning early and then allowing that transition to launch.
+        with self._cloud_export_lock:
+            return self._stop()
+
+    def _stop(self) -> dict[str, Any]:
         with self._lock:
             stopped_mode = self._data.get("mode")
         self._stop_managed_process()
         if stopped_mode == "rgbd_mapping":
             self._finalize_rgbd_session()
+        elif stopped_mode == "patrol":
+            self._finalize_thermal_map_session()
         if self._deployment_target == "simulation":
             self._stop_managed_simulation()
         with self._lock:
@@ -1386,24 +1940,228 @@ class SystemModeManager:
             )
 
     def _finalize_rgbd_session(self) -> None:
-        session_id = self._rgbd_session_id
-        database_path = self._rtabmap_database_path
+        with self._lock:
+            session_id = self._rgbd_session_id
+            database_path = self._rtabmap_database_path
+            if session_id is not None:
+                # Claim finalization before inspecting artifacts so monitor
+                # and explicit stop callers cannot finalize twice.
+                self._rgbd_session_id = None
+                self._rgbd_finalize_pending_id = session_id
         if session_id is None or database_path is None:
             return
+        paths = self._world_catalog.session_paths(
+            self._active_world["id"], session_id
+        )
+        metadata = self._world_catalog.session_metadata(
+            self._active_world["id"], session_id
+        )
+        provenance_valid = bool(
+            database_path == paths["rgbd_database"]
+            and database_path.name == RGBD_DATABASE_FILE
+            and metadata.get("rtabmap_database_file") == RGBD_DATABASE_FILE
+            and metadata.get("rgbd_database_file") == RGBD_DATABASE_FILE
+            and metadata.get("rgbd_workflow") == self.RGBD_WORKFLOW
+            and metadata.get("cloud_frame_id") == "map"
+        )
         available = (
             database_path.is_file() and database_path.stat().st_size > 0
         )
+        session_values: dict[str, Any] = {
+            "rgbd_status": "saved" if available else "empty",
+            "rgbd_finished_at": utc_now(),
+            "rtabmap_available": available,
+            "rtabmap_database_bytes": (
+                database_path.stat().st_size if available else 0
+            ),
+        }
+        if provenance_valid:
+            session_values.update(
+                rgbd_workflow=self.RGBD_WORKFLOW,
+                cloud_frame_id="map",
+                cloud_voxel_size_m=0.03,
+            )
         self._world_catalog.update_session(
             session_id,
             self._active_world["id"],
-            rgbd_status="saved" if available else "empty",
-            rgbd_finished_at=utc_now(),
-            rtabmap_available=available,
-            rtabmap_database_bytes=(
-                database_path.stat().st_size if available else 0
+            **session_values,
+        )
+        if available and provenance_valid:
+            # Desktop/backend shutdown must not wait up to 180 seconds for
+            # rtabmap-export. Patrol preparation or the manual cloud endpoint
+            # performs this after the DB has been closed.
+            thermal_status = "waiting_for_cloud"
+            thermal_message = (
+                "RGB-D DB를 저장했습니다. 다음 순찰 시작 시 고정 3D 지도를 "
+                "내보내고 누적 열화상을 준비합니다."
+            )
+            self._world_catalog.update_session(
+                session_id,
+                self._active_world["id"],
+                cloud_export_status="stale",
+                cloud_export_error=None,
+                thermal_map_status=thermal_status,
+                thermal_map_error=None,
+            )
+        else:
+            thermal_status = "failed"
+            thermal_message = (
+                "RGB-D 수집 DB가 전용 map 좌표계 DB 계약을 충족하지 않아 "
+                "고정 3D 지도를 생성하지 않습니다. 3D 수집을 다시 실행하세요."
+                if available
+                else "RGB-D 수집 종료 후 사용할 RTAB-Map DB가 없어 "
+                "고정 3D 지도를 생성하지 못했습니다."
+            )
+            self._world_catalog.update_session(
+                session_id,
+                self._active_world["id"],
+                cloud_export_status="failed",
+                cloud_export_error=thermal_message,
+                thermal_map_status="failed",
+                thermal_map_error=thermal_message,
+            )
+        with self._lock:
+            self._thermal_map_session_id = session_id
+            self._thermal_map_cloud_path = paths["cloud"]
+            self._thermal_map_state_path = paths["thermal_layer"]
+            self._data.update(
+                rgbd_session_id=None,
+                thermal_map_session_id=session_id,
+                thermal_map_enabled=False,
+                thermal_map_status=thermal_status,
+                thermal_map_message=thermal_message,
+                thermal_map_cloud_path=str(paths["cloud"]),
+                thermal_map_state_path=str(paths["thermal_layer"]),
+            )
+            if self._rgbd_finalize_pending_id == session_id:
+                self._rgbd_finalize_pending_id = None
+
+    def _finalize_thermal_map_session(self) -> None:
+        """Record updater persistence only after the patrol group has stopped."""
+
+        with self._lock:
+            enabled = bool(self._data.get("thermal_map_enabled"))
+            session_id = self._thermal_map_session_id
+            state_path = self._thermal_map_state_path
+            if enabled:
+                # Claim the flush once; no filesystem work happens under the
+                # manager lock.
+                self._data["thermal_map_enabled"] = False
+        if not enabled or session_id is None or state_path is None:
+            return
+        state_available = state_path.is_file() and state_path.stat().st_size > 0
+        node_status: dict[str, Any] = {}
+        provider = self._thermal_status_provider
+        if provider is not None:
+            try:
+                node_status = provider()
+            except Exception:
+                node_status = {}
+        status_session_id = node_status.get("session_id")
+        status_matches_session = bool(
+            node_status.get("available")
+            and status_session_id == session_id
+        )
+        expected_fingerprint = str(node_status.get("fingerprint") or "")
+        state_metadata = self._thermal_state_metadata(state_path)
+        state_fingerprint = state_metadata.get("fingerprint")
+        state_error = str(node_status.get("state_error") or "")
+        map_error = str(node_status.get("map_error") or "")
+        persisted_at_ns = int(state_metadata.get("persisted_at_ns") or 0)
+        maximum_last_seen_ns = int(
+            state_metadata.get("maximum_last_seen_ns") or 0
+        )
+        persisted_at = (
+            datetime.fromtimestamp(
+                persisted_at_ns / 1_000_000_000,
+                timezone.utc,
+            ).isoformat()
+            if persisted_at_ns > 0
+            else None
+        )
+        persisted_after_observation = bool(
+            persisted_at_ns > 0 and persisted_at_ns >= maximum_last_seen_ns
+        )
+        if map_error or state_error:
+            status = "failed"
+            message = map_error or state_error
+        elif not state_available:
+            status = "ready"
+            message = (
+                "저장된 누적 열화상 계층이 없어 고정 3D 지도만 "
+                "준비된 상태입니다."
+            )
+        elif not status_matches_session:
+            status = "persistence_unknown"
+            message = (
+                "열화상 상태 파일은 있지만 현재 세션의 노드 상태를 "
+                "확인하지 못해 저장 완료로 표시하지 않습니다."
+            )
+        elif not expected_fingerprint or state_fingerprint != expected_fingerprint:
+            status = "failed"
+            message = (
+                "열화상 상태 파일의 3D 지도 fingerprint가 현재 고정 지도와 "
+                "일치하지 않습니다."
+            )
+        elif not persisted_after_observation:
+            status = "persistence_unknown"
+            message = (
+                "마지막 열화상 관측이 상태 파일에 저장됐는지 확인하지 못해 "
+                "저장 완료로 표시하지 않습니다."
+            )
+        else:
+            status = "saved"
+            message = "누적 열화상 계층을 세션에 저장했습니다."
+        self._world_catalog.update_session(
+            session_id,
+            self._active_world["id"],
+            thermal_map_status=status,
+            thermal_map_error=(message if status == "failed" else None),
+            thermal_map_finished_at=utc_now(),
+            thermal_layer_persisted_at=persisted_at,
+            thermal_layer_status=status,
+            thermal_layer_fingerprint=state_fingerprint,
+            thermal_layer_bytes=(
+                state_path.stat().st_size if state_available else 0
             ),
         )
-        self._rgbd_session_id = None
+        with self._lock:
+            self._data.update(
+                thermal_map_enabled=False,
+                thermal_map_status=status,
+                thermal_map_message=message,
+            )
+
+    @staticmethod
+    def _thermal_state_metadata(path: Path) -> dict[str, Any]:
+        if not path.is_file():
+            return {}
+        try:
+            import numpy as np
+
+            with np.load(path, allow_pickle=False) as state:
+                if "geometry_fingerprint" not in state.files:
+                    return {}
+                last_seen = (
+                    np.asarray(state["last_seen_ns"], dtype=np.int64)
+                    if "last_seen_ns" in state.files
+                    else np.asarray([], dtype=np.int64)
+                )
+                return {
+                    "fingerprint": str(
+                        np.asarray(state["geometry_fingerprint"]).item()
+                    ),
+                    "persisted_at_ns": (
+                        int(np.asarray(state["persisted_at_ns"]).item())
+                        if "persisted_at_ns" in state.files
+                        else 0
+                    ),
+                    "maximum_last_seen_ns": (
+                        int(last_seen.max()) if last_seen.size else 0
+                    ),
+                }
+        except Exception:
+            return {}
 
 
 system_mode_manager = SystemModeManager()
