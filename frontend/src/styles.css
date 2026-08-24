@@ -205,8 +205,8 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .thermal-reading { position: absolute; left: 9px; bottom: 8px; display: flex; flex-direction: column; padding: 5px 7px; color: white; background: rgba(19, 11, 52, .65); border-radius: 5px; }
 .thermal-reading span { font: 600 6px "Pretendard Variable", Pretendard, sans-serif; opacity: .75; }
 .thermal-reading strong { font: 700 12px "Pretendard Variable", Pretendard, sans-serif; margin-top: 1px; }
-.thermal-scale { position: absolute; right: 8px; top: 8px; bottom: 8px; width: 24px; display: grid; grid-template-rows: auto 1fr auto; justify-items: center; gap: 2px; color: #fff; font: 600 6px "Pretendard Variable", Pretendard, sans-serif; text-shadow: 0 1px 2px #000; }
-.thermal-scale i { width: 6px; border-radius: 4px; background: linear-gradient(to bottom, #fff7a1, #ff5a1f, #b700a9, #2812ae, #07134b); }
+.camera-thermal-scale { position: absolute; right: 8px; top: 8px; bottom: 8px; width: 24px; display: grid; grid-template-rows: auto 1fr auto; justify-items: center; gap: 2px; color: #fff; font: 700 7px "Pretendard Variable", Pretendard, sans-serif; text-shadow: 0 1px 2px #000; }
+.camera-thermal-scale i { width: 8px; border: 1px solid rgba(255, 255, 255, .72); border-radius: 4px; background: linear-gradient(to bottom, #7f0000, #ff0000, #ffff00, #00ffff, #0000ff, #00007f); }
 
 .events-panel { display: grid; grid-template-rows: 56px minmax(0,1fr) 39px; }
 .count-badge { padding: 4px 7px; color: #b9303a; background: #fff0f1; border-radius: 10px; font-size: 8px; font-weight: 700; }

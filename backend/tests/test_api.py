@@ -795,8 +795,9 @@ def test_thermal_cloud_is_a_separate_stream_from_the_colour_one():
 
     status = client.get("/api/v1/spatial/cloud/thermal/status").json()
     assert status["source"] == "test:/thermal_cloud"
-    # The colour window the robot node paints with, so the legend can name it.
-    assert status["min_temp_c"] < status["max_temp_c"]
+    # The fixed browser packet colour window, so the legend can name it.
+    assert status["min_temp_c"] == 20.0
+    assert status["max_temp_c"] == 40.0
 
 
 def test_thermal_cloud_status_exposes_cumulative_session_artifacts(

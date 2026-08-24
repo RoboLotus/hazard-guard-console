@@ -148,10 +148,10 @@ class PointCloudAdapter:
             os.getenv("HAZARD_GUARD_POINT_CLOUD_MAX_POINTS", "20000")
         )
         self._temperature_min_c = float(
-            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "10.0")
+            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "20.0")
         )
         self._temperature_max_c = float(
-            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "60.0")
+            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "40.0")
         )
 
     def _temperature_rgb(self, temperature_c: float) -> tuple[int, int, int]:
@@ -160,11 +160,26 @@ class PointCloudAdapter:
             1.0,
             max(0.0, (temperature_c - self._temperature_min_c) / span),
         )
-        channels = [
-            min(1.0, max(0.0, 1.5 - abs(4.0 * value - center)))
-            for center in (3.0, 2.0, 1.0)
-        ]
-        return tuple(round(channel * 255) for channel in channels)
+        # High-contrast blue -> cyan -> green -> yellow -> red palette.
+        # Endpoints are full-intensity primary colours so a 20 C surface and
+        # the expected 40 C maximum remain unmistakable in the dark 3D scene.
+        anchors = (
+            (0.0, (0, 0, 255)),
+            (0.25, (0, 255, 255)),
+            (0.5, (0, 255, 0)),
+            (0.75, (255, 255, 0)),
+            (1.0, (255, 0, 0)),
+        )
+        for (low_at, low_rgb), (high_at, high_rgb) in zip(
+            anchors, anchors[1:]
+        ):
+            if value <= high_at:
+                mix = (value - low_at) / (high_at - low_at)
+                return tuple(
+                    round(low + (high - low) * mix)
+                    for low, high in zip(low_rgb, high_rgb)
+                )
+        return anchors[-1][1]
 
     @staticmethod
     def _unpack_scalar(
@@ -241,7 +256,19 @@ class PointCloudAdapter:
                 if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
                     continue
 
-                if packed_color is not None:
+                # For a thermal stream the radiometric value is authoritative.
+                # Recolour it here even when the ROS producer also supplied a
+                # packed RGB field, so the WebUI's configured 20-40 C window is
+                # applied consistently to both old and new map publishers.
+                if temperature_color:
+                    temperature_c = float(self._unpack_scalar(
+                        data,
+                        base + temperature_field.offset,
+                        temperature_field.datatype,
+                        endian,
+                    ))
+                    red, green, blue = self._temperature_rgb(temperature_c)
+                elif packed_color is not None:
                     red, green, blue = self._packed_rgb(
                         data,
                         base + packed_color.offset,
@@ -257,14 +284,6 @@ class PointCloudAdapter:
                         ))
                         for channel in ("r", "g", "b")
                     )
-                elif temperature_color:
-                    temperature_c = float(self._unpack_scalar(
-                        data,
-                        base + temperature_field.offset,
-                        temperature_field.datatype,
-                        endian,
-                    ))
-                    red, green, blue = self._temperature_rgb(temperature_c)
                 else:
                     red, green, blue = 75, 145, 220
 

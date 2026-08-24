@@ -745,8 +745,8 @@ def point_cloud_status():
 
 @app.get("/api/v1/spatial/cloud/thermal/status")
 def thermal_cloud_status():
-    # The colour window is the robot node's, and there is no channel back from
-    # it - so both sides read the same defaults, overridable in one place.
+    # The browser packet adapter recolours radiometric values using this fixed
+    # window, including clouds that already contain a packed ROS rgb field.
     mode = system_mode_manager.snapshot(detect_external=False)
     cloud_status = thermal_cloud_store.status()
     node_status = thermal_map_status_store.snapshot()
@@ -818,8 +818,12 @@ def thermal_cloud_status():
     result = {
         **cloud_status,
         **node_details,
-        "min_temp_c": float(os.getenv("HAZARD_GUARD_THERMAL_MIN_C", "10.0")),
-        "max_temp_c": float(os.getenv("HAZARD_GUARD_THERMAL_MAX_C", "60.0")),
+        "min_temp_c": float(
+            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "20.0")
+        ),
+        "max_temp_c": float(
+            os.getenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "40.0")
+        ),
         "cumulative": (
             bool(node_status.get("cumulative"))
             if status_matches_session

@@ -4,6 +4,29 @@ from app.ros_media import RosMediaAdapter
 from app.stores import MediaStore, SpatialStore
 
 
+def test_sdk_color_thermal_frame_is_stored_without_recolouring():
+    import cv2
+    import numpy as np
+
+    media = MediaStore()
+    adapter = RosMediaAdapter(media, SpatialStore(), lambda _message: None)
+    frame = np.zeros((16, 32, 3), dtype=np.uint8)
+    frame[:, :16] = (10, 20, 230)
+    frame[:, 16:] = (220, 30, 5)
+    bridge = SimpleNamespace(imgmsg_to_cv2=lambda *_args, **_kwargs: frame)
+    adapter.configure(cv_bridge=bridge, tf_buffer=None, ros_time_type=None)
+
+    adapter.on_thermal_color_image(SimpleNamespace(encoding="bgr8"))
+
+    stored = media.get("thermal")
+    decoded = cv2.imdecode(np.frombuffer(stored["content"], np.uint8), cv2.IMREAD_COLOR)
+    assert stored["source"] == "ros:/thermal_camera/image_color"
+    assert stored["width"] == 32
+    assert stored["height"] == 16
+    assert decoded[8, 8, 2] > decoded[8, 8, 0]
+    assert decoded[8, 24, 0] > decoded[8, 24, 2]
+
+
 def test_thermal_detection_is_forwarded_to_spatial_store():
     spatial = SpatialStore()
     adapter = RosMediaAdapter(MediaStore(), spatial, lambda _message: None)

@@ -29,6 +29,7 @@ function CameraPanel({ thermal = false, maxTemperature = 84.6, mediaStatus, onOp
   const stream = thermal ? mediaStatus?.thermal : mediaStatus?.rgb;
   const live = Boolean(stream?.available);
   const gazeboThermal = thermal && stream?.source === "gazebo:/thermal_camera/image_raw";
+  const physicalThermal = thermal && stream?.source === "ros:/thermal_camera/image_color";
   const endpoint = thermal ? "/api/v1/media/thermal" : "/api/v1/media/rgb";
   return (
     <section className={`panel camera-panel ${className}`}>
@@ -37,7 +38,7 @@ function CameraPanel({ thermal = false, maxTemperature = 84.6, mediaStatus, onOp
         title={thermal ? "열화상 영상" : "실시간 영상"}
         action={
           <div className="panel-inline-actions">
-            <span className={`live-label ${live ? "" : "mock"}`}><span />{live ? (thermal ? "SIMULATED" : "LIVE") : "MOCK"}</span>
+            <span className={`live-label ${live ? "" : "mock"}`}><span />{live ? (thermal && gazeboThermal ? "SIMULATED" : "LIVE") : "MOCK"}</span>
             {onOpen && <button type="button" className="icon-action" aria-label={`${thermal ? "열화상" : "RGB"} 영상 상세 화면 열기`} onClick={onOpen}><CaretRight size={18} /></button>}
           </div>
         }
@@ -48,13 +49,13 @@ function CameraPanel({ thermal = false, maxTemperature = 84.6, mediaStatus, onOp
           fallback={thermal ? thermalFeed : rgbFeed}
           enabled={live}
           interval={thermal ? 400 : 300}
-          alt={thermal ? (gazeboThermal ? "Gazebo 열화상 카메라 시뮬레이션 영상" : "RGB 영상에서 합성한 시뮬레이션 열화상") : "Gazebo 전방 RGB 카메라 영상"}
+          alt={thermal ? (physicalThermal ? "ThermoEye SDK 실시간 열화상 영상" : gazeboThermal ? "Gazebo 열화상 카메라 시뮬레이션 영상" : "열화상 카메라 영상") : "전방 RGB 카메라 영상"}
         />
         <div className="camera-meta top-left">CAM-{thermal ? "TH01" : "RGB01"}</div>
         {thermal ? (
           <>
             <div className="thermal-reading"><span>MAX</span><strong>{maxTemperature.toFixed(1)}°C</strong></div>
-            <div className="thermal-scale" aria-label="열화상 색상 범위"><span>90°</span><i /><span>20°</span></div>
+            <div className="camera-thermal-scale" aria-label="열화상 색상 범위"><span>40°</span><i /><span>20°</span></div>
           </>
         ) : <div className="camera-meta bottom-right">A동 펌프실</div>}
       </div>
@@ -230,7 +231,7 @@ export default function Overview({ events, onAcknowledge, onNavigate, notify, te
         <MapPanel mediaStatus={mediaStatus} spatialState={spatialState} incidentMarkers={incidentMapMarkers(incidents)} onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")} onOpen={() => onNavigate("map")} />
         <div className="camera-stack">
           <CameraPanel mediaStatus={mediaStatus} onOpen={() => onNavigate("video")} />
-          <CameraPanel thermal mediaStatus={mediaStatus} maxTemperature={telemetry?.max_temperature_c ?? 84.6} onOpen={() => onNavigate("video")} />
+          <CameraPanel thermal mediaStatus={mediaStatus} maxTemperature={telemetry?.max_temperature_c ?? 40.0} onOpen={() => onNavigate("video")} />
         </div>
         <EventsPanel events={events} onAcknowledge={onAcknowledge} onViewAll={() => onNavigate("events")} />
       </div>

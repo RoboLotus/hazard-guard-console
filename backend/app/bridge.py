@@ -468,12 +468,22 @@ class RosBridge:
                 self._observe("thermal_cloud", self._on_thermal_cloud),
                 qos_profile_sensor_data,
             )
+            thermal_display_topic = os.getenv(
+                "HAZARD_GUARD_THERMAL_DISPLAY_TOPIC", ""
+            ).strip()
+            if thermal_display_topic:
+                thermal_display_callback = (
+                    self._media_adapter.on_thermal_color_image
+                )
+            else:
+                thermal_display_topic = os.getenv(
+                    "HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"
+                )
+                thermal_display_callback = self._media_adapter.on_thermal_image
             self._node.create_subscription(
                 Image,
-                os.getenv(
-                    "HAZARD_GUARD_THERMAL_TOPIC", "/thermal_camera/image_raw"
-                ),
-                self._observe("thermal", self._media_adapter.on_thermal_image),
+                thermal_display_topic,
+                self._observe("thermal", thermal_display_callback),
                 qos_profile_sensor_data,
             )
             diagnostic_topics = [
