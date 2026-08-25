@@ -20,6 +20,7 @@ import {
 import MapPanel from "../components/MapPanel.jsx";
 import { batteryPresentation } from "../batteryTelemetry.js";
 import { beaconSlots, incidentMapMarkers } from "../incidents.js";
+import { telemetryPresentation } from "../telemetry.js";
 import {
   LiveImage,
   ConnectionPlaceholder,
@@ -27,12 +28,13 @@ import {
   StatusPill,
 } from "../components/Common.jsx";
 
-function CameraPanel({ thermal = false, maxTemperature = 84.6, mediaStatus, onOpen, className = "" }) {
+function CameraPanel({ thermal = false, maxTemperature = null, mediaStatus, onOpen, className = "" }) {
   const stream = thermal ? mediaStatus?.thermal : mediaStatus?.rgb;
   const live = Boolean(stream?.available);
   const gazeboThermal = thermal && stream?.source === "gazebo:/thermal_camera/image_raw";
   const physicalThermal = thermal && stream?.source === "ros:/thermal_camera/image_color";
   const endpoint = thermal ? "/api/v1/media/thermal" : "/api/v1/media/rgb";
+  const temperatureAvailable = maxTemperature != null && Number.isFinite(Number(maxTemperature));
   return (
     <section className={`panel camera-panel ${className}`}>
       <PanelHeader
@@ -56,7 +58,7 @@ function CameraPanel({ thermal = false, maxTemperature = 84.6, mediaStatus, onOp
           <div className="camera-meta top-left">CAM-{thermal ? "TH01" : "RGB01"}</div>
           {thermal ? (
           <>
-            <div className="thermal-reading"><span>MAX</span><strong>{maxTemperature.toFixed(1)}°C</strong></div>
+            {temperatureAvailable && <div className="thermal-reading"><span>MAX</span><strong>{Number(maxTemperature).toFixed(1)}°C</strong></div>}
             <div className="camera-thermal-scale" aria-label="열화상 색상 범위"><span>40°</span><i /><span>20°</span></div>
           </>
           ) : null}
@@ -102,25 +104,29 @@ function EventsPanel({ events, onAcknowledge, onViewAll }) {
   );
 }
 
-function OperationControlCard({ patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
+function OperationControlCard({ patrolState, controllerEnabled, telemetryLive, onTogglePatrol, onStop, onToggleController }) {
   const stopped = patrolState === "stopped";
-  const modeLabel = stopped ? "정지됨" : patrolState === "paused" ? "일시정지" : "자율 순찰 중";
+  const modeKnown = telemetryLive && patrolState !== "unknown";
+  const modeLabel = modeKnown
+    ? stopped ? "정지됨" : patrolState === "paused" ? "일시정지" : "자율 순찰 중"
+    : "상태 확인 필요";
   return (
     <article className="dock-block operations">
-      <div className="dock-title"><Robot size={18} weight="fill" /><span>운행 제어</span><StatusPill tone={stopped || patrolState === "paused" ? "neutral" : "success"}>{modeLabel}</StatusPill></div>
+      <div className="dock-title"><Robot size={18} weight="fill" /><span>운행 제어</span><StatusPill tone={!modeKnown || stopped || patrolState === "paused" ? "neutral" : "success"}>{modeLabel}</StatusPill></div>
       <div className="button-row operation-buttons">
-        <button type="button" className="button secondary" aria-label={patrolState === "paused" ? "순찰 재개" : "일시정지"} title={patrolState === "paused" ? "순찰 재개" : "일시정지"} onClick={onTogglePatrol} disabled={stopped}>
+        <button type="button" className="button secondary" aria-label={patrolState === "paused" ? "순찰 재개" : "일시정지"} title={telemetryLive ? (patrolState === "paused" ? "순찰 재개" : "일시정지") : "로봇 텔레메트리 연결 필요"} onClick={onTogglePatrol} disabled={!telemetryLive || stopped}>
           {patrolState === "paused" ? <Play size={17} weight="fill" /> : <Pause size={17} weight="fill" />}
           <span className="operation-label" aria-hidden="true">{patrolState === "paused" ? "순찰 재개" : "일시정지"}</span>
         </button>
-        <button type="button" className="button danger" aria-label="운행 정지" title="운행 정지" onClick={onStop} disabled={stopped}><Stop size={17} weight="fill" /><span className="operation-label" aria-hidden="true">운행 정지</span></button>
+        <button type="button" className="button danger" aria-label="운행 정지" title={telemetryLive ? "운행 정지" : "로봇 텔레메트리 연결 필요"} onClick={onStop} disabled={!telemetryLive || stopped}><Stop size={17} weight="fill" /><span className="operation-label" aria-hidden="true">운행 정지</span></button>
         <button
           type="button"
           className={`button controller-toggle ${controllerEnabled ? "active" : "ghost"}`}
           aria-pressed={controllerEnabled}
           aria-label={`컨트롤러 ${controllerEnabled ? "켜짐" : "꺼짐"}`}
-          title={controllerEnabled ? "컨트롤러 입력 끄기" : "컨트롤러 입력 켜기"}
+          title={telemetryLive ? (controllerEnabled ? "컨트롤러 입력 끄기" : "컨트롤러 입력 켜기") : "로봇 텔레메트리 연결 필요"}
           onClick={onToggleController}
+          disabled={!telemetryLive}
         >
           <GameController size={17} weight="fill" />
           <span className="operation-label" aria-hidden="true">컨트롤러<small>{controllerEnabled ? "ON" : "OFF"}</small></span>
@@ -130,10 +136,9 @@ function OperationControlCard({ patrolState, controllerEnabled, onTogglePatrol, 
   );
 }
 
-function RobotStatusCard({ telemetry }) {
-  const battery = batteryPresentation(telemetry);
-  const networkGood = (telemetry?.network_quality ?? "good") === "good";
-  const lidarNormal = (telemetry?.lidar_status ?? "normal") === "normal";
+function RobotStatusCard({ telemetry, telemetryLive }) {
+  const battery = batteryPresentation(telemetryLive ? telemetry : null);
+  const status = telemetryPresentation(telemetry, telemetryLive);
   return (
     <article className="dock-block telemetry">
       <div className="dock-title"><ChartBar size={18} /><span>로봇 상태</span></div>
@@ -146,9 +151,9 @@ function RobotStatusCard({ telemetry }) {
             <i style={{ width: `${battery.meterWidth}%` }} />
           </div>
         </div>
-        <div><span>네트워크</span><strong><WifiHigh size={17} weight="fill" /> {networkGood ? "양호" : "불안정"}</strong><small>{telemetry?.network_rssi_dbm ?? -48} dBm</small></div>
-        <div><span>LiDAR</span><strong className={lidarNormal ? "healthy" : ""}>{lidarNormal ? "정상" : "확인 필요"}</strong><small>{(telemetry?.lidar_hz ?? 10.2).toFixed(1)} Hz</small></div>
-        <div><span>속도</span><strong>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</strong><small>제한 0.5 m/s</small></div>
+        <div className={status.available ? "" : "telemetry-unavailable"}><span>네트워크</span><strong className={status.networkHealthy ? "healthy" : ""}><WifiHigh size={17} weight="fill" /> {status.networkLabel}</strong><small>{status.networkDetail}</small></div>
+        <div className={status.available ? "" : "telemetry-unavailable"}><span>LiDAR</span><strong className={status.lidarHealthy ? "healthy" : ""}>{status.lidarLabel}</strong><small>{status.lidarDetail}</small></div>
+        <div className={status.available ? "" : "telemetry-unavailable"}><span>속도</span><strong>{status.speedLabel}</strong><small>{status.speedDetail}</small></div>
       </div>
     </article>
   );
@@ -181,14 +186,15 @@ function WarningDevicesCard({ battery }) {
   );
 }
 
-function ControlDock({ telemetry, battery, patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
+function ControlDock({ telemetry, telemetryLive, battery, patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
   return (
     <section className="control-dock" aria-label="로봇 관제 제어 및 상태">
-      <RobotStatusCard telemetry={telemetry} />
+      <RobotStatusCard telemetry={telemetry} telemetryLive={telemetryLive} />
       <WarningDevicesCard battery={battery} />
       <OperationControlCard
         patrolState={patrolState}
         controllerEnabled={controllerEnabled}
+        telemetryLive={telemetryLive}
         onTogglePatrol={onTogglePatrol}
         onStop={onStop}
         onToggleController={onToggleController}
@@ -197,19 +203,27 @@ function ControlDock({ telemetry, battery, patrolState, controllerEnabled, onTog
   );
 }
 
-export default function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, mediaStatus, spatialState, sendCommand, dispenserBattery, incidents }) {
-  const [patrolState, setPatrolState] = useState("patrol");
+export default function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, telemetryLive, mediaStatus, spatialState, sendCommand, dispenserBattery, incidents }) {
+  const [patrolState, setPatrolState] = useState("unknown");
   const [controllerEnabled, setControllerEnabled] = useState(false);
 
   useEffect(() => {
-    if (!telemetry) return;
+    if (!telemetryLive || !telemetry) {
+      setPatrolState("unknown");
+      setControllerEnabled(false);
+      return;
+    }
     if (telemetry.mode) setPatrolState(telemetry.mode);
     if (typeof telemetry.controller_enabled === "boolean") {
       setControllerEnabled(telemetry.controller_enabled);
     }
-  }, [telemetry]);
+  }, [telemetry, telemetryLive]);
 
   const issueCommand = async (command, enabled, fallbackMessage, tone = "success") => {
+    if (!telemetryLive) {
+      notify("로봇 텔레메트리 연결을 확인한 뒤 다시 시도하세요.", "warning");
+      return;
+    }
     try {
       const result = await sendCommand(command, enabled);
       if (!result.accepted) {
@@ -222,23 +236,19 @@ export default function Overview({ events, onAcknowledge, onNavigate, notify, te
       }
       notify(result.message || fallbackMessage, tone);
     } catch {
-      notify(`${fallbackMessage} 서버 미연결 상태라 화면에만 반영했습니다.`, "warning");
+      notify(`${fallbackMessage} 서버 연결을 확인하세요.`, "warning");
     }
   };
   const togglePatrol = () => {
     const command = patrolState === "paused" ? "resume" : "pause";
     const next = command === "resume" ? "patrol" : "paused";
-    setPatrolState(next);
     void issueCommand(command, false, next === "paused" ? "순찰을 일시정지했습니다." : "순찰을 재개했습니다.");
   };
   const stopPatrol = () => {
-    setPatrolState("stopped");
-    setControllerEnabled(false);
-    void issueCommand("stop", false, "운행 정지 요청을 기록했습니다. (mock)", "warning");
+    void issueCommand("stop", false, "운행 정지를 요청했습니다.", "warning");
   };
   const toggleController = () => {
     const next = !controllerEnabled;
-    setControllerEnabled(next);
     void issueCommand("controller", next, `동봉 컨트롤러 입력을 ${next ? "활성화" : "비활성화"}했습니다.`);
   };
   return (
@@ -247,12 +257,13 @@ export default function Overview({ events, onAcknowledge, onNavigate, notify, te
         <MapPanel mediaStatus={mediaStatus} spatialState={spatialState} incidentMarkers={incidentMapMarkers(incidents)} onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")} onOpen={() => onNavigate("map")} />
         <div className="camera-stack">
           <CameraPanel mediaStatus={mediaStatus} onOpen={() => onNavigate("video")} />
-          <CameraPanel thermal mediaStatus={mediaStatus} maxTemperature={telemetry?.max_temperature_c ?? 40.0} onOpen={() => onNavigate("video")} />
+          <CameraPanel thermal mediaStatus={mediaStatus} maxTemperature={telemetryLive ? telemetry?.max_temperature_c : null} onOpen={() => onNavigate("video")} />
         </div>
         <EventsPanel events={events} onAcknowledge={onAcknowledge} onViewAll={() => onNavigate("events")} />
       </div>
       <ControlDock
         telemetry={telemetry}
+        telemetryLive={telemetryLive}
         battery={dispenserBattery}
         patrolState={patrolState}
         controllerEnabled={controllerEnabled}

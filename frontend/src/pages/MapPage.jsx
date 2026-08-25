@@ -17,6 +17,7 @@ import {
 } from "../components/Common.jsx";
 import MapPanel from "../components/MapPanel.jsx";
 import { incidentMapMarkers } from "../incidents.js";
+import { telemetryPresentation } from "../telemetry.js";
 import SimulationMapManager from "../components/SimulationMapManager.jsx";
 import WaypointMissionPanel from "../WaypointMissionPanel.jsx";
 import {
@@ -49,6 +50,7 @@ const personSafetyLabels = {
 export default function MapPage({
   mediaStatus,
   telemetry,
+  telemetryLive,
   spatialState,
   systemMode,
   modeBusy,
@@ -90,8 +92,9 @@ export default function MapPage({
     footprint: true,
   });
   const mapLive = Boolean(mediaStatus?.map?.available);
-  const personSafety = telemetry?.person_safety;
-  const personSafetyConnected = Boolean(personSafety?.updated_at);
+  const telemetryStatus = telemetryPresentation(telemetry, telemetryLive);
+  const personSafety = telemetryLive ? telemetry?.person_safety : null;
+  const personSafetyConnected = Boolean(telemetryLive && personSafety?.updated_at);
   const personSafetyName = personSafetyConnected
     ? personSafety.state_name
     : "DISABLED";
@@ -100,8 +103,10 @@ export default function MapPage({
     : ["STOP", "SENSOR_FAULT"].includes(personSafetyName)
       ? "danger"
       : personSafetyName === "DISABLED" ? "" : "warning";
-  const personSafetyLabel = personSafetyLabels[personSafetyName]
-    || (physicalTarget ? "기능 대기" : "시뮬레이션 비활성");
+  const personSafetyLabel = !telemetryLive
+    ? "데이터 없음"
+    : personSafetyLabels[personSafetyName]
+      || (physicalTarget ? "기능 대기" : "시뮬레이션 비활성");
   const mapSpatialState = physicalTarget
     ? {
         ...spatialState,
@@ -642,9 +647,9 @@ export default function MapPage({
           />
           <CollapsibleCard icon={Robot} title="로봇 주행 상태" subtitle="ROS 2 텔레메트리">
             <dl className="status-list">
-              <div><dt>운행 모드</dt><dd>{telemetry?.mode === "paused" ? "일시정지" : telemetry?.mode === "stopped" ? "정지" : "자율 순찰"}</dd></div>
-              <div><dt>현재 속도</dt><dd>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</dd></div>
-              <div><dt>LiDAR</dt><dd className="healthy">{telemetry?.lidar_status === "error" ? "확인 필요" : "정상"}</dd></div>
+              <div><dt>운행 모드</dt><dd>{telemetryStatus.modeLabel}</dd></div>
+              <div><dt>현재 속도</dt><dd>{telemetryStatus.speedLabel}</dd></div>
+              <div><dt>LiDAR</dt><dd className={telemetryStatus.lidarHealthy ? "healthy" : ""}>{telemetryStatus.lidarLabel}</dd></div>
               <div><dt>사람 안전</dt><dd className={personSafetyClass}>{personSafetyLabel}{personSafety?.distance_valid ? ` · ${personSafety.nearest_distance_m.toFixed(1)}m` : ""}</dd></div>
               <div><dt>운용 대상</dt><dd>{physicalTarget ? "실물 ROSMASTER M1" : "Gazebo 시뮬레이션"}</dd></div>
               <div><dt>지도 소스</dt><dd>{mapDimension === "thermal" ? "고정 3D 맵 × 누적 열화상" : mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
