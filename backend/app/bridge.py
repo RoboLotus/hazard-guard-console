@@ -45,6 +45,21 @@ def person_safety_payload(message: Any) -> dict[str, Any]:
     }
 
 
+def battery_state_payload(message: Any) -> dict[str, float]:
+    voltage = float(message.voltage)
+    percentage = float(message.percentage)
+    if not bool(message.present):
+        raise ValueError("battery is not present")
+    if not math.isfinite(voltage) or voltage <= 0.0:
+        raise ValueError("battery voltage is invalid")
+    if not math.isfinite(percentage) or not 0.0 <= percentage <= 1.0:
+        raise ValueError("battery percentage is invalid")
+    return {
+        "voltage": round(voltage, 2),
+        "percent": round(percentage * 100.0, 2),
+    }
+
+
 class ThermalMapStatusStore:
     """Session-scoped cache for the frozen thermal-map node's JSON status."""
 
@@ -257,6 +272,7 @@ class RosBridge:
 
         sensor_specs = [
             ("telemetry", "로봇 상태", "/hazard_guard/telemetry", ("patrol",), 3.0, 1.0),
+            ("battery", "구동 배터리", os.getenv("HAZARD_GUARD_BATTERY_TOPIC", "/hazard_guard/battery"), (), 5.0, 0.1),
             ("map", "2D 지도", "/map", ("mapping", "patrol"), 4.0, 0.2),
             ("lidar", "2D LiDAR", os.getenv("HAZARD_GUARD_SCAN_TOPIC", "/scan"), ("mapping", "patrol"), 2.0, 5.0),
             ("rgb", "RGB 카메라", os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw"), ("3d", "inspection"), 2.0, 5.0),
@@ -326,7 +342,7 @@ class RosBridge:
                 qos_profile_sensor_data,
             )
             from rclpy.time import Time
-            from sensor_msgs.msg import CameraInfo, Image, Imu, LaserScan, PointCloud2
+            from sensor_msgs.msg import BatteryState, CameraInfo, Image, Imu, LaserScan, PointCloud2
             from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
             from std_msgs.msg import String
             from std_srvs.srv import Trigger
@@ -349,6 +365,14 @@ class RosBridge:
                 RobotTelemetry,
                 "/hazard_guard/telemetry",
                 self._observe("telemetry", self._on_telemetry),
+                10,
+            )
+            self._node.create_subscription(
+                BatteryState,
+                os.getenv(
+                    "HAZARD_GUARD_BATTERY_TOPIC", "/hazard_guard/battery"
+                ),
+                self._observe("battery", self._on_battery),
                 10,
             )
             self._node.create_subscription(
@@ -1295,7 +1319,6 @@ class RosBridge:
                 "timestamp": timestamp,
                 "robot_id": message.robot_id,
                 "mode": message.mode,
-                "battery_percent": round(float(message.battery_percent), 2),
                 "speed_mps": round(float(message.speed_mps), 2),
                 "network_quality": message.network_quality,
                 "network_rssi_dbm": int(message.network_rssi_dbm),
@@ -1306,6 +1329,23 @@ class RosBridge:
                 "controller_enabled": bool(message.controller_enabled),
                 "mock": bool(message.mock),
             }
+        )
+        self.store.update_battery(
+            percent=float(message.battery_percent),
+            voltage=None,
+            source="mock" if bool(message.mock) else "telemetry",
+        )
+
+    def _on_battery(self, message: Any) -> None:
+        try:
+            payload = battery_state_payload(message)
+        except (TypeError, ValueError) as exc:
+            self._set_error(f"배터리 텔레메트리 오류: {exc}")
+            return
+        self.store.update_battery(
+            percent=payload["percent"],
+            voltage=payload["voltage"],
+            source="physical",
         )
 
     def _on_person_safety(self, message: Any) -> None:

@@ -666,11 +666,16 @@ class SpatialStore:
 class TelemetryStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._battery_received_monotonic = 0.0
+        self._battery_stale_after_sec = 5.0
         self._data: dict[str, Any] = {
             "timestamp": utc_now(),
             "robot_id": "rosmaster-m1-mock",
             "mode": "patrol",
-            "battery_percent": 78.0,
+            "battery_percent": None,
+            "battery_voltage": None,
+            "battery_source": "unavailable",
+            "battery_received_at": None,
             "speed_mps": 0.32,
             "network_quality": "good",
             "network_rssi_dbm": -48,
@@ -695,12 +700,56 @@ class TelemetryStore:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             result = dict(self._data)
+            battery_received = self._battery_received_monotonic
+        battery_age = (
+            max(0.0, time.monotonic() - battery_received)
+            if battery_received > 0.0
+            else None
+        )
+        result["battery_stale"] = (
+            battery_age is None or battery_age > self._battery_stale_after_sec
+        )
+        result["battery_age_sec"] = (
+            round(battery_age, 2) if battery_age is not None else None
+        )
         result["timestamp"] = utc_now()
         return result
 
     def update(self, values: dict[str, Any]) -> None:
         with self._lock:
             self._data.update(values)
+
+    def update_battery(
+        self,
+        *,
+        percent: float,
+        voltage: float | None,
+        source: str,
+    ) -> None:
+        percent_value = float(percent)
+        if not math.isfinite(percent_value):
+            raise ValueError("battery percent must be finite")
+        voltage_value = None if voltage is None else float(voltage)
+        if voltage_value is not None and (
+            not math.isfinite(voltage_value) or voltage_value <= 0.0
+        ):
+            raise ValueError("battery voltage must be a positive finite number")
+        with self._lock:
+            self._data.update(
+                {
+                    "battery_percent": round(
+                        min(100.0, max(0.0, percent_value)), 2
+                    ),
+                    "battery_voltage": (
+                        round(voltage_value, 2)
+                        if voltage_value is not None
+                        else None
+                    ),
+                    "battery_source": str(source),
+                    "battery_received_at": utc_now(),
+                }
+            )
+            self._battery_received_monotonic = time.monotonic()
 
     def apply_mock_command(self, command: str, enabled: bool) -> dict[str, Any]:
         normalized = command.strip().lower()
