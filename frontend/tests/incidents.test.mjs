@@ -34,6 +34,48 @@ test("incident event replaces its raw thermal detection", () => {
   assert.equal(merged[0].incident.incident_id, "incident-1");
 });
 
+test("incident event replaces a mismatched raw ID for the same equipment visit", () => {
+  const authoritative = {
+    ...incident,
+    incident_id: "thermal:mission-1:motor-1:visit-7",
+    detection_id: "thermal:mission-hash",
+  };
+  const sameVisit = {
+    id: "thermal-motor-1-visit-7",
+    detectionId: "thermal-motor-1",
+    equipmentId: "motor-1",
+    visitIndex: 7,
+    level: "critical",
+    title: "raw duplicate",
+  };
+  const nextVisit = {
+    ...sameVisit,
+    id: "thermal-motor-1-visit-8",
+    visitIndex: 8,
+    level: "watch",
+    title: "next watch",
+  };
+
+  const merged = mergeIncidentEvents([sameVisit, nextVisit], [authoritative]);
+
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].incident.incident_id, authoritative.incident_id);
+  assert.equal(merged[0].visitIndex, 7);
+  assert.equal(merged[1].title, "next watch");
+});
+
+test("raw watch event remains when no authoritative incident exists", () => {
+  const watch = {
+    id: "thermal-motor-1-visit-9",
+    detectionId: "thermal-motor-1",
+    equipmentId: "motor-1",
+    visitIndex: 9,
+    level: "watch",
+  };
+
+  assert.deepEqual(mergeIncidentEvents([watch], []), [watch]);
+});
+
 test("drop actions allow partial BLE but fail closed at zero", () => {
   const partial = incidentActions(incident, {
     stale: false,
