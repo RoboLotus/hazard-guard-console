@@ -148,6 +148,7 @@ export default function HelpPage({ onNavigate }) {
               <li>2D 작성이 끝나면 <strong>현재 2D SLAM 지도 저장</strong> 또는 <strong>지도 저장 후 종료</strong>를 누르고 저장 결과를 순찰 지도로 지정합니다.</li>
               <li><strong>2단계 · RGB-D 3D 수집</strong>을 선택하고 같은 공간을 한 번 더 주행합니다. 이 단계는 저장된 2D 지도에서 AMCL·Nav2로 위치를 추정합니다.</li>
               <li>수집이 끝나면 <strong>3D 수집 종료 및 DB 저장</strong>을 눌러 RTAB-Map DB를 안전하게 닫습니다.</li>
+              <li>저장 PLY가 준비되면 <strong>지도 설비 등록</strong>에서 2D 중심을 추가하고 3D ROI 박스를 확인합니다.</li>
             </StepList>
             <div className="help-callout info">
               <Keyboard size={20} weight="fill" />
@@ -180,6 +181,7 @@ export default function HelpPage({ onNavigate }) {
               <li>맵 생성이 끝났다면 지도를 저장하고 현재 모드를 종료합니다.</li>
               <li><strong>순찰용 SLAM 결과</strong>에서 사용할 지도를 선택하고 <strong>순찰 지도 지정</strong>을 누릅니다.</li>
               <li><strong>순찰</strong> 모드로 전환합니다. 맵 생성 종료 위치가 AMCL 초기 위치로 자동 전달되며, 실패하면 <strong>저장된 마지막 위치로 AMCL 다시 초기화</strong>를 누릅니다.</li>
+              <li><strong>지도 설비 등록</strong>에서 설비 이름과 X/Y/Z 범위를 확인하고 젯슨에 저장합니다. ROI가 겹치거나 3 cm보다 가까우면 저장할 수 없습니다.</li>
               <li><strong>지도에서 웨이포인트 추가</strong>를 누르고 지점을 클릭한 뒤 이름, 바라볼 방향, 관찰 시간을 입력합니다.</li>
               <li>드래그 또는 순서 버튼으로 방문 순서를 바꿉니다. 지점이 여러 개면 <strong>순서 추천</strong>을 사용할 수 있습니다.</li>
               <li><strong>반복·운영 시간</strong>에서 즉시/예약 시작과 1회·지정 횟수·지정 시각·수동 종료 중 하나를 선택합니다. 반복 순찰은 회차 사이 대기시간도 지정할 수 있습니다.</li>
@@ -192,6 +194,10 @@ export default function HelpPage({ onNavigate }) {
             <div className="help-callout info">
               <Clock size={20} weight="fill" />
               <div><strong>예약은 Jetson의 실제 시각을 기준으로 실행됩니다.</strong><p>WebUI를 닫거나 새로고침해도 ROS 임무 관리자가 예약과 반복을 계속 처리합니다. 정확한 시작·종료를 위해 Jetson의 날짜, 시간대와 NTP 동기화 상태를 먼저 확인하세요.</p></div>
+            </div>
+            <div className="help-callout neutral">
+              <FloppyDisk size={20} weight="fill" />
+              <div><strong>설비와 경로는 현재 지도 세션에 귀속됩니다.</strong><p>브라우저가 아니라 Jetson의 지도 세션 폴더에 저장됩니다. 새 2D 지도를 만들면 기존 설비·웨이포인트는 자동으로 따라오지 않으며, 새 지도에서 다시 등록해야 합니다.</p></div>
             </div>
           </HelpSection>
 
