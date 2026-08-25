@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Bell,
+  Camera,
   CaretRight,
   ChartBar,
   Check,
@@ -12,16 +13,16 @@ import {
   Robot,
   Siren,
   Stop,
+  ThermometerHot,
   Warning,
   WifiHigh,
 } from "@phosphor-icons/react";
-import rgbFeed from "../assets/industrial-rgb.webp";
-import thermalFeed from "../assets/industrial-thermal.webp";
 import MapPanel from "../components/MapPanel.jsx";
 import { batteryPresentation } from "../batteryTelemetry.js";
 import { beaconSlots, incidentMapMarkers } from "../incidents.js";
 import {
   LiveImage,
+  ConnectionPlaceholder,
   PanelHeader,
   StatusPill,
 } from "../components/Common.jsx";
@@ -39,26 +40,33 @@ function CameraPanel({ thermal = false, maxTemperature = 84.6, mediaStatus, onOp
         title={thermal ? "열화상 영상" : "실시간 영상"}
         action={
           <div className="panel-inline-actions">
-            <span className={`live-label ${live ? "" : "mock"}`}><span />{live ? (thermal && gazeboThermal ? "SIMULATED" : "LIVE") : "MOCK"}</span>
+            <span className={`live-label ${live ? "" : "offline"}`}><span />{live ? (thermal && gazeboThermal ? "SIMULATED" : "LIVE") : "연결 필요"}</span>
             {onOpen && <button type="button" className="icon-action" aria-label={`${thermal ? "열화상" : "RGB"} 영상 상세 화면 열기`} onClick={onOpen}><CaretRight size={18} /></button>}
           </div>
         }
       />
       <div className="camera-stage">
-        <LiveImage
-          endpoint={endpoint}
-          fallback={thermal ? thermalFeed : rgbFeed}
-          enabled={live}
-          interval={thermal ? 400 : 300}
-          alt={thermal ? (physicalThermal ? "ThermoEye SDK 실시간 열화상 영상" : gazeboThermal ? "Gazebo 열화상 카메라 시뮬레이션 영상" : "열화상 카메라 영상") : "전방 RGB 카메라 영상"}
-        />
-        <div className="camera-meta top-left">CAM-{thermal ? "TH01" : "RGB01"}</div>
-        {thermal ? (
+        {live ? <>
+          <LiveImage
+            endpoint={endpoint}
+            enabled
+            interval={thermal ? 400 : 300}
+            alt={thermal ? (physicalThermal ? "ThermoEye SDK 실시간 열화상 영상" : gazeboThermal ? "Gazebo 열화상 카메라 시뮬레이션 영상" : "열화상 카메라 영상") : "전방 RGB 카메라 영상"}
+          />
+          <div className="camera-meta top-left">CAM-{thermal ? "TH01" : "RGB01"}</div>
+          {thermal ? (
           <>
             <div className="thermal-reading"><span>MAX</span><strong>{maxTemperature.toFixed(1)}°C</strong></div>
             <div className="camera-thermal-scale" aria-label="열화상 색상 범위"><span>40°</span><i /><span>20°</span></div>
           </>
-        ) : <div className="camera-meta bottom-right">A동 펌프실</div>}
+          ) : null}
+        </> : (
+          <ConnectionPlaceholder
+            icon={thermal ? ThermometerHot : Camera}
+            title={`${thermal ? "열화상" : "RGB"} 카메라 연결이 필요합니다`}
+            description="센서와 서버가 연결되면 실시간 영상이 표시됩니다."
+          />
+        )}
       </div>
     </section>
   );
