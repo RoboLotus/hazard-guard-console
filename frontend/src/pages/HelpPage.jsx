@@ -148,7 +148,7 @@ export default function HelpPage({ onNavigate }) {
               <li>2D 작성이 끝나면 <strong>현재 2D SLAM 지도 저장</strong> 또는 <strong>지도 저장 후 종료</strong>를 누르고 저장 결과를 순찰 지도로 지정합니다.</li>
               <li><strong>2단계 · RGB-D 3D 수집</strong>을 선택하고 같은 공간을 한 번 더 주행합니다. 이 단계는 저장된 2D 지도에서 AMCL·Nav2로 위치를 추정합니다.</li>
               <li>수집이 끝나면 <strong>3D 수집 종료 및 DB 저장</strong>을 눌러 RTAB-Map DB를 안전하게 닫습니다.</li>
-              <li>저장 PLY가 준비되면 <strong>지도 설비 등록</strong>에서 2D 중심을 추가하고 3D ROI 박스를 확인합니다.</li>
+              <li>저장 PLY가 준비되면 해당 세션을 <strong>순찰 지도</strong>로 지정하고 순찰 모드로 전환합니다. 이후 <strong>지도 설비 등록</strong>에서 2D 중심을 추가하고 3D ROI 박스를 확인합니다.</li>
             </StepList>
             <div className="help-callout info">
               <Keyboard size={20} weight="fill" />
@@ -197,7 +197,7 @@ export default function HelpPage({ onNavigate }) {
             </div>
             <div className="help-callout neutral">
               <FloppyDisk size={20} weight="fill" />
-              <div><strong>설비와 경로는 현재 지도 세션에 귀속됩니다.</strong><p>브라우저가 아니라 Jetson의 지도 세션 폴더에 저장됩니다. 새 2D 지도를 만들면 기존 설비·웨이포인트는 자동으로 따라오지 않으며, 새 지도에서 다시 등록해야 합니다.</p></div>
+              <div><strong>설비와 경로는 현재 지도 세션에 귀속됩니다.</strong><p>브라우저가 아니라 Jetson의 지도 세션 폴더에 저장됩니다. 새 2D 지도를 만들거나 순찰 지도를 변경하면 이전 지도의 설비는 비활성화되며, 새 지도에서 위치와 ROI를 다시 등록해야 합니다.</p></div>
             </div>
           </HelpSection>
 
@@ -245,7 +245,8 @@ export default function HelpPage({ onNavigate }) {
 
           <HelpSection id="monitoring" icon={Camera} eyebrow="06 · MONITORING" title="영상·이벤트·임계값 사용하기">
             <div className="help-feature-list">
-              <div><Camera size={19} /><span><strong>영상</strong><p>RGB와 열화상 스트림을 확인합니다. 센서 미연결 시에는 정적 예시 영상 대신 연결 안내가 표시됩니다.</p></span></div>
+              <div><Camera size={19} /><span><strong>영상</strong><p>RGB와 열화상 스트림을 확인합니다. 센서 미연결 시 Overview·영상·이벤트 상세에는 정적 예시 사진 대신 연결 안내가 표시됩니다.</p></span></div>
+              <div><Gauge size={19} /><span><strong>구동 배터리</strong><p>Overview의 잔량은 Yahboom 제어보드 전압을 기준으로 환산한 운용 참고값이며 원본 전압을 함께 표시합니다. 배터리 데이터가 5초 이상 수신되지 않으면 수치 대신 데이터 없음으로 표시됩니다.</p></span></div>
               <div><ListChecks size={19} /><span><strong>이벤트</strong><p>위험 온도와 기타 이상 이벤트를 확인하고 처리 중·해결 상태로 변경합니다.</p></span></div>
               <div><BellRinging size={19} /><span><strong>비콘 배출 승인</strong><p>위험 이벤트 상세에서 비콘 없이 재개, 비콘 배출 후 재개, 비콘 배출 후 현장 감시 중 하나를 선택합니다. 배출 조치는 관리자 토큰과 Robot의 정지·BLE 조건을 모두 통과해야 실행됩니다.</p></span></div>
               <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>이상 탐지 설정에서 지도에 저장한 설비의 고정·자동 가변 판정과 기준선을 관리하고, 연결 상태 점검에서 토픽 주기와 TF를 확인합니다. 위치와 ROI는 지도 탭에서 편집합니다.</p></span></div>
@@ -286,8 +287,12 @@ export default function HelpPage({ onNavigate }) {
           <HelpSection id="troubleshooting" icon={WarningCircle} eyebrow="09 · TROUBLESHOOTING" title="문제가 생겼을 때">
             <div className="help-faq-list">
               <details>
-                <summary>지도가 목업 이미지로만 보입니다.</summary>
-                <p>맵 생성 또는 순찰 모드가 실행 중인지 확인하고, 지도 상단의 데이터 상태가 ROS /map인지 확인합니다. 서버 연결이 끊겼다면 백엔드와 ROS 브리지를 다시 확인하세요.</p>
+                <summary>지도 연결 필요 화면이 표시됩니다.</summary>
+                <p>정적 목업 지도는 더 이상 표시하지 않습니다. 맵 생성 또는 순찰 모드가 실행 중인지 확인하고, 지도 상단의 데이터 상태가 ROS /map인지 확인합니다. 계속 연결 필요 상태라면 백엔드와 ROS 브리지를 다시 확인하세요.</p>
+              </details>
+              <details>
+                <summary>Overview 배터리가 데이터 없음으로 표시됩니다.</summary>
+                <p>Robot의 Yahboom <code>/voltage</code> 토픽과 <code>/hazard_guard/battery</code> 변환 노드, FastAPI ROS 브리지를 순서대로 확인합니다. 마지막 배터리 메시지 이후 5초가 지나면 이전 수치를 유지하지 않고 데이터 없음으로 전환됩니다.</p>
               </details>
               <details>
                 <summary>가상 조작기 버튼이 비활성화되어 있습니다.</summary>
