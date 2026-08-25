@@ -67,6 +67,7 @@ function SpatialMapOverlay({
       y: Math.min(first.y, second.y),
       width: Math.abs(first.x - second.x),
       height: Math.abs(first.y - second.y),
+      clipId: `equipment-roi-${String(item.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`,
     };
   }).filter(Boolean);
 
@@ -85,6 +86,11 @@ function SpatialMapOverlay({
         <filter id="robot-shadow" x="-80%" y="-80%" width="260%" height="260%">
           <feDropShadow dx="0" dy="1" stdDeviation="1.2" floodColor="#173e68" floodOpacity=".35" />
         </filter>
+        {equipmentAreas.map(({ clipId, x, y, width, height }) => (
+          <clipPath id={clipId} key={clipId}>
+            <rect x={x + 0.5} y={y + 0.5} width={Math.max(width - 1, 0)} height={Math.max(height - 1, 0)} />
+          </clipPath>
+        ))}
       </defs>
 
       {layers.trail && trail.length > 1 && (
@@ -101,7 +107,7 @@ function SpatialMapOverlay({
         />
       )}
 
-      {equipmentAreas.map(({ item, x, y, width, height }) => (
+      {equipmentAreas.map(({ item, x, y, width, height, clipId }) => (
         <g
           key={item.id}
           className={`equipment-map-roi ${item.id === selectedEquipmentId ? "selected" : ""} ${item.enabled ? "enabled" : "disabled"}`}
@@ -110,8 +116,20 @@ function SpatialMapOverlay({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => onEquipmentSelect?.(item.id)}
         >
+          <title>{item.display_name}</title>
           <rect x={x} y={y} width={Math.max(width, 1)} height={Math.max(height, 1)} rx="1" />
-          {detail && <text x={x + 1.5} y={y + 4}>{item.display_name}</text>}
+          {detail && (
+            <text
+              x={x + width / 2}
+              y={y + height / 2}
+              clipPath={`url(#${clipId})`}
+              textAnchor="middle"
+              dominantBaseline="central"
+              style={{ fontSize: `${Math.max(1.35, Math.min(2.4, height * 0.32, width / Math.max(item.display_name.length, 2)))}px` }}
+            >
+              {item.display_name}
+            </text>
+          )}
         </g>
       ))}
 

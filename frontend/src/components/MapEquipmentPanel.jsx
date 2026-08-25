@@ -10,6 +10,11 @@ import {
 import { CollapsibleCard } from "./Common.jsx";
 
 const CLEARANCE_M = 0.03;
+const ROI_STEP_M = 0.01;
+
+function roundedCoordinate(value) {
+  return Number(Number(value).toFixed(2));
+}
 
 function roiConflict(first, second) {
   return [0, 1, 2].every((axis) => (
@@ -67,6 +72,18 @@ export default function MapEquipmentPanel({
     };
     next[bound][axis] = Number(value);
     updateSelected({ roi: next });
+  };
+
+  const adjustRoi = (bound, axis, delta) => {
+    if (!selected) return;
+    const minimum = Number(selected.roi.min[axis]);
+    const maximum = Number(selected.roi.max[axis]);
+    const current = bound === "min" ? minimum : maximum;
+    const candidate = roundedCoordinate(current + delta);
+    const nextValue = bound === "min"
+      ? Math.min(candidate, roundedCoordinate(maximum - ROI_STEP_M))
+      : Math.max(candidate, roundedCoordinate(minimum + ROI_STEP_M));
+    updateRoi(bound, axis, nextValue);
   };
 
   const save = async () => {
@@ -151,11 +168,18 @@ export default function MapEquipmentPanel({
           </label>
           <div className="map-roi-grid">
             {["X", "Y", "Z"].map((axis, index) => (
-              <div key={axis}>
-                <strong>{axis} 범위 (m)</strong>
-                <input type="number" step="0.01" value={selected.roi.min[index]} aria-label={`${axis} 최소`} onChange={(event) => updateRoi("min", index, event.target.value)} />
-                <span>–</span>
-                <input type="number" step="0.01" value={selected.roi.max[index]} aria-label={`${axis} 최대`} onChange={(event) => updateRoi("max", index, event.target.value)} />
+              <div key={axis} className="map-roi-axis">
+                <strong>{axis} 범위 <small>m</small></strong>
+                {[["min", "최소"], ["max", "최대"]].map(([bound, label]) => (
+                  <label key={bound} className="map-roi-bound">
+                    <span>{label}</span>
+                    <div className="map-roi-stepper">
+                      <button type="button" aria-label={`${axis} ${label} 0.01m 감소`} onClick={() => adjustRoi(bound, index, -ROI_STEP_M)}>−</button>
+                      <input type="number" inputMode="decimal" step="0.01" value={Number(selected.roi[bound][index]).toFixed(2)} aria-label={`${axis} ${label}`} onChange={(event) => updateRoi(bound, index, event.target.value)} />
+                      <button type="button" aria-label={`${axis} ${label} 0.01m 증가`} onClick={() => adjustRoi(bound, index, ROI_STEP_M)}>+</button>
+                    </div>
+                  </label>
+                ))}
               </div>
             ))}
           </div>
@@ -171,7 +195,7 @@ export default function MapEquipmentPanel({
               <Trash size={15} />삭제
             </button>
             <button type="button" className="button primary" disabled={busy || overlapping.size > 0} onClick={save}>
-              <FloppyDisk size={15} />{busy ? "저장 중" : "젯슨에 저장"}
+              <FloppyDisk size={15} />{busy ? "저장 중" : "저장"}
             </button>
           </div>
         </div>

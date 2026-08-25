@@ -4,6 +4,9 @@ import test from "node:test";
 
 const settings = readFileSync(new URL("../src/pages/Settings.jsx", import.meta.url), "utf8");
 const equipment = readFileSync(new URL("../src/components/EquipmentSettings.jsx", import.meta.url), "utf8");
+const mapEquipment = readFileSync(new URL("../src/components/MapEquipmentPanel.jsx", import.meta.url), "utf8");
+const mapPanel = readFileSync(new URL("../src/components/MapPanel.jsx", import.meta.url), "utf8");
+const pointCloudPanel = readFileSync(new URL("../src/components/PointCloudPanel.jsx", import.meta.url), "utf8");
 const equipmentModel = readFileSync(new URL("../src/equipmentSettingsModel.js", import.meta.url), "utf8");
 const diagnostics = readFileSync(new URL("../src/components/SensorDiagnostics.jsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -30,6 +33,22 @@ test("equipment editing provides safe confirmation and portable settings", () =>
   assert.match(equipment, /syncStatus\.error/);
   assert.match(styles, /\.equipment-list \{[^}]*overflow-y: auto/);
   assert.match(styles, /\.equipment-list-card \{[^}]*height: 100%/);
+});
+
+test("spatial equipment editing stays in the map workflow", () => {
+  assert.doesNotMatch(equipment, /EquipmentRoiPicker/);
+  assert.doesNotMatch(equipment, /설비 위치 · ROI/);
+  assert.match(mapEquipment, /ROI_STEP_M = 0\.01/);
+  assert.match(mapEquipment, /0\.01m 감소/);
+  assert.match(mapEquipment, /0\.01m 증가/);
+  assert.match(styles, /\.map-equipment-actions \{[^}]*justify-content: flex-end/);
+});
+
+test("equipment labels are bounded in 2D and rendered in 3D", () => {
+  assert.match(mapPanel, /clipPath={`url\(#\$\{clipId\}\)`}/);
+  assert.match(mapPanel, /dominantBaseline="central"/);
+  assert.match(pointCloudPanel, /createEquipmentLabelSprite/);
+  assert.match(pointCloudPanel, /isEquipmentLabel/);
 });
 
 test("sensor diagnostics distinguishes current requirements and TF state", () => {
