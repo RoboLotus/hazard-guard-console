@@ -33,6 +33,9 @@ function SpatialMapOverlay({
   incidentMarkers = [],
   selectedWaypointId = null,
   onWaypointSelect,
+  equipment = [],
+  selectedEquipmentId = null,
+  onEquipmentSelect,
 }) {
   const pose = spatialState?.pose;
   const poseMatchesMap = pose?.available && matchesMapFrame(pose, mapSpec);
@@ -54,6 +57,18 @@ function SpatialMapOverlay({
     .filter((marker) => matchesMapFrame(marker, mapSpec))
     .map((marker) => ({ marker, point: mapToGrid(marker.x, marker.y, mapSpec) }))
     .filter((item) => item.point);
+  const equipmentAreas = equipment.map((item) => {
+    const first = mapToGrid(item.roi.min[0], item.roi.min[1], mapSpec);
+    const second = mapToGrid(item.roi.max[0], item.roi.max[1], mapSpec);
+    if (!first || !second) return null;
+    return {
+      item,
+      x: Math.min(first.x, second.x),
+      y: Math.min(first.y, second.y),
+      width: Math.abs(first.x - second.x),
+      height: Math.abs(first.y - second.y),
+    };
+  }).filter(Boolean);
 
   return (
     <svg
@@ -85,6 +100,20 @@ function SpatialMapOverlay({
           points={waypointPoints.map(({ point }) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")}
         />
       )}
+
+      {equipmentAreas.map(({ item, x, y, width, height }) => (
+        <g
+          key={item.id}
+          className={`equipment-map-roi ${item.id === selectedEquipmentId ? "selected" : ""} ${item.enabled ? "enabled" : "disabled"}`}
+          role="button"
+          aria-label={`설비 ROI ${item.display_name}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => onEquipmentSelect?.(item.id)}
+        >
+          <rect x={x} y={y} width={Math.max(width, 1)} height={Math.max(height, 1)} rx="1" />
+          {detail && <text x={x + 1.5} y={y + 4}>{item.display_name}</text>}
+        </g>
+      ))}
 
       {poseMatchesMap && sensors.map((sensor) => (
         layers[sensor.id] ? (
@@ -255,6 +284,9 @@ export default function MapPanel({
   incidentMarkers = [],
   selectedWaypointId = null,
   onWaypointSelect,
+  equipment = [],
+  selectedEquipmentId = null,
+  onEquipmentSelect,
   waitingForMap = false,
   waitingLabel = "새 SLAM 지도 수신 대기 중",
   allowMockFallback = true,
@@ -435,6 +467,9 @@ export default function MapPanel({
                   incidentMarkers={incidentMarkers}
                   selectedWaypointId={selectedWaypointId}
                   onWaypointSelect={onWaypointSelect}
+                  equipment={equipment}
+                  selectedEquipmentId={selectedEquipmentId}
+                  onEquipmentSelect={onEquipmentSelect}
                 />
               </>
             )}

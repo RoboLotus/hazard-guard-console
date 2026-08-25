@@ -26,14 +26,12 @@ import {
 } from "../spatial.js";
 import {
   activeWaypoints,
-  clearWaypointRoute,
   createWaypoint,
-  loadWaypointRoute,
   moveWaypoint,
   routeMapSignature,
-  saveWaypointRoute,
   shiftWaypoint,
 } from "../waypoints.js";
+import MapEquipmentPanel from "../components/MapEquipmentPanel.jsx";
 import {
   buildPatrolSchedulePayload,
   normalizePatrolSchedule,
@@ -70,19 +68,20 @@ export default function MapPage({
   const [goalCandidate, setGoalCandidate] = useState(null);
   const activeWorldId = systemMode?.active_world_id || "facility_map";
   const physicalTarget = systemMode?.deployment_target === "physical";
-  const initialRoute = loadWaypointRoute(activeWorldId);
-  const [waypoints, setWaypoints] = useState(() => initialRoute?.waypoints || []);
+  const [waypoints, setWaypoints] = useState([]);
   const [patrolSchedule, setPatrolSchedule] = useState(
-    () => normalizePatrolSchedule(initialRoute?.schedule),
+    () => normalizePatrolSchedule(null),
   );
-  const [savedMapSignature, setSavedMapSignature] = useState(
-    () => initialRoute?.mapSignature || null,
-  );
+  const [savedMapSignature, setSavedMapSignature] = useState(null);
   const [selectedWaypointId, setSelectedWaypointId] = useState(null);
   const [repositionWaypointId, setRepositionWaypointId] = useState(null);
   const [missionStatus, setMissionStatus] = useState(null);
   const [navigationStatus, setNavigationStatus] = useState(null);
   const [equipmentOptions, setEquipmentOptions] = useState([]);
+  const [equipmentDocument, setEquipmentDocument] = useState(null);
+  const [spatialContext, setSpatialContext] = useState(null);
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState(null);
+  const [equipmentPointMode, setEquipmentPointMode] = useState(false);
   const [routeBusy, setRouteBusy] = useState(false);
   const [layers, setLayers] = useState({
     depth: true,
@@ -152,16 +151,15 @@ export default function MapPage({
   };
 
   useEffect(() => {
-    const route = loadWaypointRoute(activeWorldId);
-    setWaypoints(route?.waypoints || []);
-    setPatrolSchedule(normalizePatrolSchedule(route?.schedule));
-    setSavedMapSignature(route?.mapSignature || null);
+    setWaypoints([]);
+    setPatrolSchedule(normalizePatrolSchedule(null));
+    setSavedMapSignature(null);
     setSelectedWaypointId(null);
     setRepositionWaypointId(null);
     setGoalCandidate(null);
     setGoalMode(false);
     setSelected3dSession(null);
-  }, [activeWorldId]);
+  }, [activeWorldId, systemMode?.active_map_session_id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -173,16 +171,47 @@ export default function MapPage({
         });
         if (!response.ok) return;
         const payload = await response.json();
-        setEquipmentOptions(
-          (payload.equipment || []).filter((equipment) => equipment.enabled),
-        );
+        setEquipmentDocument(payload);
+        setSpatialContext(payload.spatial_context || null);
+        setEquipmentOptions((payload.equipment || []).filter((equipment) => equipment.enabled));
+        setSelectedEquipmentId((current) => (
+          (payload.equipment || []).some((item) => item.id === current)
+            ? current
+            : payload.equipment?.[0]?.id || null
+        ));
       } catch (error) {
         if (error.name !== "AbortError") setEquipmentOptions([]);
       }
     };
     void loadEquipment();
     return () => controller.abort();
-  }, []);
+  }, [activeWorldId, systemMode?.active_map_session_id]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadRoute = async () => {
+      try {
+        const response = await fetch("/api/v1/navigation/route/config", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const payload = await response.json();
+        setSpatialContext((current) => payload.spatial_context || current);
+        const route = payload.route?.route;
+        if (route) {
+          setWaypoints(route.waypoints || []);
+          setPatrolSchedule(normalizePatrolSchedule(route));
+          setSavedMapSignature(currentMapSignature);
+          return;
+        }
+      } catch (error) {
+        if (error.name !== "AbortError") notify("저장된 순찰 경로를 불러오지 못했습니다.", "warning");
+      }
+    };
+    void loadRoute();
+    return () => controller.abort();
+  }, [activeWorldId, systemMode?.active_map_session_id]);
 
   useEffect(() => {
     let disposed = false;
@@ -215,6 +244,31 @@ export default function MapPage({
   }, []);
 
   const selectGoal = (candidate) => {
+    if (equipmentPointMode) {
+      setEquipmentPointMode(false);
+      setGoalMode(false);
+      setGoalCandidate(null);
+      setEquipmentDocument((current) => {
+        if (!current || candidate.mapX === null || candidate.mapY === null) return current;
+        const id = globalThis.crypto?.randomUUID?.() || `equipment-${Date.now()}`;
+        const equipment = {
+          id,
+          display_name: `설비 ${(current.equipment?.length || 0) + 1}`,
+          enabled: true,
+          critical_temperature_c: 80,
+          adaptive_delta_c: 10,
+          adaptive_threshold_enabled: true,
+          roi: {
+            min: [candidate.mapX - 0.2, candidate.mapY - 0.2, 0],
+            max: [candidate.mapX + 0.2, candidate.mapY + 0.2, 0.5],
+          },
+        };
+        setSelectedEquipmentId(id);
+        return { ...current, equipment: [...(current.equipment || []), equipment] };
+      });
+      notify("설비 중심을 지정했습니다. 3D 지도에서 ROI 범위를 확인한 뒤 저장하세요.", "info");
+      return;
+    }
     if (repositionWaypointId) {
       setWaypoints((current) => current.map((waypoint) => (
         waypoint.id === repositionWaypointId
@@ -267,6 +321,7 @@ export default function MapPage({
   };
 
   const beginReposition = (id) => {
+    setEquipmentPointMode(false);
     setSelectedWaypointId(id);
     setRepositionWaypointId(id);
     setGoalCandidate(null);
@@ -275,6 +330,7 @@ export default function MapPage({
   };
 
   const toggleWaypointMode = () => {
+    setEquipmentPointMode(false);
     if (mapDimension !== "2d") {
       setMapDimension("2d");
       setGoalMode(true);
@@ -289,27 +345,45 @@ export default function MapPage({
     if (!next) setRepositionWaypointId(null);
   };
 
-  const persistRoute = () => {
-    saveWaypointRoute(
-      waypoints,
-      mapSpec,
-      "기본 순찰 경로",
-      activeWorldId,
-      patrolSchedule,
-    );
-    setSavedMapSignature(currentMapSignature);
-    notify("현재 지도 버전과 함께 순찰 경로를 브라우저에 저장했습니다.");
+  const routePayload = () => ({
+    name: "기본 순찰 경로",
+    world_id: spatialContext?.world_id,
+    map_session_id: spatialContext?.map_session_id,
+    frame_id: "map",
+    return_to_start: false,
+    ...buildPatrolSchedulePayload(patrolSchedule),
+    waypoints,
+  });
+
+  const persistRoute = async () => {
+    if (!spatialContext?.registration_ready) {
+      notify(spatialContext?.message || "2D·3D 지도 저장 후 경로를 등록하세요.", "warning");
+      return;
+    }
+    try {
+      const response = await fetch("/api/v1/navigation/route/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(routePayload()),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "경로 저장 실패");
+      setSavedMapSignature(currentMapSignature);
+      notify("순찰 경로를 젯슨의 현재 지도 세션에 저장했습니다.");
+    } catch (error) {
+      notify(error.message, "warning");
+    }
   };
 
-  const clearRoute = () => {
+  const clearRoute = async () => {
     setWaypoints([]);
     setSelectedWaypointId(null);
     setGoalCandidate(null);
     setGoalMode(false);
     setRepositionWaypointId(null);
     setSavedMapSignature(null);
-    clearWaypointRoute(activeWorldId);
-    notify("모든 웨이포인트를 삭제했습니다.", "info");
+    await fetch("/api/v1/navigation/route/config", { method: "DELETE" }).catch(() => null);
+    notify("현재 지도 세션의 모든 웨이포인트를 삭제했습니다.", "info");
   };
 
   const recommendRoute = async () => {
@@ -325,6 +399,8 @@ export default function MapPage({
           frame_id: mapSpec.frame_id || "map",
           return_to_start: false,
           waypoints: enabled,
+          world_id: spatialContext?.world_id,
+          map_session_id: spatialContext?.map_session_id,
         }),
       });
       const result = await response.json();
@@ -373,6 +449,8 @@ export default function MapPage({
           frame_id: mapSpec.frame_id || "map",
           return_to_start: false,
           ...schedulePayload,
+          world_id: spatialContext?.world_id,
+          map_session_id: spatialContext?.map_session_id,
           waypoints: enabled,
         }),
       });
@@ -414,9 +492,28 @@ export default function MapPage({
   const changeMapDimension = (dimension) => {
     setMapDimension(dimension);
     if (dimension !== "2d") {
+      setEquipmentPointMode(false);
       setGoalMode(false);
       setGoalCandidate(null);
       setRepositionWaypointId(null);
+    }
+  };
+
+  const openEquipment3d = async () => {
+    setMapDimension("3d");
+    try {
+      const response = await fetch(
+        `/api/v1/system/maps?world_id=${encodeURIComponent(activeWorldId)}`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) return;
+      const payload = await response.json();
+      const active = (payload.sessions || []).find((item) => (
+        item.id === spatialContext?.map_session_id && item.cloud_ready
+      ));
+      if (active) setSelected3dSession(active);
+    } catch {
+      notify("저장된 3D PLY를 불러오지 못했습니다.", "warning");
     }
   };
 
@@ -450,6 +547,9 @@ export default function MapPage({
             goalMode={goalMode}
             goalCandidate={goalCandidate}
             waypoints={waypoints}
+            equipment={equipmentDocument?.equipment || []}
+            selectedEquipmentId={selectedEquipmentId}
+            onEquipmentSelect={setSelectedEquipmentId}
             selectedWaypointId={selectedWaypointId}
             onWaypointSelect={setSelectedWaypointId}
             incidentMarkers={beaconMarkers}
@@ -466,6 +566,8 @@ export default function MapPage({
               archivedSession={selected3dSession}
               spatialState={spatialState}
               variant={mapDimension === "thermal" ? "thermal" : "rgb"}
+              equipment={equipmentDocument?.equipment || []}
+              selectedEquipmentId={selectedEquipmentId}
             />
           </Suspense>
         )}
@@ -475,6 +577,29 @@ export default function MapPage({
             busy={modeBusy}
             onChange={onModeChange}
             onInitializeLocalization={onInitializeLocalization}
+          />
+          <MapEquipmentPanel
+            document={equipmentDocument}
+            spatialContext={spatialContext}
+            selectedId={selectedEquipmentId}
+            pointMode={equipmentPointMode}
+            onSelect={setSelectedEquipmentId}
+            onChange={setEquipmentDocument}
+            onStartPoint={() => {
+              setMapDimension("2d");
+              setEquipmentPointMode(true);
+              setGoalMode(true);
+              setGoalCandidate(null);
+              setRepositionWaypointId(null);
+              notify("2D 지도에서 설비 중심을 클릭하세요.", "info");
+            }}
+            onOpen3d={openEquipment3d}
+            onSaved={(payload) => {
+              setEquipmentDocument(payload);
+              setEquipmentOptions((payload.equipment || []).filter((item) => item.enabled));
+              notify("설비 ROI를 현재 지도 세션에 저장했습니다.");
+            }}
+            notify={notify}
           />
           <WaypointMissionPanel
             waypoints={waypoints}

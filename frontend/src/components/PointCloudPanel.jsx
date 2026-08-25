@@ -127,6 +127,8 @@ export default function PointCloudPanel({
   archivedSession,
   spatialState,
   variant = "rgb",
+  equipment = [],
+  selectedEquipmentId = null,
 }) {
   const spec = VARIANTS[variant] || VARIANTS.rgb;
   const archived = spec.supportsArchive ? archivedSession : null;
@@ -186,6 +188,9 @@ export default function PointCloudPanel({
     scene.add(points);
     const robotMarker = createRobotMarker();
     scene.add(robotMarker.group);
+    const equipmentGroup = new THREE.Group();
+    equipmentGroup.name = "hazard-guard-equipment-rois";
+    scene.add(equipmentGroup);
     sceneRef.current = {
       camera,
       controls,
@@ -194,6 +199,7 @@ export default function PointCloudPanel({
       points,
       renderer,
       robotMarker,
+      equipmentGroup,
     };
     fitRef.current = () => fitCameraToCloud(camera, controls, geometry);
 
@@ -236,6 +242,42 @@ export default function PointCloudPanel({
     currentScene.material.needsUpdate = true;
     currentScene.renderer.domElement.setAttribute("aria-label", spec.ariaLabel);
   }, [spec.ariaLabel, variant]);
+
+  useEffect(() => {
+    const group = sceneRef.current?.equipmentGroup;
+    if (!group) return;
+    const clear = () => {
+      while (group.children.length) {
+        const child = group.children[0];
+        group.remove(child);
+        child.geometry?.dispose();
+        child.material?.dispose();
+      }
+    };
+    clear();
+    equipment.forEach((item) => {
+      const minimum = item.roi?.min;
+      const maximum = item.roi?.max;
+      if (!minimum || !maximum) return;
+      const size = maximum.map((value, axis) => Number(value) - Number(minimum[axis]));
+      if (size.some((value) => !Number.isFinite(value) || value <= 0)) return;
+      const center = maximum.map((value, axis) => (Number(value) + Number(minimum[axis])) / 2);
+      const selected = item.id === selectedEquipmentId;
+      const geometry = new THREE.BoxGeometry(size[0], size[1], size[2]);
+      const edges = new THREE.EdgesGeometry(geometry);
+      geometry.dispose();
+      const material = new THREE.LineBasicMaterial({
+        color: selected ? 0xffc857 : item.enabled ? 0x56c596 : 0x8593a3,
+        transparent: true,
+        opacity: selected ? 1 : 0.72,
+      });
+      const box = new THREE.LineSegments(edges, material);
+      box.position.set(center[0], center[1], center[2]);
+      box.userData.equipmentId = item.id;
+      group.add(box);
+    });
+    return clear;
+  }, [equipment, selectedEquipmentId]);
 
   useEffect(() => {
     if (variant !== "thermal") return undefined;
