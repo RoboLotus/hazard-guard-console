@@ -408,7 +408,12 @@ class RobotTelemetry(BaseModel):
     timestamp: str
     robot_id: str
     mode: str
-    battery_percent: float
+    battery_percent: float | None = None
+    battery_voltage: float | None = None
+    battery_source: str = "unavailable"
+    battery_received_at: str | None = None
+    battery_stale: bool = True
+    battery_age_sec: float | None = None
     speed_mps: float
     network_quality: str
     network_rssi_dbm: int

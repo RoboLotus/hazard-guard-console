@@ -56,7 +56,9 @@ def test_robot_status_exposes_dashboard_telemetry_contract():
     assert response.status_code == 200
     payload = response.json()
     assert payload["robot_id"] == "rosmaster-m1-mock"
-    assert isinstance(payload["battery_percent"], float)
+    assert payload["battery_percent"] is None
+    assert payload["battery_voltage"] is None
+    assert payload["battery_stale"] is True
     assert payload["lidar_status"] == "normal"
     assert payload["person_safety"]["state_name"] == "CLEAR"
 
