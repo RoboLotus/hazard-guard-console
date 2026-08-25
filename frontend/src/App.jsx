@@ -13,6 +13,7 @@ import Settings from "./pages/Settings.jsx";
 import VideoPage from "./pages/VideoPage.jsx";
 import RosbagPage from "./pages/RosbagPage.jsx";
 import { mergeIncidentEvents, normalizeDispenserBattery } from "./incidents.js";
+import { TELEMETRY_STALE_AFTER_MS } from "./telemetry.js";
 
 export function App() {
   const [active, setActive] = useState("overview");
@@ -20,6 +21,7 @@ export function App() {
   const [toast, setToast] = useState(null);
   const [apiOnline, setApiOnline] = useState(false);
   const [telemetry, setTelemetry] = useState(null);
+  const [telemetryLive, setTelemetryLive] = useState(false);
   const [mediaStatus, setMediaStatus] = useState(null);
   const [spatialState, setSpatialState] = useState(fallbackSpatialState);
   const [systemMode, setSystemMode] = useState({
@@ -137,6 +139,7 @@ export function App() {
     let disposed = false;
     let socket;
     let reconnectTimer;
+    let staleTimer;
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(`${protocol}//${window.location.host}/ws/spatial`);
@@ -209,7 +212,14 @@ export function App() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry`);
       socket.onmessage = ({ data }) => {
-        try { setTelemetry(JSON.parse(data)); }
+        try {
+          setTelemetry(JSON.parse(data));
+          setTelemetryLive(true);
+          window.clearTimeout(staleTimer);
+          staleTimer = window.setTimeout(() => {
+            if (!disposed) setTelemetryLive(false);
+          }, TELEMETRY_STALE_AFTER_MS);
+        }
         catch { /* ignore malformed prototype telemetry */ }
       };
       socket.onerror = () => socket.close();
@@ -221,6 +231,7 @@ export function App() {
     return () => {
       disposed = true;
       window.clearTimeout(reconnectTimer);
+      window.clearTimeout(staleTimer);
       socket?.close();
     };
   }, []);
@@ -430,8 +441,8 @@ export function App() {
         pendingEvents={visibleEvents.filter((event) => event.status === "new").length}
       />
       <main className="main-content">
-        {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} dispenserBattery={dispenserBattery} incidents={incidents} />}
-        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} incidents={incidents} />}
+        {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} telemetryLive={telemetryLive} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} dispenserBattery={dispenserBattery} incidents={incidents} />}
+        {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} telemetryLive={telemetryLive} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} incidents={incidents} />}
         {active === "events" && <EventsPage events={visibleEvents} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} dispenserBattery={dispenserBattery} onDecideIncident={decideIncident} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={visibleEvents} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}
