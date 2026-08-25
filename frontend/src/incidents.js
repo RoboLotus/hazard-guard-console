@@ -35,6 +35,22 @@ function safeDate(value) {
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+function incidentVisitIndex(incident) {
+  const explicit = Number(incident?.visit_index);
+  if (Number.isInteger(explicit) && explicit >= 1) return explicit;
+  const match = String(incident?.incident_id || "").match(/:visit-(\d+)$/);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
+}
+
+function equipmentVisitKey(equipmentId, visitIndex) {
+  const equipment = String(equipmentId || "").trim();
+  const visit = Number(visitIndex);
+  if (!equipment || !Number.isInteger(visit) || visit < 1) return null;
+  return `${equipment}:visit-${visit}`;
+}
+
 export function incidentToEvent(incident) {
   const date = safeDate(incident.observed_at || incident.created_at);
   const temperature = Number(incident.temperature_c);
@@ -62,6 +78,8 @@ export function incidentToEvent(incident) {
     acknowledged: incident.state !== "approval_required",
     assignee: incident.operator_id || "관리자 대기",
     note: incidentStateLabels[incident.state] || "Robot 임무 관리자 상태를 확인하세요.",
+    equipmentId: incident.equipment_id || null,
+    visitIndex: incidentVisitIndex(incident),
     incident,
   };
 }
@@ -71,11 +89,22 @@ export function mergeIncidentEvents(thermalEvents = [], incidents = []) {
   const authoritativeDetectionIds = new Set(
     incidents.map((incident) => incident.detection_id).filter(Boolean),
   );
+  const authoritativeVisitKeys = new Set(
+    incidents
+      .map((incident) => equipmentVisitKey(
+        incident.equipment_id,
+        incidentVisitIndex(incident),
+      ))
+      .filter(Boolean),
+  );
   return [
     ...incidentEvents,
-    ...thermalEvents.filter((event) => (
-      !authoritativeDetectionIds.has(event.detectionId || event.id)
-    )),
+    ...thermalEvents.filter((event) => {
+      const detectionId = event.detectionId || event.id;
+      const visitKey = equipmentVisitKey(event.equipmentId, event.visitIndex);
+      return !authoritativeDetectionIds.has(detectionId)
+        && (!visitKey || !authoritativeVisitKeys.has(visitKey));
+    }),
   ];
 }
 
