@@ -63,19 +63,73 @@ class ThermalEquipmentSettings(BaseModel):
         return self
 
 
+EQUIPMENT_ROI_CLEARANCE_M = 0.03
+
+
+def equipment_rois_conflict(
+    first: ThermalEquipmentSettings,
+    second: ThermalEquipmentSettings,
+    *,
+    clearance_m: float = EQUIPMENT_ROI_CLEARANCE_M,
+) -> bool:
+    """Return whether two enabled AABBs overlap or violate their clearance."""
+
+    return all(
+        first.roi.maximum[axis] + clearance_m > second.roi.minimum[axis]
+        and second.roi.maximum[axis] + clearance_m > first.roi.minimum[axis]
+        for axis in range(3)
+    )
+
+
 class ThermalEquipmentSettingsDocument(BaseModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
+    world_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
+    map_session_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
+    frame_id: Literal["map"] = "map"
+    geometry_fingerprint: str | None = Field(
+        None,
+        min_length=16,
+        max_length=128,
+        pattern=r"^[A-Fa-f0-9]+$",
+    )
     equipment: list[ThermalEquipmentSettings] = Field(
-        ..., min_length=1, max_length=100
+        ..., max_length=100
     )
 
     @model_validator(mode="after")
     def validate_equipment(self):
+        if bool(self.world_id) != bool(self.map_session_id):
+            raise ValueError(
+                "world_id and map_session_id must be supplied together"
+            )
+        if self.schema_version == 2 and not self.world_id and self.equipment:
+            raise ValueError("unbound schema version 2 settings must be empty")
         identifiers = [item.id for item in self.equipment]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("equipment ids must be unique")
-        if not any(item.enabled for item in self.equipment):
+        if self.schema_version == 1 and not any(
+            item.enabled for item in self.equipment
+        ):
             raise ValueError("at least one equipment item must be enabled")
+        enabled = [item for item in self.equipment if item.enabled]
+        for index, first in enumerate(enabled):
+            for second in enabled[index + 1 :]:
+                if equipment_rois_conflict(first, second):
+                    raise ValueError(
+                        "enabled equipment ROIs overlap or are closer than "
+                        f"{EQUIPMENT_ROI_CLEARANCE_M:.2f} m: "
+                        f"{first.id!r}, {second.id!r}"
+                    )
         return self
 
 class MockCommand(BaseModel):
@@ -247,6 +301,18 @@ class RouteWaypoint(BaseModel):
 
 class NavigationRoute(BaseModel):
     name: str = Field("기본 순찰 경로", min_length=1, max_length=80)
+    world_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
+    map_session_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
     frame_id: str = Field("map", pattern=r"^[A-Za-z][A-Za-z0-9_/]*$")
     return_to_start: bool = False
     repeat_mode: Literal["once", "count", "until_time", "forever"] = "once"
@@ -276,6 +342,38 @@ class NavigationRoute(BaseModel):
             effective_start = self.start_at or datetime.now(timezone.utc)
             if self.end_at <= effective_start:
                 raise ValueError("end_at must be later than start_at")
+        return self
+
+
+class StoredNavigationRoute(BaseModel):
+    schema_version: Literal[1] = 1
+    world_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
+    map_session_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
+    saved_at: datetime
+    route: NavigationRoute
+
+    @model_validator(mode="after")
+    def validate_map_binding(self):
+        if self.route.frame_id != "map":
+            raise ValueError("stored routes must use the map frame")
+        if self.route.world_id not in {None, self.world_id}:
+            raise ValueError("route world_id does not match its stored scope")
+        if self.route.map_session_id not in {None, self.map_session_id}:
+            raise ValueError(
+                "route map_session_id does not match its stored scope"
+            )
+        self.route.world_id = self.world_id
+        self.route.map_session_id = self.map_session_id
         return self
 
 

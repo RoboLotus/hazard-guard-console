@@ -284,6 +284,53 @@ class SystemModeManager:
             "sessions": self._world_catalog.sessions(selected_id),
         }
 
+    @property
+    def map_root(self) -> Path:
+        return self._world_catalog.map_root
+
+    def spatial_registration_context(self) -> dict[str, Any]:
+        """Describe whether equipment and routes may bind to the active map."""
+
+        world_id = self._active_world["id"]
+        session = next(
+            (
+                item
+                for item in self._world_catalog.sessions(world_id)
+                if item.get("id") == self._active_map_session_id
+                and item.get("active")
+            ),
+            None,
+        )
+        map_ready = bool(session and session.get("available"))
+        cloud_ready = bool(
+            session
+            and session.get("cloud_ready")
+            and session.get("cloud_frame_id") == "map"
+        )
+        if not map_ready:
+            state = "map_required"
+            message = "2D 지도를 완성하고 저장한 뒤 등록할 수 있습니다."
+        elif not cloud_ready:
+            state = "cloud_required"
+            message = "저장된 지도에서 3D 수집과 PLY 저장을 완료하세요."
+        else:
+            state = "ready"
+            message = "설비 ROI와 순찰 웨이포인트를 등록할 수 있습니다."
+        return {
+            "world_id": world_id,
+            "map_session_id": session.get("id") if session else None,
+            "frame_id": "map",
+            "map_ready": map_ready,
+            "cloud_ready": cloud_ready,
+            "registration_ready": map_ready and cloud_ready,
+            "state": state,
+            "message": message,
+            "geometry_fingerprint": (
+                session.get("thermal_layer_fingerprint") if session else None
+            ),
+            "cloud_path": session.get("cloud_path") if session else None,
+        }
+
     def _active_map_session(self) -> dict[str, Any] | None:
         return next(
             (

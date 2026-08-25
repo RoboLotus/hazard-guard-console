@@ -68,6 +68,11 @@ from .settings_store import (
     ThresholdSettingsStore,
     default_thermal_equipment_settings,
 )
+from .spatial_config import (
+    MapSpatialConfigStore,
+    SpatialContextUnavailableError,
+    empty_equipment_document,
+)
 
 
 thermal_map_status_store.reset(
@@ -115,7 +120,10 @@ app.add_middleware(
 
 threshold_store = ThresholdSettingsStore()
 performance_report_store = PerformanceReportStore()
-equipment_store = ThermalEquipmentSettingsStore()
+equipment_store = MapSpatialConfigStore(
+    system_mode_manager.spatial_registration_context,
+    system_mode_manager.map_root,
+)
 try:
     dispenser_request_store: DispenserRequestStore | None = DispenserRequestStore()
     dispenser_request_store_error: str | None = None
@@ -278,10 +286,30 @@ def equipment_settings_response(
         **settings.model_dump(by_alias=True),
         "runtime": current_runtime,
         "metadata": equipment_store.metadata(),
+        "spatial_context": (
+            equipment_store.context()
+            if isinstance(equipment_store, MapSpatialConfigStore)
+            else {"registration_ready": True, "state": "legacy"}
+        ),
     }
 
 
 def validate_route_equipment(route: NavigationRoute) -> None:
+    if isinstance(equipment_store, MapSpatialConfigStore):
+        context = equipment_store.context()
+        route_is_bound = bool(route.world_id or route.map_session_id)
+        if route_is_bound and not context.get("registration_ready"):
+            raise HTTPException(status_code=409, detail=context["message"])
+        if route_is_bound and (
+            route.world_id not in {None, context["world_id"]} or route.map_session_id not in {
+            None,
+            context["map_session_id"],
+            }
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="웨이포인트가 현재 선택한 지도 세션과 일치하지 않습니다.",
+            )
     configured = {item.id: item for item in equipment_store.get().equipment}
     for waypoint in route.waypoints:
         if not waypoint.equipment_id:
@@ -604,6 +632,10 @@ def update_system_mode(request: SystemModeRequest):
         )
     elif request.mode in {"patrol", "rgbd_mapping"}:
         spatial_store.reset_for_localization()
+        current_equipment = equipment_store.get()
+        ros_bridge.publish_thermal_equipment_config(
+            current_equipment.model_dump(by_alias=True)
+        )
     return result
 
 
@@ -667,6 +699,9 @@ def select_simulation_world(request: WorldSelectionRequest):
     media_store.clear("map")
     spatial_store.reset_for_mapping(f"{request.world_id}:waiting")
     reset_thermal_map_stream(None)
+    ros_bridge.publish_thermal_equipment_config(
+        equipment_store.get().model_dump(by_alias=True)
+    )
     return result
 
 
@@ -684,6 +719,9 @@ def select_active_system_map(request: MapSelectionRequest):
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
     reset_thermal_map_stream(None)
+    ros_bridge.publish_thermal_equipment_config(
+        equipment_store.get().model_dump(by_alias=True)
+    )
     return result
 
 
@@ -979,6 +1017,13 @@ def get_equipment_settings():
 
 @app.get("/api/v1/settings/equipment/defaults")
 def get_default_equipment_settings():
+    if isinstance(equipment_store, MapSpatialConfigStore):
+        context = equipment_store.context()
+        return empty_equipment_document(
+            context.get("world_id"),
+            context.get("map_session_id"),
+            context.get("geometry_fingerprint"),
+        ).model_dump(by_alias=True)
     return default_thermal_equipment_settings().model_dump(by_alias=True)
 
 
@@ -991,7 +1036,10 @@ def get_equipment_settings_history():
 def update_equipment_settings(
     settings: ThermalEquipmentSettingsDocument,
 ):
-    saved = equipment_store.save(settings, reason="manual")
+    try:
+        saved = equipment_store.save(settings, reason="manual")
+    except SpatialContextUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     runtime = ros_bridge.publish_thermal_equipment_config(
         saved.model_dump(by_alias=True)
     )
@@ -1010,7 +1058,10 @@ def apply_saved_equipment_settings():
 
 @app.post("/api/v1/settings/equipment/reset-defaults")
 def reset_equipment_settings():
-    saved = equipment_store.reset_defaults()
+    try:
+        saved = equipment_store.reset_defaults()
+    except SpatialContextUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     runtime = ros_bridge.publish_thermal_equipment_config(
         saved.model_dump(by_alias=True)
     )
@@ -1023,6 +1074,8 @@ def restore_equipment_settings(revision_id: str):
         saved = equipment_store.restore(revision_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="설정 이력을 찾을 수 없습니다.")
+    except SpatialContextUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     runtime = ros_bridge.publish_thermal_equipment_config(
         saved.model_dump(by_alias=True)
     )
@@ -1124,6 +1177,39 @@ def cancel_navigation_goal():
 @app.get("/api/v1/navigation/route/status")
 def navigation_route_status():
     return route_mission_store.snapshot()
+
+
+@app.get("/api/v1/navigation/route/config")
+def get_navigation_route_config():
+    if not isinstance(equipment_store, MapSpatialConfigStore):
+        return {"route": None, "spatial_context": {"registration_ready": True}}
+    stored = equipment_store.get_route()
+    return {
+        "route": stored.model_dump(mode="json") if stored else None,
+        "spatial_context": equipment_store.context(),
+    }
+
+
+@app.put("/api/v1/navigation/route/config")
+def save_navigation_route_config(route: NavigationRoute):
+    validate_route_equipment(route)
+    if not isinstance(equipment_store, MapSpatialConfigStore):
+        return {"route": route.model_dump()}
+    try:
+        stored = equipment_store.save_route(route)
+    except SpatialContextUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"route": stored.model_dump(mode="json")}
+
+
+@app.delete("/api/v1/navigation/route/config")
+def delete_navigation_route_config():
+    if not isinstance(equipment_store, MapSpatialConfigStore):
+        return {"deleted": False}
+    try:
+        return {"deleted": equipment_store.delete_route()}
+    except SpatialContextUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/v1/navigation/route/recommend")
