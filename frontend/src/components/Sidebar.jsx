@@ -24,7 +24,7 @@ export default function Sidebar({ active, onNavigate, pendingEvents }) {
       <div className="sidebar-main">
         <nav className="nav-primary">
           {navItems.map(({ id, label, icon: Icon, badge }) => (
-            <button key={id} type="button" className={`nav-item ${active === id ? "active" : ""}`} onClick={() => onNavigate(id)}>
+            <button key={id} type="button" className={`nav-item ${active === id ? "active" : ""}`} aria-label={label} title={label} onClick={() => onNavigate(id)}>
               <Icon size={20} weight={active === id ? "fill" : "regular"} />
               <span>{label}</span>
               {(id === "events" ? pendingEvents : badge) ? <span className="nav-badge">{id === "events" ? pendingEvents : badge}</span> : null}
@@ -33,11 +33,11 @@ export default function Sidebar({ active, onNavigate, pendingEvents }) {
         </nav>
       </div>
       <nav className="nav-secondary" aria-label="보조 메뉴">
-        <button type="button" className={`nav-item ${active === "settings" ? "active" : ""}`} onClick={() => onNavigate("settings")}>
+        <button type="button" className={`nav-item ${active === "settings" ? "active" : ""}`} aria-label="설정" title="설정" onClick={() => onNavigate("settings")}>
           <Gear size={20} weight={active === "settings" ? "fill" : "regular"} />
           <span>설정</span>
         </button>
-        <button type="button" className={`nav-item ${active === "help" ? "active" : ""}`} onClick={() => onNavigate("help")}>
+        <button type="button" className={`nav-item ${active === "help" ? "active" : ""}`} aria-label="도움말" title="도움말" onClick={() => onNavigate("help")}>
           <Question size={20} weight={active === "help" ? "fill" : "regular"} />
           <span>도움말</span>
         </button>
