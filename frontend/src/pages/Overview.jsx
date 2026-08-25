@@ -20,7 +20,7 @@ import {
 import MapPanel from "../components/MapPanel.jsx";
 import { batteryPresentation } from "../batteryTelemetry.js";
 import { beaconSlots, incidentMapMarkers } from "../incidents.js";
-import { telemetryPresentation } from "../telemetry.js";
+import { telemetryModeLabel, telemetryPresentation } from "../telemetry.js";
 import {
   LiveImage,
   ConnectionPlaceholder,
@@ -107,14 +107,16 @@ function EventsPanel({ events, onAcknowledge, onViewAll }) {
 function OperationControlCard({ patrolState, controllerEnabled, telemetryLive, onTogglePatrol, onStop, onToggleController }) {
   const stopped = patrolState === "stopped";
   const modeKnown = telemetryLive && patrolState !== "unknown";
-  const modeLabel = modeKnown
-    ? stopped ? "정지됨" : patrolState === "paused" ? "일시정지" : "자율 순찰 중"
-    : "상태 확인 필요";
+  const modeLabel = modeKnown ? telemetryModeLabel(patrolState) : "상태 확인 필요";
+  const canTogglePatrol = telemetryLive && ["patrol", "paused"].includes(patrolState);
+  const patrolTitle = !telemetryLive
+    ? "로봇 텔레메트리 연결 필요"
+    : canTogglePatrol ? (patrolState === "paused" ? "순찰 재개" : "일시정지") : "순찰 모드에서 사용 가능";
   return (
     <article className="dock-block operations">
-      <div className="dock-title"><Robot size={18} weight="fill" /><span>운행 제어</span><StatusPill tone={!modeKnown || stopped || patrolState === "paused" ? "neutral" : "success"}>{modeLabel}</StatusPill></div>
+      <div className="dock-title"><Robot size={18} weight="fill" /><span>운행 제어</span><StatusPill tone={patrolState === "patrol" ? "success" : "neutral"}>{modeLabel}</StatusPill></div>
       <div className="button-row operation-buttons">
-        <button type="button" className="button secondary" aria-label={patrolState === "paused" ? "순찰 재개" : "일시정지"} title={telemetryLive ? (patrolState === "paused" ? "순찰 재개" : "일시정지") : "로봇 텔레메트리 연결 필요"} onClick={onTogglePatrol} disabled={!telemetryLive || stopped}>
+        <button type="button" className="button secondary" aria-label={patrolState === "paused" ? "순찰 재개" : "일시정지"} title={patrolTitle} onClick={onTogglePatrol} disabled={!canTogglePatrol}>
           {patrolState === "paused" ? <Play size={17} weight="fill" /> : <Pause size={17} weight="fill" />}
           <span className="operation-label" aria-hidden="true">{patrolState === "paused" ? "순찰 재개" : "일시정지"}</span>
         </button>
