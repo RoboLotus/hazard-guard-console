@@ -43,7 +43,7 @@ export default function Sidebar({ active, onNavigate, pendingEvents }) {
         </button>
         <div className="sidebar-version">
           <span>HazardGuard Console</span>
-          <small>Prototype v0.1.0</small>
+          <small>산업 안전 관제</small>
         </div>
       </nav>
     </aside>

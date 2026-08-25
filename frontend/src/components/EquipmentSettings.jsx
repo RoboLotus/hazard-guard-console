@@ -491,6 +491,18 @@ export default function EquipmentSettings({
 
             </div>
           )}
+          {!selected && (
+            <section className="settings-card equipment-editor-empty" role="status">
+              <span className="setting-icon"><Factory size={24} weight="duotone" /></span>
+              <div>
+                <h2>편집할 설비가 없습니다</h2>
+                <p>설비를 추가하거나 기본 설비를 불러온 뒤 온도 판정 기준을 설정하세요.</p>
+              </div>
+              <button type="button" className="button primary" onClick={addEquipment}>
+                <Plus size={16} weight="bold" />첫 설비 추가
+              </button>
+            </section>
+          )}
         </div>
 
         {errors.length > 0 && <div className="form-errors" role="alert"><Warning size={19} weight="fill" /><div>{errors.map((error) => <p key={error}>{error}</p>)}</div></div>}
