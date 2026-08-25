@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   TELEMETRY_STALE_AFTER_MS,
+  telemetryModeLabel,
   telemetryPresentation,
 } from "../src/telemetry.js";
 
@@ -43,6 +44,14 @@ test("연결 상태에서는 수신한 실제 텔레메트리만 표시한다", 
   assert.equal(result.networkDetail, "-56 dBm");
   assert.equal(result.lidarDetail, "9.9 Hz");
   assert.equal(result.speedLabel, "0.27 m/s");
+  assert.equal(result.speedDetail, "실시간 측정");
+});
+
+test("지도 작성과 수동 운행을 자율 순찰로 잘못 표시하지 않는다", () => {
+  assert.equal(telemetryModeLabel("mapping"), "2D 지도 작성 중");
+  assert.equal(telemetryModeLabel("rgbd_mapping"), "3D 지도 수집 중");
+  assert.equal(telemetryModeLabel("manual"), "수동 운행");
+  assert.equal(telemetryModeLabel("unexpected"), "상태 확인 필요");
 });
 
 test("연결 표시가 오래되면 보관 중인 과거 값도 노출하지 않는다", () => {
