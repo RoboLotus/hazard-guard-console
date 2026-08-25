@@ -33,6 +33,8 @@ test("equipment editing provides safe confirmation and portable settings", () =>
   assert.match(equipment, /syncStatus\.error/);
   assert.match(styles, /\.equipment-list \{[^}]*overflow-y: auto/);
   assert.match(styles, /\.equipment-list-card \{[^}]*height: 100%/);
+  assert.match(equipment, /편집할 설비가 없습니다/);
+  assert.match(equipment, /첫 설비 추가/);
 });
 
 test("spatial equipment editing stays in the map workflow", () => {

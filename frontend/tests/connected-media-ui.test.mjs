@@ -28,3 +28,15 @@ test("영상과 이벤트 화면도 예시 사진 대신 연결 상태를 사용
   assert.match(eventsPage, /RGB 영상 연결 필요/);
   assert.match(eventsPage, /열화상 영상 연결 필요/);
 });
+
+test("지도 화면은 연결 전 목업 운용 상태를 실제 상태처럼 표시하지 않는다", async () => {
+  const [mapPage, sidebar] = await Promise.all([
+    source("pages/MapPage.jsx"),
+    source("components/Sidebar.jsx"),
+  ]);
+
+  assert.doesNotMatch(mapPage, /UI 목업/);
+  assert.match(mapPage, /운용 환경 확인 중/);
+  assert.match(mapPage, /데이터 연결 필요/);
+  assert.doesNotMatch(sidebar, /Prototype v0\.1\.0/);
+});

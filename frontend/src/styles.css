@@ -958,6 +958,11 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .equipment-state-dot.error { background: #c8444e; box-shadow: 0 0 0 3px rgba(200,68,78,.13); }
 .equipment-empty { margin: 0; padding: 24px 10px; color: #8794a3; font-size: 9px; text-align: center; }
 .equipment-editor { min-width: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.equipment-editor-empty { min-height: 310px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: #7f8d9d; text-align: center; }
+.equipment-editor-empty .setting-icon { width: 48px; height: 48px; border-radius: 12px; }
+.equipment-editor-empty h2 { margin: 0; color: #3b4f65; font-size: 15px; }
+.equipment-editor-empty p { max-width: 390px; margin: -6px 0 2px; font-size: 10px; line-height: 1.6; }
+.equipment-editor-empty .button { min-height: 40px; }
 .equipment-basic-card, .equipment-roi-card { grid-column: 1 / -1; }
 .equipment-basic-card > header > div:first-child, .equipment-roi-card > header > div:first-child { flex: 1; }
 .settings-delete-action { margin-left: auto; color: #748397; }

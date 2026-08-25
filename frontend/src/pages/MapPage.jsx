@@ -68,7 +68,9 @@ export default function MapPage({
   const [selected3dSession, setSelected3dSession] = useState(null);
   const [goalCandidate, setGoalCandidate] = useState(null);
   const activeWorldId = systemMode?.active_world_id || "facility_map";
-  const physicalTarget = systemMode?.deployment_target === "physical";
+  const deploymentTarget = systemMode?.deployment_target;
+  const physicalTarget = deploymentTarget === "physical";
+  const simulationTarget = deploymentTarget === "simulation";
   const [waypoints, setWaypoints] = useState([]);
   const [patrolSchedule, setPatrolSchedule] = useState(
     () => normalizePatrolSchedule(null),
@@ -106,17 +108,18 @@ export default function MapPage({
   const personSafetyLabel = !telemetryLive
     ? "데이터 없음"
     : personSafetyLabels[personSafetyName]
-      || (physicalTarget ? "기능 대기" : "시뮬레이션 비활성");
-  const mapSpatialState = physicalTarget
+      || (physicalTarget ? "기능 대기" : simulationTarget ? "시뮬레이션 비활성" : "상태 확인 필요");
+  const spatialConnected = Boolean(
+    spatialState
+    && spatialState.source !== "mock"
+    && !spatialState.mock,
+  );
+  const mapSpatialState = !spatialConnected
     ? {
         ...spatialState,
-        pose: spatialState?.pose?.mock
-          ? { ...spatialState.pose, available: false }
-          : spatialState?.pose,
-        trail: spatialState?.pose?.mock ? [] : spatialState?.trail,
-        heatmap: spatialState?.heatmap?.simulated
-          ? { ...spatialState.heatmap, detections: [] }
-          : spatialState?.heatmap,
+        pose: { ...spatialState?.pose, available: false },
+        trail: [],
+        heatmap: { ...spatialState?.heatmap, available: false, detections: [] },
       }
     : spatialState;
   const mapSpec = resolveMapSpec(mediaStatus, mapSpatialState);
@@ -138,9 +141,17 @@ export default function MapPage({
     systemMode?.state,
   );
   const sensors = spatialState?.sensors || fallbackSpatialState.sensors;
-  const heatDetections = spatialState?.heatmap?.detections || [];
+  const heatDetections = spatialConnected ? spatialState?.heatmap?.detections || [] : [];
   const trendWarnings = heatDetections.filter((item) => ["warning", "critical"].includes(item.trend_status)).length;
   const trendWatches = heatDetections.filter((item) => item.trend_status === "watch").length;
+  const deploymentLabel = physicalTarget
+    ? "실물 ROSMASTER M1"
+    : simulationTarget ? "Gazebo 시뮬레이션" : "운용 환경 확인 중";
+  const mapSourceLabel = !mapLive && !spatialConnected
+    ? "데이터 연결 필요"
+    : mapDimension === "thermal"
+      ? "고정 3D 맵 × 누적 열화상"
+      : mapDimension === "3d" ? "RTAB-Map RGB-D" : "ROS /map";
   const navStatusLabels = {
     idle: "대기",
     mock: "Nav2 미연결",
@@ -542,7 +553,9 @@ export default function MapPage({
         <span className={`api-status ${mapLive ? "online" : ""}`}><span />{
           physicalTarget
             ? mapLive ? "실물 로봇 지도 연결" : "실물 로봇 데이터 대기"
-            : mapLive ? "공간 데이터 연결" : "지도 연결 필요"
+            : simulationTarget
+              ? mapLive ? "시뮬레이션 공간 데이터 연결" : "시뮬레이션 지도 연결 필요"
+              : "운용 환경 확인 중"
         }</span>
       </DetailHeading>
       <div className="map-workspace">
@@ -651,8 +664,8 @@ export default function MapPage({
               <div><dt>현재 속도</dt><dd>{telemetryStatus.speedLabel}</dd></div>
               <div><dt>LiDAR</dt><dd className={telemetryStatus.lidarHealthy ? "healthy" : ""}>{telemetryStatus.lidarLabel}</dd></div>
               <div><dt>사람 안전</dt><dd className={personSafetyClass}>{personSafetyLabel}{personSafety?.distance_valid ? ` · ${personSafety.nearest_distance_m.toFixed(1)}m` : ""}</dd></div>
-              <div><dt>운용 대상</dt><dd>{physicalTarget ? "실물 ROSMASTER M1" : "Gazebo 시뮬레이션"}</dd></div>
-              <div><dt>지도 소스</dt><dd>{mapDimension === "thermal" ? "고정 3D 맵 × 누적 열화상" : mapDimension === "3d" ? "RTAB-Map RGB-D" : mapLive ? "ROS /map" : physicalTarget ? "센서 대기" : "UI 목업"}</dd></div>
+              <div><dt>운용 대상</dt><dd>{deploymentLabel}</dd></div>
+              <div><dt>지도 소스</dt><dd>{mapSourceLabel}</dd></div>
               <div><dt>로봇 위치</dt><dd>{spatialState?.pose?.available ? `X ${spatialState.pose.x.toFixed(2)} · Y ${spatialState.pose.y.toFixed(2)}` : "확인 중"}</dd></div>
               <div><dt>Nav2 상태</dt><dd className={navigationStatus?.status === "executing" ? "healthy" : ""}>{navStatusLabels[navigationStatus?.status] || "확인 중"}</dd></div>
             </dl>
@@ -683,7 +696,9 @@ export default function MapPage({
                   </span>
                 </div>
               ))}
-              <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · 장기판정 경고 {trendWarnings} / 관찰 {trendWatches} · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
+              {spatialConnected
+                ? <p><ThermometerHot size={14} weight="fill" />{heatDetections.length}개 열원 관측 · 장기판정 경고 {trendWarnings} / 관찰 {trendWatches} · {spatialState?.heatmap?.simulated ? "시뮬레이션 데이터" : "센서 데이터"}</p>
+                : <p><ThermometerHot size={14} />공간 데이터 연결 후 열원 관측 상태를 표시합니다.</p>}
             </div>
           </CollapsibleCard>
           <SimulationMapManager
