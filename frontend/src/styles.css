@@ -161,6 +161,8 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .map-live-badge span { width: 5px; height: 5px; background: var(--success); border-radius: 50%; }
 .map-live-badge.mock { color: #7b8796; }
 .map-live-badge.mock span { background: #98a2af; }
+.map-live-badge.offline { color: #7b8796; }
+.map-live-badge.offline span { background: #98a2af; }
 .heatmap-simulation-badge { position: absolute; z-index: 2; top: 11px; right: 48px; padding: 5px 8px; color: #9a4f24; background: rgba(255,248,240,.94); border: 1px solid #f0cdb5; border-radius: 6px; box-shadow: 0 2px 7px rgba(92,52,28,.08); font-size: 7px; font-weight: 800; letter-spacing: .35px; }
 .robot-marker { position: absolute; left: 21%; bottom: 15%; width: 31px; height: 31px; display: grid; place-items: center; color: #fff; background: var(--blue); border: 4px solid rgba(255,255,255,0.95); border-radius: 50%; box-shadow: 0 2px 10px rgba(18,79,162,.35); }
 .map-callout { position: absolute; top: 21%; right: 10%; display: flex; align-items: center; gap: 6px; padding: 6px 8px; color: #a92932; background: rgba(255,255,255,.95); border: 1px solid #f1b9bd; border-radius: 7px; box-shadow: 0 3px 10px rgba(129,31,39,.15); }
@@ -411,6 +413,7 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .map-waiting-overlay { position: absolute; inset: 0; z-index: 9; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #425a73; background: rgba(242,246,250,.97); text-align: center; }
 .map-waiting-overlay strong { font-size: 13px; }
 .map-waiting-overlay small { color: #7a8999; font-size: 8px; }
+.connection-placeholder-icon { color: #7f91a5; }
 .map-waiting-spinner { width: 24px; height: 24px; border: 3px solid #cbd9e8; border-top-color: #1769e0; border-radius: 50%; animation: map-waiting-spin .85s linear infinite; }
 @keyframes map-waiting-spin { to { transform: rotate(360deg); } }
 .layer-card { flex: 0 0 auto; }

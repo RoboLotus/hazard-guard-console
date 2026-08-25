@@ -97,9 +97,16 @@ export function LiveImage({ endpoint, fallback, enabled, interval = 500, ...prop
     <img
       {...props}
       src={source}
+      onLoad={({ currentTarget }) => {
+        currentTarget.hidden = false;
+      }}
       onError={({ currentTarget }) => {
         currentTarget.onerror = null;
-        currentTarget.src = fallback;
+        if (fallback) {
+          currentTarget.src = fallback;
+        } else {
+          currentTarget.hidden = true;
+        }
       }}
     />
   );
