@@ -366,14 +366,12 @@ class StoredNavigationRoute(BaseModel):
     def validate_map_binding(self):
         if self.route.frame_id != "map":
             raise ValueError("stored routes must use the map frame")
-        if self.route.world_id not in {None, self.world_id}:
+        if self.route.world_id != self.world_id:
             raise ValueError("route world_id does not match its stored scope")
-        if self.route.map_session_id not in {None, self.map_session_id}:
+        if self.route.map_session_id != self.map_session_id:
             raise ValueError(
                 "route map_session_id does not match its stored scope"
             )
-        self.route.world_id = self.world_id
-        self.route.map_session_id = self.map_session_id
         return self
 
 
