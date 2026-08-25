@@ -245,7 +245,7 @@ export default function HelpPage({ onNavigate }) {
 
           <HelpSection id="monitoring" icon={Camera} eyebrow="06 · MONITORING" title="영상·이벤트·임계값 사용하기">
             <div className="help-feature-list">
-              <div><Camera size={19} /><span><strong>영상</strong><p>RGB와 열화상 스트림을 확인합니다. MOCK 표시는 실제 센서 영상이 아니라는 뜻입니다.</p></span></div>
+              <div><Camera size={19} /><span><strong>영상</strong><p>RGB와 열화상 스트림을 확인합니다. 센서 미연결 시에는 정적 예시 영상 대신 연결 안내가 표시됩니다.</p></span></div>
               <div><ListChecks size={19} /><span><strong>이벤트</strong><p>위험 온도와 기타 이상 이벤트를 확인하고 처리 중·해결 상태로 변경합니다.</p></span></div>
               <div><BellRinging size={19} /><span><strong>비콘 배출 승인</strong><p>위험 이벤트 상세에서 비콘 없이 재개, 비콘 배출 후 재개, 비콘 배출 후 현장 감시 중 하나를 선택합니다. 배출 조치는 관리자 토큰과 Robot의 정지·BLE 조건을 모두 통과해야 실행됩니다.</p></span></div>
               <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>이상 탐지 설정에서 지도에 저장한 설비의 고정·자동 가변 판정과 기준선을 관리하고, 연결 상태 점검에서 토픽 주기와 TF를 확인합니다. 위치와 ROI는 지도 탭에서 편집합니다.</p></span></div>
@@ -277,7 +277,7 @@ export default function HelpPage({ onNavigate }) {
           <HelpSection id="status" icon={CheckCircle} eyebrow="08 · STATUS" title="화면 표시 상태 이해하기">
             <dl className="help-status-list">
               <div><dt><i className="help-status-dot live" />LIVE / ROS 연결</dt><dd>백엔드가 실제 ROS 토픽에서 최신 데이터를 받고 있습니다.</dd></div>
-              <div><dt><i className="help-status-dot mock" />MOCK / UI MOCK</dt><dd>레이아웃 검증용 예시 데이터이며 실제 장치 동작을 의미하지 않습니다.</dd></div>
+              <div><dt><i className="help-status-dot mock" />연결 필요</dt><dd>서버 또는 센서 데이터가 수신되지 않아 실제 화면을 표시할 수 없는 상태입니다.</dd></div>
               <div><dt><i className="help-status-dot waiting" />준비 중</dt><dd>Gazebo, SLAM, AMCL 또는 Nav2의 시작을 기다리는 상태입니다.</dd></div>
               <div><dt><i className="help-status-dot danger" />오류 / 연결 끊김</dt><dd>명령을 반복하지 말고 서버, ROS 노드와 실행 로그를 먼저 확인합니다.</dd></div>
             </dl>

@@ -63,6 +63,16 @@ export function PanelHeader({ eyebrow, title, action }) {
   );
 }
 
+export function ConnectionPlaceholder({ icon: Icon, title, description, className = "" }) {
+  return (
+    <div className={`connection-placeholder ${className}`.trim()} role="status">
+      {Icon && <Icon size={30} weight="duotone" />}
+      <strong>{title}</strong>
+      <span>{description}</span>
+    </div>
+  );
+}
+
 export async function downloadAsset(source, filename) {
   const response = await fetch(source);
   if (!response.ok) throw new Error(`Download failed: ${response.status}`);

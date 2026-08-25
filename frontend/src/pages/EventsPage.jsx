@@ -1,6 +1,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  Camera,
   Check,
   CheckCircle,
   ClockCounterClockwise,
@@ -10,10 +11,9 @@ import {
   NotePencil,
   Play,
   Siren,
+  ThermometerHot,
   Warning,
 } from "@phosphor-icons/react";
-import rgbFeed from "../assets/industrial-rgb.webp";
-import thermalFeed from "../assets/industrial-thermal.webp";
 import { DetailHeading } from "../components/Common.jsx";
 import { eventStatusLabels } from "../data/dashboardData.js";
 import IncidentDecisionDialog from "../components/IncidentDecisionDialog.jsx";
@@ -98,8 +98,8 @@ export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo
                 </dl>
                 <div className="event-note"><NotePencil size={18} /><div><strong>운영 메모</strong><p>{selected.note}</p></div></div>
                 <div className="event-preview-grid">
-                  <button type="button" onClick={onOpenVideo}><img src={rgbFeed} alt="이벤트 RGB 스냅샷" /><span>RGB 확인</span></button>
-                  <button type="button" onClick={onOpenVideo}><img src={thermalFeed} alt="이벤트 열화상 스냅샷" /><span>열화상 확인</span></button>
+                  <button type="button" className="event-preview-placeholder" onClick={onOpenVideo}><Camera size={22} weight="duotone" /><span>RGB 영상 연결 필요</span></button>
+                  <button type="button" className="event-preview-placeholder" onClick={onOpenVideo}><ThermometerHot size={22} weight="duotone" /><span>열화상 영상 연결 필요</span></button>
                 </div>
               </div>
               <footer className="event-detail-actions">
