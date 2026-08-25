@@ -55,6 +55,8 @@ def test_map_spatial_config_is_isolated_per_map_session(tmp_path):
     route = NavigationRoute.model_validate(
         {
             "name": "Route A",
+            "world_id": "facility",
+            "map_session_id": "session-a",
             "waypoints": [{"id": "wp-1", "name": "WP-1", "x": 1, "y": 2}],
         }
     )
@@ -67,6 +69,20 @@ def test_map_spatial_config_is_isolated_per_map_session(tmp_path):
     current = context(session="session-a")
     assert store.get().equipment[0].id == "motor"
     assert store.get_route().route.waypoints[0].id == "wp-1"
+
+
+def test_route_storage_requires_explicit_current_map_binding(tmp_path):
+    prepare_session(tmp_path)
+    store = MapSpatialConfigStore(lambda: context(), tmp_path)
+    unbound = NavigationRoute.model_validate(
+        {
+            "name": "Unbound route",
+            "waypoints": [{"id": "wp-1", "name": "WP-1", "x": 1, "y": 2}],
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="현재 선택된 지도 세션"):
+        store.save_route(unbound)
 
 
 def test_equipment_document_rejects_overlapping_rois():

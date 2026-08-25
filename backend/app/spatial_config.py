@@ -158,10 +158,10 @@ class MapSpatialConfigStore:
         context, directory = self._scope(require_ready=True)
         if route.frame_id != "map":
             raise SpatialContextUnavailableError("웨이포인트 좌표계는 map이어야 합니다.")
-        if route.world_id not in {None, context["world_id"]} or route.map_session_id not in {
-            None,
-            context["map_session_id"],
-        }:
+        if (
+            route.world_id != context["world_id"]
+            or route.map_session_id != context["map_session_id"]
+        ):
             raise SpatialContextUnavailableError(
                 "웨이포인트가 현재 선택된 지도 세션과 일치하지 않습니다."
             )
