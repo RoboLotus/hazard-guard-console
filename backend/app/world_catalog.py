@@ -381,6 +381,9 @@ class WorldCatalog:
                         "thermal_layer_status": metadata.get(
                             "thermal_layer_status", "not_ready"
                         ),
+                        "thermal_layer_fingerprint": metadata.get(
+                            "thermal_layer_fingerprint"
+                        ),
                         "thermal_layer_quarantine_file": metadata.get(
                             "thermal_layer_quarantine_file"
                         ),

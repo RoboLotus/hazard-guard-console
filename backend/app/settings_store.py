@@ -6,6 +6,7 @@ import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -138,7 +139,12 @@ def default_thermal_equipment_settings() -> ThermalEquipmentSettingsDocument:
 class ThermalEquipmentSettingsStore:
     """Persist validated per-equipment thermal settings outside the worktree."""
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        default_factory: Callable[[], ThermalEquipmentSettingsDocument] | None = None,
+    ) -> None:
         workspace = Path(
             os.getenv("HAZARD_GUARD_WORKSPACE", os.getcwd())
         ).expanduser().resolve()
@@ -151,6 +157,7 @@ class ThermalEquipmentSettingsStore:
                 )
             )
         ).expanduser().resolve()
+        self._default_factory = default_factory or default_thermal_equipment_settings
         self._lock = threading.RLock()
         self._value = self._load()
         self.history_path = self.path.parent / "equipment-history"
@@ -162,7 +169,7 @@ class ThermalEquipmentSettingsStore:
             )
             return migrate_legacy_equipment_defaults(document)
         except (OSError, ValueError, TypeError):
-            return default_thermal_equipment_settings()
+            return self._default_factory()
 
     def get(self) -> ThermalEquipmentSettingsDocument:
         with self._lock:

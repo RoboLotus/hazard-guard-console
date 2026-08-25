@@ -1666,14 +1666,19 @@ class RosBridge:
         waypoints = [item for item in route["waypoints"] if item.get("enabled", True)]
         current = self._current_map_pose_with_yaw()
         if current is None:
-            return {
-                "accepted": False,
-                "mock": not self.active,
-                "status": "failed",
-                "message": "지도상의 현재 로봇 위치를 확인할 수 없습니다.",
-                "ordered_ids": [],
-                "total_distance_m": 0.0,
-            }
+            if self.active:
+                return {
+                    "accepted": False,
+                    "mock": False,
+                    "status": "failed",
+                    "message": "지도상의 현재 로봇 위치를 확인할 수 없습니다.",
+                    "ordered_ids": [],
+                    "total_distance_m": 0.0,
+                }
+            # Mock recommendation is a UI planning aid. It must remain
+            # deterministic even when another test or a page refresh has
+            # cleared the fallback pose.
+            current = (0.0, 0.0, 0.0)
 
         use_nav2 = bool(
             self.active
