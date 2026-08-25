@@ -139,7 +139,6 @@ export function App() {
     let disposed = false;
     let socket;
     let reconnectTimer;
-    let staleTimer;
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(`${protocol}//${window.location.host}/ws/spatial`);
@@ -208,6 +207,7 @@ export function App() {
     let disposed = false;
     let socket;
     let reconnectTimer;
+    let staleTimer;
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry`);

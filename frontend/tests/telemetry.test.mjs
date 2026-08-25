@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   TELEMETRY_STALE_AFTER_MS,
   telemetryPresentation,
 } from "../src/telemetry.js";
+
+const appSource = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 
 test("텔레메트리 유예시간은 순간 지연을 허용하는 5초다", () => {
   assert.equal(TELEMETRY_STALE_AFTER_MS, 5_000);
@@ -55,4 +58,16 @@ test("연결 표시가 오래되면 보관 중인 과거 값도 노출하지 않
   assert.equal(result.available, false);
   assert.equal(result.modeLabel, "상태 확인 필요");
   assert.equal(result.speedLabel, "—");
+});
+
+test("텔레메트리 stale 타이머는 해당 WebSocket effect 안에서 정리된다", () => {
+  const telemetrySocketIndex = appSource.indexOf("/ws/telemetry");
+  const telemetryEffectPrefix = appSource.slice(
+    Math.max(0, telemetrySocketIndex - 320),
+    telemetrySocketIndex,
+  );
+
+  assert.notEqual(telemetrySocketIndex, -1);
+  assert.match(telemetryEffectPrefix, /let staleTimer;/);
+  assert.match(appSource.slice(telemetrySocketIndex, telemetrySocketIndex + 900), /clearTimeout\(staleTimer\)/);
 });
