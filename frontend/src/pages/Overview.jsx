@@ -18,6 +18,7 @@ import {
 import rgbFeed from "../assets/industrial-rgb.webp";
 import thermalFeed from "../assets/industrial-thermal.webp";
 import MapPanel from "../components/MapPanel.jsx";
+import { batteryPresentation } from "../batteryTelemetry.js";
 import { beaconSlots, incidentMapMarkers } from "../incidents.js";
 import {
   LiveImage,
@@ -122,14 +123,21 @@ function OperationControlCard({ patrolState, controllerEnabled, onTogglePatrol, 
 }
 
 function RobotStatusCard({ telemetry }) {
-  const battery = Math.round(telemetry?.battery_percent ?? 78);
+  const battery = batteryPresentation(telemetry);
   const networkGood = (telemetry?.network_quality ?? "good") === "good";
   const lidarNormal = (telemetry?.lidar_status ?? "normal") === "normal";
   return (
     <article className="dock-block telemetry">
       <div className="dock-title"><ChartBar size={18} /><span>로봇 상태</span></div>
       <div className="telemetry-grid">
-        <div><span>배터리</span><strong>{battery}%</strong><div className="meter"><i style={{ width: `${battery}%` }} /></div></div>
+        <div className={battery.available ? "" : "telemetry-unavailable"}>
+          <span>배터리</span>
+          <strong>{battery.percentLabel}</strong>
+          <small>{battery.voltageLabel}</small>
+          <div className={`meter ${battery.level}`}>
+            <i style={{ width: `${battery.meterWidth}%` }} />
+          </div>
+        </div>
         <div><span>네트워크</span><strong><WifiHigh size={17} weight="fill" /> {networkGood ? "양호" : "불안정"}</strong><small>{telemetry?.network_rssi_dbm ?? -48} dBm</small></div>
         <div><span>LiDAR</span><strong className={lidarNormal ? "healthy" : ""}>{lidarNormal ? "정상" : "확인 필요"}</strong><small>{(telemetry?.lidar_hz ?? 10.2).toFixed(1)} Hz</small></div>
         <div><span>속도</span><strong>{(telemetry?.speed_mps ?? 0.32).toFixed(2)} m/s</strong><small>제한 0.5 m/s</small></div>
