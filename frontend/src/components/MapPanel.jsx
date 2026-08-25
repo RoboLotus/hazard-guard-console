@@ -3,9 +3,9 @@ import {
   Bell,
   CaretRight,
   Crosshair,
+  MapTrifold,
   NavigationArrow,
 } from "@phosphor-icons/react";
-import slamMap from "../assets/slam-map.webp";
 import {
   buildFootprintPolygon,
   buildFovPolygon,
@@ -307,7 +307,6 @@ export default function MapPanel({
   onEquipmentSelect,
   waitingForMap = false,
   waitingLabel = "새 SLAM 지도 수신 대기 중",
-  allowMockFallback = true,
 }) {
   const mapLive = Boolean(mediaStatus?.map?.available);
   const mapSpec = resolveMapSpec(mediaStatus, spatialState);
@@ -473,9 +472,9 @@ export default function MapPanel({
               height: `${imageGeometry.height}px`,
             }}
           >
-            {(mapLive || allowMockFallback) && (
+            {mapLive && (
               <>
-                <LiveImage className={mapLive ? "live-map" : ""} draggable="false" endpoint="/api/v1/media/map" fallback={slamMap} enabled={mapLive} interval={1000} alt="ROS 2 SLAM 점유 지도" />
+                <LiveImage className="live-map" draggable="false" endpoint="/api/v1/media/map" enabled interval={1000} alt="ROS 2 SLAM 점유 지도" />
                 <SpatialMapOverlay
                   spatialState={spatialState}
                   mapSpec={mapSpec}
@@ -502,15 +501,14 @@ export default function MapPanel({
             </div>
           )}
         </div>
-        {waitingForMap && !mapLive && (
+        {!mapLive && (
           <div className="map-waiting-overlay" role="status">
-            <span className="map-waiting-spinner" />
-            <strong>{waitingLabel}</strong>
-            <small>{allowMockFallback ? "이전 세션 지도는 초기화되었습니다." : "센서와 ROS 2 브리지가 준비되면 자동으로 표시됩니다."}</small>
+            {waitingForMap ? <span className="map-waiting-spinner" /> : <MapTrifold className="connection-placeholder-icon" size={30} weight="duotone" />}
+            <strong>{waitingForMap ? waitingLabel : "지도 연결이 필요합니다"}</strong>
+            <small>ROS 2 SLAM 지도와 서버가 연결되면 자동으로 표시됩니다.</small>
           </div>
         )}
-        <div className={`map-live-badge ${mapLive ? "" : "mock"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : waitingForMap ? "ROS 지도 대기" : "디지털 트윈 목업"}</div>
-        {allowMockFallback && spatialState?.heatmap?.simulated && layers.heatmap && <div className="heatmap-simulation-badge">SIMULATED HEAT</div>}
+        <div className={`map-live-badge ${mapLive ? "" : "offline"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : waitingForMap ? "ROS 지도 대기" : "지도 연결 필요"}</div>
         {goalMode && <div className="goal-mode-hint">지도를 클릭해 목적지 후보를 선택하세요</div>}
         {detail && (
           <div className="map-axis-guide" aria-label="ROS 지도 각도 기준">
@@ -519,8 +517,8 @@ export default function MapPanel({
           </div>
         )}
         <div className="map-zoom" onPointerDown={(event) => event.stopPropagation()}>
-          <button type="button" aria-label="지도 확대" title="지도 확대" disabled={mapView.zoom >= 4} onClick={() => changeZoom(0.25)}>+</button>
-          <button type="button" aria-label="지도 축소" title="지도 축소" disabled={mapView.zoom <= 0.5} onClick={() => changeZoom(-0.25)}>−</button>
+          <button type="button" aria-label="지도 확대" title="지도 확대" disabled={!mapLive || mapView.zoom >= 4} onClick={() => changeZoom(0.25)}>+</button>
+          <button type="button" aria-label="지도 축소" title="지도 축소" disabled={!mapLive || mapView.zoom <= 0.5} onClick={() => changeZoom(-0.25)}>−</button>
         </div>
       </div>
       <footer className="map-footer">
@@ -529,7 +527,7 @@ export default function MapPanel({
         {thermalLegend && <span><i className="legend-thermal" />{thermalLegend}</span>}
         <span><i className="legend-heat" />열원</span>
         {incidentMarkers.length > 0 && <span><i className="legend-beacon" />비콘 위치</span>}
-        <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : allowMockFallback ? `목업 · ${Math.round(mapView.zoom * 100)}%` : `센서 대기 · ${Math.round(mapView.zoom * 100)}%`}</strong>
+        <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : "지도 연결 대기"}</strong>
       </footer>
     </section>
   );

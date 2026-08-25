@@ -9,7 +9,6 @@ import {
   MapTrifold,
   VideoCamera,
 } from "@phosphor-icons/react";
-import slamMap from "../assets/slam-map.webp";
 import {
   CollapsibleCard,
   DetailHeading,
@@ -479,8 +478,12 @@ export default function MapPage({
     }
   };
   const saveMapImage = async () => {
+    if (!mapLive) {
+      notify("저장할 지도가 없습니다. ROS 2 지도 연결을 확인하세요.", "warning");
+      return;
+    }
     try {
-      await downloadAsset(mapLive ? "/api/v1/media/map" : slamMap, `hazard-guard-map-${new Date().toISOString().slice(0, 10)}.png`);
+      await downloadAsset("/api/v1/media/map", `hazard-guard-map-${new Date().toISOString().slice(0, 10)}.png`);
       notify("현재 지도를 PNG 파일로 저장했습니다.");
     } catch {
       notify("지도를 저장하지 못했습니다. 미디어 서버 연결을 확인하세요.", "warning");
@@ -534,7 +537,7 @@ export default function MapPage({
         <span className={`api-status ${mapLive ? "online" : ""}`}><span />{
           physicalTarget
             ? mapLive ? "실물 로봇 지도 연결" : "실물 로봇 데이터 대기"
-            : mapLive ? "공간 데이터 연결" : "디지털 트윈 목업"
+            : mapLive ? "공간 데이터 연결" : "지도 연결 필요"
         }</span>
       </DetailHeading>
       <div className="map-workspace">
@@ -557,7 +560,6 @@ export default function MapPage({
             onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")}
             waitingForMap={!mapLive && (physicalTarget || systemMode?.mode === "mapping")}
             waitingLabel={physicalTarget ? "실물 ROS /map 수신 대기 중" : undefined}
-            allowMockFallback={!physicalTarget}
           />
         ) : (
           <Suspense fallback={<div className="point-cloud-panel point-cloud-loading">3D 지도 뷰어를 불러오는 중입니다.</div>}>
