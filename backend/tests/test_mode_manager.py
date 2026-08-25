@@ -202,9 +202,22 @@ def test_mode_launch_arguments_are_shell_free_and_mode_specific(monkeypatch, tmp
     ]
     assert "start_simulation:=false" in mapping
     assert "start_simulation:=false" in patrol
+    assert "enable_hazard_approval:=false" in patrol
     assert any(argument.startswith("map:=") for argument in patrol)
     assert any(argument.startswith("initial_pose_x:=") for argument in patrol)
     assert all(";" not in argument for argument in mapping + patrol)
+
+
+def test_simulation_patrol_can_enable_hazard_approval(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("HAZARD_GUARD_MAP_PATH", "runtime/maps/facility.yaml")
+    monkeypatch.setenv("HAZARD_GUARD_HAZARD_APPROVAL_ENABLED", "1")
+    manager = SystemModeManager()
+
+    patrol = manager._launch_arguments("patrol")
+
+    assert "enable_hazard_approval:=true" in patrol
 
 
 def test_hybrid_mapping_launch_enables_rtabmap_with_session_database(
@@ -663,6 +676,7 @@ def test_physical_patrol_passes_opt_in_perception_settings(
     monkeypatch.setenv("HAZARD_GUARD_PERSON_DEVICE", "0")
     monkeypatch.setenv("HAZARD_GUARD_PERSON_DEPTH_REGISTERED", "true")
     monkeypatch.setenv("HAZARD_GUARD_THERMAL_PIPELINE_ENABLED", "yes")
+    monkeypatch.setenv("HAZARD_GUARD_HAZARD_APPROVAL_ENABLED", "yes")
     monkeypatch.setenv(
         "HAZARD_GUARD_THERMAL_BASELINE_PATH", "/data/motor-baseline.json"
     )
@@ -681,6 +695,7 @@ def test_physical_patrol_passes_opt_in_perception_settings(
     assert "person_inference_rate_hz:=6.0" in command
     assert "person_depth_registration_verified:=true" in command
     assert "enable_thermal_pipeline:=true" in command
+    assert "enable_hazard_approval:=true" in command
     assert "thermal_baseline_path:=/data/motor-baseline.json" in command
     assert "thermal_air_temperature_topic:=/sensors/air" in command
     assert "thermal_oil_temperature_topic:=/sensors/oil" in command
