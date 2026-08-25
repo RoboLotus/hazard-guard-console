@@ -1079,6 +1079,12 @@ class SystemModeManager:
             f"gui:={'true' if self._gui else 'false'}",
             f"simulation_mode:={self._simulation_mode}",
             "start_simulation:=false",
+            "enable_hazard_approval:="
+            + (
+                "true"
+                if env_flag("HAZARD_GUARD_HAZARD_APPROVAL_ENABLED")
+                else "false"
+            ),
             *self._world_launch_arguments(),
         ]
         spawn = self._active_world["spawn"]
@@ -1149,6 +1155,11 @@ class SystemModeManager:
         values = {
             "use_person_safety": (
                 "true" if safety_enabled else "false"
+            ),
+            "enable_hazard_approval": (
+                "true"
+                if env_flag("HAZARD_GUARD_HAZARD_APPROVAL_ENABLED")
+                else "false"
             ),
             "start_person_camera": (
                 "true"
