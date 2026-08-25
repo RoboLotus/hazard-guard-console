@@ -122,6 +122,58 @@ function createRobotMarker() {
   };
 }
 
+function createEquipmentLabelSprite(item, selected) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 128;
+  const context = canvas.getContext("2d");
+  const label = String(item.display_name || item.id || "설비");
+  const background = selected ? "rgba(154, 96, 13, .94)" : "rgba(18, 43, 62, .92)";
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = background;
+  context.beginPath();
+  context.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 24);
+  context.fill();
+  context.strokeStyle = selected ? "#ffd27a" : "#86c8ff";
+  context.lineWidth = 5;
+  context.stroke();
+  context.fillStyle = "#ffffff";
+  context.font = '800 46px "Pretendard Variable", Pretendard, sans-serif';
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(label, canvas.width / 2, canvas.height / 2, canvas.width - 48);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  const width = Math.max(0.62, Math.min(1.4, 0.44 + label.length * 0.075));
+  sprite.scale.set(width, width / 4, 1);
+  sprite.center.set(0.5, 0);
+  sprite.renderOrder = 20;
+  sprite.userData.equipmentId = item.id;
+  sprite.userData.isEquipmentLabel = true;
+  return sprite;
+}
+
+function disposeObject3d(object) {
+  object.traverse((child) => {
+    child.geometry?.dispose();
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    materials.filter(Boolean).forEach((material) => {
+      material.map?.dispose();
+      material.dispose();
+    });
+  });
+}
+
 export default function PointCloudPanel({
   systemMode,
   archivedSession,
@@ -250,8 +302,7 @@ export default function PointCloudPanel({
       while (group.children.length) {
         const child = group.children[0];
         group.remove(child);
-        child.geometry?.dispose();
-        child.material?.dispose();
+        disposeObject3d(child);
       }
     };
     clear();
@@ -275,6 +326,10 @@ export default function PointCloudPanel({
       box.position.set(center[0], center[1], center[2]);
       box.userData.equipmentId = item.id;
       group.add(box);
+
+      const label = createEquipmentLabelSprite(item, selected);
+      label.position.set(center[0], center[1], Number(maximum[2]) + 0.08);
+      group.add(label);
     });
     return clear;
   }, [equipment, selectedEquipmentId]);

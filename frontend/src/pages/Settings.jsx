@@ -14,7 +14,7 @@ function initialSection() {
   return sections.has(section) ? section : "detection";
 }
 
-export default function Settings({ notify, apiOnline, spatialState }) {
+export default function Settings({ notify, apiOnline }) {
   const [section, setSection] = useState(initialSection);
   const [deploymentTarget, setDeploymentTarget] = useState(null);
   const [dirty, setDirty] = useState(false);
@@ -64,7 +64,7 @@ export default function Settings({ notify, apiOnline, spatialState }) {
       <div className="settings-section-tabs" role="tablist" aria-label="설정 구분">
         <button type="button" role="tab" aria-selected={section === "detection"} className={section === "detection" ? "active" : ""} onClick={() => selectSection("detection")}>
           <SlidersHorizontal size={18} weight="duotone" />
-          <span><strong>이상 탐지 설정</strong><small>설비·온도·ROI·기준선</small></span>
+          <span><strong>이상 탐지 설정</strong><small>설비·온도·기준선</small></span>
           {dirty && <em>저장 필요</em>}
         </button>
         <button type="button" role="tab" aria-selected={section === "connections"} className={section === "connections" ? "active" : ""} onClick={() => selectSection("connections")}>
@@ -80,7 +80,6 @@ export default function Settings({ notify, apiOnline, spatialState }) {
           deploymentTarget={deploymentTarget}
           notify={notify}
           onDirtyChange={setDirty}
-          spatialState={spatialState}
         />
       </section>
       <section role="tabpanel" hidden={section !== "connections"}>

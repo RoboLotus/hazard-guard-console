@@ -5,7 +5,6 @@ import {
   ClockCounterClockwise,
   DownloadSimple,
   Factory,
-  MapTrifold,
   Plus,
   SlidersHorizontal,
   Trash,
@@ -13,7 +12,6 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import { NumberField } from "./Common.jsx";
-import EquipmentRoiPicker from "./EquipmentRoiPicker.jsx";
 import SettingsConfirmDialog from "./SettingsConfirmDialog.jsx";
 import {
   adaptivePolicyConfirmation,
@@ -100,7 +98,6 @@ export default function EquipmentSettings({
   deploymentTarget,
   notify,
   onDirtyChange,
-  spatialState,
 }) {
   const [document, setDocument] = useState({ schema_version: 1, equipment: [] });
   const [savedDocument, setSavedDocument] = useState({ schema_version: 1, equipment: [] });
@@ -111,7 +108,6 @@ export default function EquipmentSettings({
   const [query, setQuery] = useState("");
   const [errors, setErrors] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [roiPickerOpen, setRoiPickerOpen] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
   const importInput = useRef(null);
   const dirty = JSON.stringify(document) !== JSON.stringify(savedDocument);
@@ -199,25 +195,6 @@ export default function EquipmentSettings({
     }));
   };
 
-  const updateRoi = (bound, axis, value) => {
-    if (!selected) return;
-    const vector = [...selected.roi[bound]];
-    vector[axis] = Number(value);
-    updateSelected({ roi: { ...selected.roi, [bound]: vector } });
-  };
-
-  const applyMapRoi = ({ minimum, maximum }) => {
-    if (!selected) return;
-    updateSelected({
-      roi: {
-        min: [Number(minimum[0].toFixed(2)), Number(minimum[1].toFixed(2)), selected.roi.min[2]],
-        max: [Number(maximum[0].toFixed(2)), Number(maximum[1].toFixed(2)), selected.roi.max[2]],
-      },
-    });
-    setRoiPickerOpen(false);
-    notify("지도에서 선택한 XY 범위를 적용했습니다. Z 높이를 확인한 뒤 저장하세요.", "info");
-  };
-
   const addEquipment = () => {
     const item = makeEquipment(document.equipment);
     setDocument((current) => ({ ...current, equipment: [...current.equipment, item] }));
@@ -302,7 +279,7 @@ export default function EquipmentSettings({
       notify(
         nextSync.tone === "offline"
           ? "설정은 저장됐습니다. 로봇 연결 후 다시 적용하세요."
-          : "설비별 온도 기준과 ROI를 저장했습니다.",
+          : "설비별 온도 판정 기준을 저장했습니다.",
         nextSync.tone === "offline" ? "warning" : "info",
       );
     } catch (error) {
@@ -406,8 +383,6 @@ export default function EquipmentSettings({
   const baselineActive = selectedRuntime?.baseline_state === "active";
   const baselineTemperature = optionalFiniteNumber(selectedRuntime?.baseline_temperature_c);
   const effectiveThreshold = effectiveThresholdSummary(selectedRuntime, selected);
-  const mapSpec = spatialState?.map;
-
   const requestAdaptivePolicy = (enabled) => requestConfirmation({
     ...adaptivePolicyConfirmation(enabled, runtime?.state),
     action: () => updateSelected({ adaptive_threshold_enabled: enabled }),
@@ -514,14 +489,6 @@ export default function EquipmentSettings({
                 <button type="button" className="button ghost baseline-reset-button" onClick={resetBaseline} disabled={!apiOnline || runtime.state === "offline"}><ArrowCounterClockwise size={15} />기준선 다시 수집</button>
               </section>
 
-              <section className="settings-card equipment-roi-card">
-                <header><div><h2>설비 위치 · ROI</h2><p>map 좌표계에서 열 데이터를 집계할 직육면체 영역입니다.</p></div><button type="button" className="button ghost compact" onClick={() => setRoiPickerOpen((current) => !current)}><MapTrifold size={15} />{roiPickerOpen ? "지도 선택 닫기" : "지도에서 XY 지정"}</button></header>
-                {roiPickerOpen && <EquipmentRoiPicker equipment={selected} equipmentList={document.equipment} mapSpec={mapSpec} onApply={applyMapRoi} />}
-                <div className="roi-grid">
-                  {["X", "Y", "Z"].map((axis, index) => <NumberField key={`min-${axis}`} label={`${axis} 최솟값`} name={`roi-min-${axis}`} value={selected.roi.min[index]} onChange={(event) => updateRoi("min", index, event.target.value)} unit="m" step={0.01} />)}
-                  {["X", "Y", "Z"].map((axis, index) => <NumberField key={`max-${axis}`} label={`${axis} 최댓값`} name={`roi-max-${axis}`} value={selected.roi.max[index]} onChange={(event) => updateRoi("max", index, event.target.value)} unit="m" step={0.01} />)}
-                </div>
-              </section>
             </div>
           )}
         </div>

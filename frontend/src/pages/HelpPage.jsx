@@ -181,7 +181,7 @@ export default function HelpPage({ onNavigate }) {
               <li>맵 생성이 끝났다면 지도를 저장하고 현재 모드를 종료합니다.</li>
               <li><strong>순찰용 SLAM 결과</strong>에서 사용할 지도를 선택하고 <strong>순찰 지도 지정</strong>을 누릅니다.</li>
               <li><strong>순찰</strong> 모드로 전환합니다. 맵 생성 종료 위치가 AMCL 초기 위치로 자동 전달되며, 실패하면 <strong>저장된 마지막 위치로 AMCL 다시 초기화</strong>를 누릅니다.</li>
-              <li><strong>지도 설비 등록</strong>에서 설비 이름과 X/Y/Z 범위를 확인하고 젯슨에 저장합니다. ROI가 겹치거나 3 cm보다 가까우면 저장할 수 없습니다.</li>
+              <li><strong>지도 설비 등록</strong>에서 설비 이름과 X/Y/Z 범위를 조정하고 저장합니다. 범위는 −/+ 버튼으로 1 cm씩 조절할 수 있으며, ROI가 겹치거나 3 cm보다 가까우면 저장할 수 없습니다.</li>
               <li><strong>지도에서 웨이포인트 추가</strong>를 누르고 지점을 클릭한 뒤 이름, 바라볼 방향, 관찰 시간을 입력합니다.</li>
               <li>드래그 또는 순서 버튼으로 방문 순서를 바꿉니다. 지점이 여러 개면 <strong>순서 추천</strong>을 사용할 수 있습니다.</li>
               <li><strong>반복·운영 시간</strong>에서 즉시/예약 시작과 1회·지정 횟수·지정 시각·수동 종료 중 하나를 선택합니다. 반복 순찰은 회차 사이 대기시간도 지정할 수 있습니다.</li>
@@ -248,7 +248,7 @@ export default function HelpPage({ onNavigate }) {
               <div><Camera size={19} /><span><strong>영상</strong><p>RGB와 열화상 스트림을 확인합니다. MOCK 표시는 실제 센서 영상이 아니라는 뜻입니다.</p></span></div>
               <div><ListChecks size={19} /><span><strong>이벤트</strong><p>위험 온도와 기타 이상 이벤트를 확인하고 처리 중·해결 상태로 변경합니다.</p></span></div>
               <div><BellRinging size={19} /><span><strong>비콘 배출 승인</strong><p>위험 이벤트 상세에서 비콘 없이 재개, 비콘 배출 후 재개, 비콘 배출 후 현장 감시 중 하나를 선택합니다. 배출 조치는 관리자 토큰과 Robot의 정지·BLE 조건을 모두 통과해야 실행됩니다.</p></span></div>
-              <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>이상 탐지 설정에서 설비별 고정·자동 가변 판정, ROI와 기준선을 관리하고, 연결 상태 점검에서 토픽 주기와 TF를 확인합니다.</p></span></div>
+              <div><SlidersHorizontal size={19} /><span><strong>설정·센서 진단</strong><p>이상 탐지 설정에서 지도에 저장한 설비의 고정·자동 가변 판정과 기준선을 관리하고, 연결 상태 점검에서 토픽 주기와 TF를 확인합니다. 위치와 ROI는 지도 탭에서 편집합니다.</p></span></div>
               <div><FloppyDisk size={19} /><span><strong>리포트</strong><p>순찰 중 자동 수집한 Jetson 및 ROS 프로세스 성능 통계를 조회하고, 이름 변경·CSV 저장·삭제를 수행합니다.</p></span></div>
             </div>
             <div className="help-callout info">

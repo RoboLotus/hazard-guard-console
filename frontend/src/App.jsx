@@ -436,7 +436,7 @@ export function App() {
         {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={visibleEvents} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}
         {active === "rosbag" && <RosbagPage status={bagStatus} enabled={bagEnabled} onEnabledChange={changeBagEnabled} sessions={bagSessions} onRefreshSessions={refreshBagSessions} onControl={controlBag} />}
-        {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} spatialState={spatialState} />}
+        {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} />}
         {active === "help" && <HelpPage onNavigate={navigate} />}
       </main>
       {toast && <div className={`toast ${toast.tone}`} role="status">{toast.tone === "warning" ? <Warning size={19} weight="fill" /> : <CheckCircle size={19} weight="fill" />}<span>{toast.message}</span></div>}
