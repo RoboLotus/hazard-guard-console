@@ -694,7 +694,7 @@ def test_physical_patrol_passes_selected_map_to_hardware_launch(
     assert "initial_pose_x:=1.25" in command
     assert "initial_pose_y:=-0.4" in command
     assert "initial_pose_yaw:=0.75" in command
-    assert "use_person_safety:=true" in command
+    assert "use_person_safety:=false" in command
     assert "person_device:=0" in command
     assert "enable_thermal_pipeline:=false" in command
     assert all("start_simulation" not in argument for argument in command)

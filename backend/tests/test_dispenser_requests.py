@@ -170,6 +170,41 @@ def test_real_safety_guard_accepts_approved_stopped_clear_state(monkeypatch):
     assert context["mission_status"] == "stopped"
 
 
+def test_real_safety_guard_does_not_depend_on_optional_person_detection(
+    monkeypatch,
+):
+    request = DispenserDropRequest(
+        request_id="beacon-request-1",
+        detection_id="thermal-1",
+        operator_approved=True,
+    )
+    monkeypatch.setenv("HAZARD_GUARD_DISPENSER_DROP_ENABLED", "1")
+    monkeypatch.setattr(
+        main_module.telemetry_store,
+        "snapshot",
+        lambda: {
+            "speed_mps": 0.0,
+            "person_safety": {
+                "state_name": "SENSOR_FAULT",
+                "detector_stale": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        main_module.route_mission_store,
+        "snapshot",
+        lambda: {"status": "stopped"},
+    )
+
+    context = REAL_SAFETY_CONTEXT(request)
+
+    assert context == {
+        "operator_approved": True,
+        "speed_mps": 0.0,
+        "mission_status": "stopped",
+    }
+
+
 def test_backend_restart_never_republishes_an_interrupted_request(tmp_path):
     path = tmp_path / "backend-requests.json"
     initial = DispenserRequestStore(path)

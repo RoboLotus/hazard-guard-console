@@ -23,7 +23,11 @@ def test_physical_runtime_overrides_remain_operator_configurable():
 
     assert (
         'HAZARD_GUARD_PERSON_SAFETY_ENABLED="'
-        '${HAZARD_GUARD_PERSON_SAFETY_ENABLED:-1}"'
+        '${HAZARD_GUARD_PERSON_SAFETY_ENABLED:-0}"'
+    ) in source
+    assert (
+        'HAZARD_GUARD_DISPENSER_BATTERY_STALE_SEC="'
+        '${HAZARD_GUARD_DISPENSER_BATTERY_STALE_SEC:-180}"'
     ) in source
     assert (
         'HAZARD_GUARD_THERMAL_ROI_CONFIG="'

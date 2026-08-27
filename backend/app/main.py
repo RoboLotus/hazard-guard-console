@@ -194,20 +194,10 @@ def dispenser_safety_context(request: DispenserDropRequest) -> dict:
             detail="순찰 임무가 정지된 뒤에만 배출할 수 있습니다.",
         )
 
-    person_safety = telemetry.get("person_safety") or {}
-    if (
-        bool(person_safety.get("detector_stale"))
-        or str(person_safety.get("state_name", "")).upper() != "CLEAR"
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="사람 안전 상태가 CLEAR일 때만 배출할 수 있습니다.",
-        )
     return {
         "operator_approved": True,
         "speed_mps": speed_mps,
         "mission_status": mission.get("status"),
-        "person_safety_state": person_safety.get("state_name"),
     }
 
 

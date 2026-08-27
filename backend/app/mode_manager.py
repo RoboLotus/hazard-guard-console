@@ -1161,12 +1161,12 @@ class SystemModeManager:
     ) -> list[str]:
         """Translate deployment settings into the physical patrol contract."""
 
-        # Physical deployments enable person safety by default, but test runs
-        # must be able to disable the complete YOLO safety path explicitly.
-        # Callers such as RGB-D mapping still take precedence over the runtime
-        # default while keeping the camera available when requested.
+        # YOLO person safety is an optional navigation aid. Physical deployments
+        # keep it disabled by default because intermittent RGB-D frames must not
+        # stop patrol or dispenser workflows. Operators can still opt in after
+        # validating the camera stream and calibration.
         safety_enabled = (
-            env_flag("HAZARD_GUARD_PERSON_SAFETY_ENABLED", True)
+            env_flag("HAZARD_GUARD_PERSON_SAFETY_ENABLED", False)
             if person_safety_enabled is None
             else person_safety_enabled
         )

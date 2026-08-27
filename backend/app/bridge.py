@@ -829,10 +829,15 @@ class RosBridge:
         try:
             stale_after = max(
                 0.1,
-                float(os.getenv("HAZARD_GUARD_DISPENSER_BATTERY_STALE_SEC", "15")),
+                float(
+                    os.getenv(
+                        "HAZARD_GUARD_DISPENSER_BATTERY_STALE_SEC",
+                        "180",
+                    )
+                ),
             )
         except ValueError:
-            stale_after = 15.0
+            stale_after = 180.0
         payload["age_sec"] = round(age_sec, 2) if age_sec is not None else None
         source_timestamp_ms = int(payload.get("updated_at_unix_ms") or 0)
         source_age_sec = (

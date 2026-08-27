@@ -380,7 +380,7 @@ def test_bridge_normalizes_incident_message_and_battery_fails_closed(monkeypatch
     assert main_module.ros_bridge.dispenser_battery_status()["available_for_drop"] == 1
     received_at = main_module.ros_bridge._dispenser_battery_monotonic
     monkeypatch.setattr(
-        bridge_module.time, "monotonic", lambda: received_at + 100.0
+        bridge_module.time, "monotonic", lambda: received_at + 181.0
     )
     assert main_module.ros_bridge.dispenser_battery_status()["available_for_drop"] == 0
 
@@ -402,7 +402,7 @@ def test_bridge_normalizes_incident_message_and_battery_fails_closed(monkeypatch
             "connected": 1,
             "available_for_drop": 1,
             "beacons": [],
-            "updated_at_unix_ms": lambda: int((time.time() - 60) * 1000),
+            "updated_at_unix_ms": lambda: int((time.time() - 181) * 1000),
         },
     ],
 )

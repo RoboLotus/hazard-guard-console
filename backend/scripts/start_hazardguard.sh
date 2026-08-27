@@ -121,6 +121,7 @@ export HAZARD_GUARD_ROS_ENABLED=1
 # Keep dispensing fail-closed until shared Rosmaster serial-port ownership and
 # the physical interlocks have been validated on the robot.
 export HAZARD_GUARD_DISPENSER_DROP_ENABLED=0
+export HAZARD_GUARD_DISPENSER_BATTERY_STALE_SEC="${HAZARD_GUARD_DISPENSER_BATTERY_STALE_SEC:-180}"
 export HAZARD_GUARD_RGB_TOPIC=/ascamera_hp60c/camera_publisher/rgb0/image
 export HAZARD_GUARD_RGB_INFO_TOPIC=/ascamera_hp60c/camera_publisher/rgb0/camera_info
 export HAZARD_GUARD_DEPTH_TOPIC=/ascamera_hp60c/camera_publisher/depth0/image_raw
@@ -129,7 +130,7 @@ export HAZARD_GUARD_SCAN_TOPIC=/scan
 export HAZARD_GUARD_IMU_TOPIC=/imu/data_raw
 export HAZARD_GUARD_ODOM_TOPIC=/odom
 export YOLO_AUTOINSTALL=false
-export HAZARD_GUARD_PERSON_SAFETY_ENABLED="${HAZARD_GUARD_PERSON_SAFETY_ENABLED:-1}"
+export HAZARD_GUARD_PERSON_SAFETY_ENABLED="${HAZARD_GUARD_PERSON_SAFETY_ENABLED:-0}"
 export HAZARD_GUARD_PERSON_CAMERA_START="${HAZARD_GUARD_PERSON_CAMERA_START:-1}"
 export HAZARD_GUARD_PERSON_MODEL_PATH=/home/jetson/ultralytics/ultralytics/yolo11n.engine
 export HAZARD_GUARD_PERSON_DEVICE=cuda:0
