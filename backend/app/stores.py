@@ -320,6 +320,7 @@ class SpatialStore:
         }
         self._pose = {
             "available": self._mock_enabled,
+            "map_id": self._map_id,
             "frame_id": "map",
             "x": self.MOCK_ROUTE[0][0],
             "y": self.MOCK_ROUTE[0][1],
@@ -393,6 +394,7 @@ class SpatialStore:
                 self._activate_live_locked()
             pose = {
                 "available": True,
+                "map_id": self._map_id,
                 "frame_id": frame_id,
                 "x": round(float(x), 4),
                 "y": round(float(y), 4),
@@ -423,6 +425,7 @@ class SpatialStore:
             normalized_frame = str(frame_id).lstrip("/") or "odom"
             self._poses[normalized_frame] = {
                 "available": True,
+                "map_id": self._map_id,
                 "frame_id": normalized_frame,
                 "x": round(float(x), 4),
                 "y": round(float(y), 4),
@@ -448,6 +451,7 @@ class SpatialStore:
             }
             self._pose = {
                 "available": False,
+                "map_id": map_id,
                 "frame_id": "map",
                 "x": 0.0,
                 "y": 0.0,
@@ -461,12 +465,16 @@ class SpatialStore:
             self._detections.clear()
             self._live_initialized = False
 
-    def reset_for_localization(self) -> None:
+    def reset_for_localization(self, map_id: str | None = None) -> None:
         """Invalidate a SLAM-era pose until AMCL publishes the patrol transform."""
 
         with self._lock:
+            if map_id is not None:
+                self._map_id = map_id
+                self._map["map_id"] = map_id
             self._pose = {
                 "available": False,
+                "map_id": self._map_id,
                 "frame_id": "map",
                 "x": 0.0,
                 "y": 0.0,
@@ -611,6 +619,7 @@ class SpatialStore:
         yaw = math.atan2(end[1] - start[1], end[0] - start[0])
         self._pose = {
             "available": True,
+            "map_id": self._map_id,
             "frame_id": "map",
             "x": round(x, 4),
             "y": round(y, 4),

@@ -95,6 +95,32 @@ def reset_thermal_map_stream(session_id: str | None) -> None:
     thermal_delta_store.reset(session_id)
 
 
+def prepare_managed_ros_stop() -> dict[str, object]:
+    """Publish a final motion stop while the managed ROS graph is still alive."""
+
+    failures = []
+    for name, operation in (
+        ("cancel_route", ros_bridge.cancel_route),
+        ("cancel_navigation", ros_bridge.cancel_navigation),
+        ("stop_motion", ros_bridge.stop_motion),
+    ):
+        try:
+            result = operation()
+            if isinstance(result, dict) and result.get("accepted") is False:
+                failures.append(
+                    f"{name}: {result.get('message') or 'rejected'}"
+                )
+        except Exception as exc:
+            failures.append(f"{name}: {exc}")
+    return {
+        "accepted": not failures,
+        "message": "; ".join(failures) if failures else None,
+    }
+
+
+system_mode_manager.set_pre_stop_hook(prepare_managed_ros_stop)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ros_bridge.start()
@@ -105,8 +131,10 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        system_mode_manager.stop()
-        ros_bridge.stop()
+        try:
+            system_mode_manager.stop()
+        finally:
+            ros_bridge.stop()
 
 
 app = FastAPI(
@@ -637,13 +665,8 @@ def system_mode():
 
 @app.put("/api/v1/system/mode")
 def update_system_mode(request: SystemModeRequest):
-    ros_bridge.cancel_route()
-    ros_bridge.cancel_navigation()
-    ros_bridge.stop_motion()
     if request.mode in {"patrol", "rgbd_mapping"}:
-        current_pose = spatial_store.snapshot().get("pose") or {}
-        if current_pose.get("available") and not current_pose.get("mock"):
-            system_mode_manager.set_localization_pose(current_pose)
+        remember_live_localization_pose()
     previous = system_mode_manager.snapshot(detect_external=False)
     result = system_mode_manager.switch_mode(
         request.mode,
@@ -679,12 +702,57 @@ def update_system_mode(request: SystemModeRequest):
             f"{result.get('active_world_id', 'world')}:{session_id}"
         )
     elif request.mode in {"patrol", "rgbd_mapping"}:
-        spatial_store.reset_for_localization()
+        spatial_store.reset_for_localization(
+            f"{result.get('active_world_id')}:{result.get('active_map_session_id')}"
+        )
         current_equipment = equipment_store.get()
         ros_bridge.publish_thermal_equipment_config(
             current_equipment.model_dump(by_alias=True)
         )
     return result
+
+
+def remember_live_localization_pose() -> None:
+    """Persist only the currently admitted map-frame pose for a map save."""
+
+    mode = system_mode_manager.snapshot(detect_external=False)
+    map_source_running = mode.get("mode") == "mapping" or (
+        mode.get("mode") == "patrol" and mode.get("patrol_slam")
+    )
+    session_id = (
+        mode.get("mapping_session_id")
+        if map_source_running
+        else mode.get("active_map_session_id")
+    )
+    world_id = mode.get("active_world_id")
+    if not world_id or not session_id:
+        return
+    expected_map_id = f"{world_id}:{session_id}"
+    spatial = spatial_store.snapshot()
+    current_pose = spatial.get("pose") or {}
+    frame_id = str(current_pose.get("frame_id") or "").lstrip("/")
+    try:
+        updated_at = datetime.fromisoformat(str(current_pose["updated_at"]))
+        if updated_at.tzinfo is None:
+            raise ValueError("pose timestamp must include a timezone")
+        age_sec = (
+            datetime.now(timezone.utc) - updated_at.astimezone(timezone.utc)
+        ).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return
+    if (
+        current_pose.get("available")
+        and not current_pose.get("mock")
+        and frame_id == "map"
+        and spatial.get("map", {}).get("map_id") == expected_map_id
+        and current_pose.get("map_id") == expected_map_id
+        and 0 <= age_sec <= 2.0
+    ):
+        system_mode_manager.set_localization_pose(
+            current_pose,
+            world_id=str(world_id),
+            session_id=str(session_id),
+        )
 
 
 @app.post("/api/v1/system/localization/initialize")
@@ -701,7 +769,9 @@ def initialize_localization(request: LocalizationPoseRequest):
             detail="저장 지도 기반 모드가 실행 중일 때만 AMCL 초기 위치를 적용할 수 있습니다.",
         )
     system_mode_manager.set_localization_pose(request.model_dump())
-    spatial_store.reset_for_localization()
+    spatial_store.reset_for_localization(
+        f"{status.get('active_world_id')}:{status.get('active_map_session_id')}"
+    )
     result = ros_bridge.publish_initial_pose(request.x, request.y, request.yaw)
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
@@ -710,14 +780,17 @@ def initialize_localization(request: LocalizationPoseRequest):
 
 @app.delete("/api/v1/system/mode")
 def stop_system_mode():
-    ros_bridge.cancel_route()
-    ros_bridge.cancel_navigation()
-    ros_bridge.stop_motion()
-    return system_mode_manager.stop()
+    result = system_mode_manager.stop()
+    if not result["accepted"]:
+        raise HTTPException(status_code=409, detail=result["message"])
+    if result.get("managed_stop_performed"):
+        reset_thermal_map_stream(None)
+    return result
 
 
 @app.post("/api/v1/system/map/save")
 def save_system_map():
+    remember_live_localization_pose()
     result = system_mode_manager.save_map()
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
@@ -726,9 +799,12 @@ def save_system_map():
 
 @app.post("/api/v1/system/map/save-and-stop")
 def save_and_stop_system_map():
+    remember_live_localization_pose()
     result = system_mode_manager.save_map_and_stop()
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
+    if result.get("managed_stop_performed"):
+        reset_thermal_map_stream(None)
     return result
 
 
@@ -766,6 +842,12 @@ def select_active_system_map(request: MapSelectionRequest):
     result = system_mode_manager.select_map(request.world_id, request.session_id)
     if not result["accepted"]:
         raise HTTPException(status_code=409, detail=result["message"])
+    # A cached pose belongs to the previously active map frame. Invalidate it
+    # before a later RGB-D/patrol request has a chance to overwrite the pose
+    # restored from the newly selected session metadata.
+    spatial_store.reset_for_localization(
+        f"{request.world_id}:{request.session_id}"
+    )
     reset_thermal_map_stream(None)
     ros_bridge.publish_thermal_equipment_config(
         equipment_store.get().model_dump(by_alias=True)
