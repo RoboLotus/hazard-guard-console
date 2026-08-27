@@ -82,3 +82,41 @@ export function resolvePointCloudRobotState(
     yaw,
   };
 }
+
+export function shouldShowPointCloudRobot(
+  robotState,
+  {
+    variant = "rgb",
+    pointCount = 0,
+    baseScene = null,
+    referenceSession = null,
+    thermalSessionId = null,
+    thermalStatusFrameId = null,
+    fixedMapAvailable = null,
+  } = {},
+) {
+  if (!robotState?.visible) return false;
+  if (variant !== "thermal") return Number(pointCount) > 0;
+  if (fixedMapAvailable !== true || !baseScene?.ready) return false;
+
+  const sceneWorldId = String(baseScene.worldId || "");
+  const sceneSessionId = String(baseScene.sessionId || "");
+  const referenceWorldId = String(referenceSession?.world_id || "");
+  const referenceSessionId = String(referenceSession?.id || "");
+  const sceneFrameId = normalizeFrameId(baseScene.frameId);
+  const referenceFrameId = normalizeFrameId(
+    referenceSession?.cloud_frame_id || referenceSession?.frame_id,
+  );
+  const streamFrameId = normalizeFrameId(thermalStatusFrameId);
+
+  // Thermal observations can be empty before the first inspection, but the
+  // immutable base geometry must be a non-empty, identity-matched scene.
+  return Number(baseScene.pointCount) > 0
+    && sceneWorldId === referenceWorldId
+    && sceneSessionId === referenceSessionId
+    && sceneSessionId === String(thermalSessionId || "")
+    && Boolean(sceneFrameId)
+    && sceneFrameId === referenceFrameId
+    && (!streamFrameId || sceneFrameId === streamFrameId)
+    && sceneFrameId === robotState.cloudFrameId;
+}
