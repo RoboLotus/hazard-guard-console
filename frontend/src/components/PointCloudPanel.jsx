@@ -14,6 +14,12 @@ import {
   resolvePointCloudRobotState,
   selectPointCloudPose,
 } from "../pointCloudRobot.js";
+import {
+  HGTD_PROTOCOL_VERSION,
+  ThermalGeometryBuffers,
+  parseThermalDelta,
+  thermalDeltaAction,
+} from "../thermalPointCloud.js";
 
 const INITIAL_STATUS = {
   connection: "connecting",
@@ -188,6 +194,7 @@ export default function PointCloudPanel({
   const sceneRef = useRef(null);
   const fitRef = useRef(() => {});
   const firstCloudRef = useRef(true);
+  const thermalBuffersRef = useRef(null);
   const [status, setStatus] = useState(INITIAL_STATUS);
   const [clockTick, setClockTick] = useState(Date.now());
   const [temperatureWindow, setTemperatureWindow] = useState(null);
@@ -238,6 +245,11 @@ export default function PointCloudPanel({
     });
     const points = new THREE.Points(geometry, material);
     scene.add(points);
+    const dynamicGeometry = new THREE.BufferGeometry();
+    const dynamicPoints = new THREE.Points(dynamicGeometry, material);
+    dynamicPoints.frustumCulled = false;
+    dynamicPoints.visible = variant === "thermal";
+    scene.add(dynamicPoints);
     const robotMarker = createRobotMarker();
     scene.add(robotMarker.group);
     const equipmentGroup = new THREE.Group();
@@ -249,6 +261,8 @@ export default function PointCloudPanel({
       geometry,
       material,
       points,
+      dynamicGeometry,
+      dynamicPoints,
       renderer,
       robotMarker,
       equipmentGroup,
@@ -279,6 +293,7 @@ export default function PointCloudPanel({
       window.cancelAnimationFrame(animationFrame);
       controls.dispose();
       geometry.dispose();
+      dynamicGeometry.dispose();
       material.dispose();
       robotMarker.dispose();
       renderer.dispose();
@@ -293,6 +308,7 @@ export default function PointCloudPanel({
     currentScene.material.size = variant === "thermal" ? 0.055 : 0.035;
     currentScene.material.needsUpdate = true;
     currentScene.renderer.domElement.setAttribute("aria-label", spec.ariaLabel);
+    currentScene.dynamicPoints.visible = variant === "thermal";
   }, [spec.ariaLabel, variant]);
 
   useEffect(() => {
@@ -366,7 +382,131 @@ export default function PointCloudPanel({
     firstCloudRef.current = true;
     let disposed = false;
     let socket;
+    let deltaSocket;
     let reconnectTimer;
+    let currentSequence = 0;
+    let identity = null;
+    let fallbackGeneration = 0;
+    const websocketUrl = (path) => {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${protocol}//${window.location.host}${path}`;
+    };
+
+    if (variant === "thermal") {
+      const setCloudStatus = (cloud, counts = null) => setStatus({
+        connection: "connected",
+        pointCount: counts ? counts.staticCount + counts.dynamicCount : cloud.pointCount,
+        colorAvailable: cloud.colorAvailable,
+        frameId: cloud.frameId,
+        updatedAt: new Date(cloud.timestampMs),
+        error: null,
+      });
+      const loadSnapshot = async (reason = null) => {
+        const generation = ++fallbackGeneration;
+        if (deltaSocket) { deltaSocket.onclose = null; deltaSocket.close(); }
+        const bootstrapResponse = await fetch(
+          "/api/v1/spatial/cloud/thermal/delta/bootstrap", { cache: "no-store" },
+        );
+        if (!bootstrapResponse.ok) throw new Error("열화상 delta bootstrap을 불러오지 못했습니다.");
+        const bootstrap = await bootstrapResponse.json();
+        if (bootstrap.protocol_version !== HGTD_PROTOCOL_VERSION) throw new Error("지원하지 않는 열화상 delta protocol입니다.");
+        identity = {
+          sessionId: bootstrap.session_id,
+          fingerprint: bootstrap.geometry_fingerprint,
+        };
+        socket?.close();
+        socket = new WebSocket(websocketUrl(spec.socketPath));
+        socket.binaryType = "arraybuffer";
+        socket.onopen = () => setStatus((current) => ({ ...current, connection: "connecting", error: reason }));
+        socket.onmessage = ({ data }) => {
+          if (disposed || generation !== fallbackGeneration) return;
+          try {
+            const cloud = parsePointCloudPacket(data);
+            const scene = sceneRef.current;
+            if (!scene) return;
+            if (cloud.version < 3) {
+              replacePointCloudGeometrySnapshot(scene.geometry, new THREE.BufferAttribute(cloud.positions, 3), new THREE.BufferAttribute(cloud.colors, 3));
+              setCloudStatus(cloud);
+              return;
+            }
+            const manager = new ThermalGeometryBuffers(scene.geometry, scene.dynamicGeometry, {
+              temperatureMin: temperatureWindow?.[0] ?? 20,
+              temperatureMax: temperatureWindow?.[1] ?? 40,
+              dynamicVoxelSize: Number(bootstrap.dynamic_voxel_size_m) || 0.05,
+            });
+            const counts = manager.bootstrap(cloud);
+            thermalBuffersRef.current = manager;
+            currentSequence = counts.sequence;
+            setCloudStatus(cloud, counts);
+            if (cloud.pointCount > 0 && firstCloudRef.current) { firstCloudRef.current = false; fitRef.current(); }
+            socket.onclose = null;
+            socket.close();
+            connectDelta();
+          } catch (error) {
+            setStatus((current) => ({ ...current, error: error.message }));
+          }
+        };
+        socket.onerror = () => socket.close();
+        socket.onclose = () => {
+          if (!disposed && generation === fallbackGeneration) reconnectTimer = window.setTimeout(() => startSnapshot("snapshot 재연결 중"), 1500);
+        };
+      };
+      const startSnapshot = (reason = null) => {
+        void loadSnapshot(reason).catch((error) => {
+          if (disposed) return;
+          setStatus((current) => ({ ...current, connection: "disconnected", error: error.message }));
+          reconnectTimer = window.setTimeout(() => startSnapshot("bootstrap 재연결 중"), 1500);
+        });
+      };
+      const requestResync = async (reason) => {
+        try {
+          const query = new URLSearchParams({
+            session_id: identity?.sessionId || "",
+            geometry_fingerprint: identity?.fingerprint || "",
+            base_sequence: String(currentSequence),
+          });
+          const response = await fetch(`/api/v1/spatial/cloud/thermal/delta/resync?${query}`, { cache: "no-store" });
+          const result = response.ok ? await response.json() : { status: "RESYNC_REQUIRED" };
+          if (result.status === "REPLAY_AVAILABLE" || result.status === "UP_TO_DATE") connectDelta();
+          else await loadSnapshot(reason || result.reason || "delta 복구를 위해 snapshot을 다시 받습니다.");
+        } catch { await loadSnapshot("delta 복구를 위해 snapshot을 다시 받습니다."); }
+      };
+      const connectDelta = () => {
+        if (disposed || !identity?.sessionId || !identity?.fingerprint) return;
+        if (deltaSocket) { deltaSocket.onclose = null; deltaSocket.close(); }
+        const query = new URLSearchParams({ session_id: identity.sessionId, geometry_fingerprint: identity.fingerprint, base_sequence: String(currentSequence) });
+        deltaSocket = new WebSocket(websocketUrl(`/ws/pointcloud/thermal/delta?${query}`));
+        deltaSocket.binaryType = "arraybuffer";
+        deltaSocket.onopen = () => setStatus((current) => ({ ...current, connection: "connected", error: null }));
+        deltaSocket.onmessage = ({ data }) => {
+          if (typeof data === "string") {
+            const control = JSON.parse(data);
+            if (control.status === "RESYNC_REQUIRED") startSnapshot(control.reason);
+            return;
+          }
+          try {
+            const delta = parseThermalDelta(data);
+            const action = thermalDeltaAction(delta, { sessionId: identity.sessionId, geometryFingerprint: identity.fingerprint, sequence: currentSequence });
+            if (action === "SNAPSHOT_REQUIRED") { startSnapshot("열화상 session 또는 geometry가 변경되었습니다."); return; }
+            if (action === "REPLAY_REQUIRED") { void requestResync("delta sequence 복구가 필요합니다."); return; }
+            const result = thermalBuffersRef.current?.apply(delta);
+            if (!result?.applied) { startSnapshot("새 static geometry가 필요합니다."); return; }
+            currentSequence = delta.sequence;
+            setStatus((current) => ({ ...current, connection: "connected", pointCount: (thermalBuffersRef.current?.staticIndexToSlot.size || 0) + (thermalBuffersRef.current?.dynamicActiveCount || 0), updatedAt: new Date(), error: null }));
+          } catch (error) { void requestResync(error.message); }
+        };
+        deltaSocket.onerror = () => deltaSocket.close();
+        deltaSocket.onclose = () => { if (!disposed) reconnectTimer = window.setTimeout(connectDelta, 1500); };
+      };
+      setStatus((current) => ({ ...current, connection: "connecting", error: null }));
+      startSnapshot();
+      return () => {
+        disposed = true; fallbackGeneration += 1;
+        window.clearTimeout(reconnectTimer); socket?.close(); deltaSocket?.close();
+        thermalBuffersRef.current = null;
+      };
+    }
+
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       setStatus((current) => ({ ...current, connection: "connecting", error: null }));
@@ -418,8 +558,9 @@ export default function PointCloudPanel({
       disposed = true;
       window.clearTimeout(reconnectTimer);
       socket?.close();
+      deltaSocket?.close();
     };
-  }, [archived?.id, spec.socketPath]);
+  }, [archived?.id, spec.socketPath, variant]);
 
   useEffect(() => {
     if (!archived) return undefined;
