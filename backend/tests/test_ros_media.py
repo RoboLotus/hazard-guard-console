@@ -4,6 +4,18 @@ from app.ros_media import RosMediaAdapter
 from app.stores import MediaStore, SpatialStore
 
 
+def test_image_source_distinguishes_physical_ros_from_gazebo(monkeypatch):
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    assert RosMediaAdapter._image_source("/thermal_camera/image_raw") == (
+        "ros:/thermal_camera/image_raw"
+    )
+
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "simulation")
+    assert RosMediaAdapter._image_source("/thermal_camera/image_raw") == (
+        "gazebo:/thermal_camera/image_raw"
+    )
+
+
 def test_sdk_color_thermal_frame_is_stored_without_recolouring():
     import cv2
     import numpy as np

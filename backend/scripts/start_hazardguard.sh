@@ -97,8 +97,13 @@ THERMAL_CALIBRATION_DIR="/home/jetson/.local/share/hazard_guard/calibration"
 # must not silently fall back to unsafe defaults.
 RUNTIME_ENV="/home/jetson/.config/hazard-guard/runtime.env"
 if [[ -r "${RUNTIME_ENV}" ]]; then
+  # Runtime overrides must reach FastAPI and every ROS process it launches.
+  # Plain assignments sourced without allexport stay local to this shell and
+  # silently fall back to application defaults in child processes.
+  set -a
   # shellcheck disable=SC1090
   source "${RUNTIME_ENV}"
+  set +a
 fi
 
 # Physical WebUI-managed defaults selected by the Jetson load test.
@@ -124,7 +129,8 @@ export HAZARD_GUARD_SCAN_TOPIC=/scan
 export HAZARD_GUARD_IMU_TOPIC=/imu/data_raw
 export HAZARD_GUARD_ODOM_TOPIC=/odom
 export YOLO_AUTOINSTALL=false
-export HAZARD_GUARD_PERSON_SAFETY_ENABLED=1
+export HAZARD_GUARD_PERSON_SAFETY_ENABLED="${HAZARD_GUARD_PERSON_SAFETY_ENABLED:-1}"
+export HAZARD_GUARD_PERSON_CAMERA_START="${HAZARD_GUARD_PERSON_CAMERA_START:-1}"
 export HAZARD_GUARD_PERSON_MODEL_PATH=/home/jetson/ultralytics/ultralytics/yolo11n.engine
 export HAZARD_GUARD_PERSON_DEVICE=cuda:0
 export HAZARD_GUARD_PERSON_DEPTH_REGISTERED=1
@@ -140,7 +146,7 @@ export HAZARD_GUARD_THERMAL_INFO_TOPIC=/thermal_camera/camera_info
 export HAZARD_GUARD_THERMAL_CLOUD_TOPIC=/hazard_guard/thermal/map
 export HAZARD_GUARD_THERMAL_SCALE=0.01
 export HAZARD_GUARD_THERMAL_OFFSET_C=-273.15
-export HAZARD_GUARD_THERMAL_ROI_CONFIG="${ROBOT_WORKSPACE}/src/hazard_guard_thermal_analysis/config/demo_facility_scaled_rois.json"
+export HAZARD_GUARD_THERMAL_ROI_CONFIG="${HAZARD_GUARD_THERMAL_ROI_CONFIG:-${ROBOT_WORKSPACE}/src/hazard_guard_thermal_analysis/config/demo_facility_scaled_rois.json}"
 export HAZARD_GUARD_THERMAL_BASELINE_PATH="/home/jetson/.local/share/hazard_guard/physical_thermal_baselines.json"
 export HAZARD_GUARD_THERMAL_HISTORY_PATH="/home/jetson/.local/share/hazard_guard/physical_thermal_history.jsonl"
 export HAZARD_GUARD_THERMAL_AIR_TOPIC=/hazard_guard/thermal/air_temperature_disabled

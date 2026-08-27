@@ -421,6 +421,24 @@ class SystemModeManager:
                 and self._data.get("mode")
                 in {"mapping", "rgbd_mapping", "patrol"}
             )
+        try:
+            paths = self._world_catalog.session_paths(world_id, session_id)
+        except KeyError:
+            return {"accepted": False, "message": "지도 세션을 찾지 못했습니다."}
+        existing_cloud = paths["cloud"]
+        existing_cloud_available = (
+            existing_cloud.is_file() and existing_cloud.stat().st_size > 0
+        )
+        if current_thermal_use and existing_cloud_available:
+            # Patrol only reads the frozen RGB-D surface. Serving that immutable
+            # PLY lets the WebUI retain its 3D reference while the thermal layer
+            # is starting, without touching the active RTAB-Map database.
+            return {
+                "accepted": True,
+                "path": existing_cloud,
+                "geometry_refreshed": False,
+                "message": "순찰 기준 3D 지도 파일을 준비했습니다.",
+            }
         if (
             current_mapping
             or current_thermal_use
@@ -440,10 +458,6 @@ class SystemModeManager:
                     )
                 ),
             }
-        try:
-            paths = self._world_catalog.session_paths(world_id, session_id)
-        except KeyError:
-            return {"accepted": False, "message": "지도 세션을 찾지 못했습니다."}
         metadata = self._world_catalog.session_metadata(world_id, session_id)
         thermal_contract_valid = self._thermal_metadata_contract_valid(metadata)
         database_path = paths["database"]
@@ -1147,10 +1161,14 @@ class SystemModeManager:
     ) -> list[str]:
         """Translate deployment settings into the physical patrol contract."""
 
-        # Physical patrol always runs person safety. Callers such as RGB-D
-        # mapping may explicitly disable inference while keeping the camera up.
+        # Physical deployments enable person safety by default, but test runs
+        # must be able to disable the complete YOLO safety path explicitly.
+        # Callers such as RGB-D mapping still take precedence over the runtime
+        # default while keeping the camera available when requested.
         safety_enabled = (
-            True if person_safety_enabled is None else person_safety_enabled
+            env_flag("HAZARD_GUARD_PERSON_SAFETY_ENABLED", True)
+            if person_safety_enabled is None
+            else person_safety_enabled
         )
         values = {
             "use_person_safety": (

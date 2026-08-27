@@ -7,6 +7,10 @@ export function optionalFiniteNumber(value) {
 export function normalizeEquipmentSettings(payload) {
   return {
     schema_version: Number(payload?.schema_version || 1),
+    world_id: payload?.world_id ?? null,
+    map_session_id: payload?.map_session_id ?? null,
+    frame_id: payload?.frame_id ?? null,
+    geometry_fingerprint: payload?.geometry_fingerprint ?? null,
     equipment: Array.isArray(payload?.equipment)
       ? payload.equipment.map((item) => ({
         ...item,

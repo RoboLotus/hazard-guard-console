@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -30,6 +31,15 @@ class RosMediaAdapter:
         self._last_odom_update = 0.0
         self._latest_thermal_detections: dict[str, dict[str, Any]] = {}
         self._completed_thermal_trends: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _image_source(topic: str) -> str:
+        target = os.getenv(
+            "HAZARD_GUARD_DEPLOYMENT_TARGET", "simulation"
+        ).strip().lower()
+        scheme = "ros" if target == "physical" else "gazebo"
+        normalized = topic if topic.startswith("/") else f"/{topic}"
+        return f"{scheme}:{normalized}"
 
     def configure(
         self,
@@ -401,7 +411,9 @@ class RosMediaAdapter:
                 frame,
                 width,
                 height,
-                "gazebo:/camera/image_raw",
+                self._image_source(
+                    os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw")
+                ),
             )
             if self._thermal_stream_seen:
                 return
@@ -434,9 +446,12 @@ class RosMediaAdapter:
                 normalized,
                 cv2.COLORMAP_INFERNO,
             )
+            physical = os.getenv(
+                "HAZARD_GUARD_DEPLOYMENT_TARGET", "simulation"
+            ).strip().lower() == "physical"
             self._label_image(
                 thermal,
-                "GAZEBO THERMAL - SIMULATED",
+                "TMC160F THERMAL" if physical else "GAZEBO THERMAL - SIMULATED",
                 0.55,
             )
             height, width = thermal.shape[:2]
@@ -446,7 +461,12 @@ class RosMediaAdapter:
                 thermal,
                 width,
                 height,
-                "gazebo:/thermal_camera/image_raw",
+                self._image_source(
+                    os.getenv(
+                        "HAZARD_GUARD_THERMAL_TOPIC",
+                        "/thermal_camera/image_raw",
+                    )
+                ),
             )
         except Exception as exc:
             self._on_error(f"Thermal camera conversion failed: {exc}")

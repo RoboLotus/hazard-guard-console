@@ -177,6 +177,29 @@ export default function MapPage({
   }, [activeWorldId, systemMode?.active_map_session_id]);
 
   useEffect(() => {
+    if (mapDimension === "2d" || !systemMode?.active_map_session_id) return undefined;
+    const controller = new AbortController();
+    const loadActive3dSession = async () => {
+      try {
+        const response = await fetch(
+          `/api/v1/system/maps?world_id=${encodeURIComponent(activeWorldId)}`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        if (!response.ok) return;
+        const payload = await response.json();
+        const active = (payload.sessions || []).find((item) => (
+          item.id === systemMode.active_map_session_id && item.cloud_ready
+        ));
+        if (active) setSelected3dSession(active);
+      } catch (error) {
+        if (error.name !== "AbortError") return;
+      }
+    };
+    void loadActive3dSession();
+    return () => controller.abort();
+  }, [activeWorldId, mapDimension, systemMode?.active_map_session_id]);
+
+  useEffect(() => {
     const controller = new AbortController();
     const loadEquipment = async () => {
       try {
@@ -582,8 +605,10 @@ export default function MapPage({
         ) : (
           <Suspense fallback={<div className="point-cloud-panel point-cloud-loading">3D 지도 뷰어를 불러오는 중입니다.</div>}>
             <PointCloudPanel
+              key={`point-cloud-${mapDimension}`}
               systemMode={systemMode}
               archivedSession={selected3dSession}
+              referenceSession={selected3dSession}
               spatialState={spatialState}
               variant={mapDimension === "thermal" ? "thermal" : "rgb"}
               equipment={equipmentDocument?.equipment || []}
