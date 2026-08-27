@@ -1,3 +1,5 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -10,6 +12,54 @@ from app.main import app
 
 
 client = TestClient(app)
+
+
+def test_lifespan_always_stops_bridge_when_mode_stop_raises(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "start",
+        lambda: events.append("bridge-start"),
+    )
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "publish_thermal_equipment_config",
+        lambda _config: events.append("equipment"),
+    )
+    monkeypatch.setattr(
+        main_module.equipment_store,
+        "get",
+        lambda: SimpleNamespace(model_dump=lambda **_kwargs: {}),
+    )
+
+    def fail_mode_stop():
+        events.append("mode-stop")
+        raise RuntimeError("mode stop failed")
+
+    monkeypatch.setattr(main_module.system_mode_manager, "stop", fail_mode_stop)
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "stop",
+        lambda: events.append("bridge-stop"),
+    )
+
+    async def exercise_lifespan():
+        try:
+            async with main_module.lifespan(main_module.app):
+                pass
+        except RuntimeError as exc:
+            assert str(exc) == "mode stop failed"
+            events.append("error-propagated")
+
+    asyncio.run(exercise_lifespan())
+
+    assert events == [
+        "bridge-start",
+        "equipment",
+        "mode-stop",
+        "bridge-stop",
+        "error-propagated",
+    ]
 
 
 def test_health_reports_mock_mode():
@@ -241,14 +291,23 @@ def test_localization_initial_pose_can_be_retried_in_running_patrol(monkeypatch)
     monkeypatch.setattr(
         main_module,
         "system_mode_status",
-        lambda: {"mode": "patrol", "state": "running"},
+        lambda: {
+            "mode": "patrol",
+            "state": "running",
+            "active_world_id": "facility_map",
+            "active_map_session_id": "session-a",
+        },
     )
     monkeypatch.setattr(
         main_module.system_mode_manager,
         "set_localization_pose",
         lambda pose: recorded.update(pose) or pose,
     )
-    monkeypatch.setattr(main_module.spatial_store, "reset_for_localization", lambda: None)
+    monkeypatch.setattr(
+        main_module.spatial_store,
+        "reset_for_localization",
+        lambda _map_id=None: None,
+    )
     monkeypatch.setattr(
         main_module.ros_bridge,
         "publish_initial_pose",
@@ -270,6 +329,12 @@ def test_localization_initial_pose_can_be_retried_in_running_patrol(monkeypatch)
 
 
 def test_save_and_stop_endpoint_returns_manager_result(monkeypatch):
+    reset_sessions = []
+    monkeypatch.setattr(
+        main_module.spatial_store,
+        "snapshot",
+        lambda: {"pose": {"available": False, "mock": False}},
+    )
     monkeypatch.setattr(
         main_module.system_mode_manager,
         "save_map_and_stop",
@@ -277,14 +342,318 @@ def test_save_and_stop_endpoint_returns_manager_result(monkeypatch):
             "accepted": True,
             "mode": "idle",
             "state": "stopped",
+            "managed_stop_performed": True,
             "message": "저장 후 종료",
         },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "reset_thermal_map_stream",
+        reset_sessions.append,
     )
 
     response = client.post("/api/v1/system/map/save-and-stop")
 
     assert response.status_code == 200
     assert response.json()["state"] == "stopped"
+    assert reset_sessions == [None]
+
+
+def test_save_endpoint_records_live_pose_before_manager_save(monkeypatch):
+    recorded = []
+    map_id = "facility_map:session-current"
+    updated_at = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda **_kwargs: {
+            "mode": "mapping",
+            "patrol_slam": False,
+            "mapping_session_id": "session-current",
+            "active_map_session_id": "session-old",
+            "active_world_id": "facility_map",
+        },
+    )
+    monkeypatch.setattr(
+        main_module.spatial_store,
+        "snapshot",
+        lambda: {
+            "map": {"map_id": map_id},
+            "pose": {
+                "available": True,
+                "mock": False,
+                "map_id": map_id,
+                "frame_id": "map",
+                "x": 1.2,
+                "y": -0.3,
+                "yaw": 0.6,
+                "updated_at": updated_at,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "set_localization_pose",
+        lambda pose, **identity: recorded.append((dict(pose), identity)),
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "save_map",
+        lambda: {"accepted": True, "message": "saved"},
+    )
+
+    response = client.post("/api/v1/system/map/save")
+
+    assert response.status_code == 200
+    assert recorded == [(
+        {
+            "available": True,
+            "mock": False,
+            "map_id": map_id,
+            "frame_id": "map",
+            "x": 1.2,
+            "y": -0.3,
+            "yaw": 0.6,
+            "updated_at": updated_at,
+        },
+        {"world_id": "facility_map", "session_id": "session-current"},
+    )]
+
+
+def test_map_selection_invalidates_pose_from_previous_session(monkeypatch):
+    reset = []
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "select_map",
+        lambda world_id, session_id: {
+            "accepted": True,
+            "active_world_id": world_id,
+            "active_map_session_id": session_id,
+            "message": "selected",
+        },
+    )
+    monkeypatch.setattr(
+        main_module.spatial_store,
+        "reset_for_localization",
+        lambda map_id: reset.append(map_id),
+    )
+    monkeypatch.setattr(main_module, "reset_thermal_map_stream", lambda _session: None)
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "publish_thermal_equipment_config",
+        lambda _config: None,
+    )
+
+    response = client.put(
+        "/api/v1/system/map/active",
+        json={"world_id": "facility_map", "session_id": "session-new"},
+    )
+
+    assert response.status_code == 200
+    assert reset == ["facility_map:session-new"]
+
+
+def test_stop_endpoint_rejects_unmanaged_external_stack(monkeypatch):
+    side_effects = []
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "stop",
+        lambda: {
+            "accepted": False,
+            "mode": "patrol",
+            "state": "external",
+            "message": "terminal launch",
+        },
+    )
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "cancel_route",
+        lambda: side_effects.append("route"),
+    )
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "cancel_navigation",
+        lambda: side_effects.append("navigation"),
+    )
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "stop_motion",
+        lambda: side_effects.append("motion"),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "reset_thermal_map_stream",
+        lambda _session: side_effects.append("thermal"),
+    )
+
+    response = client.delete("/api/v1/system/mode")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "terminal launch"
+    assert side_effects == []
+
+
+def test_idle_stop_endpoint_does_not_reset_thermal_cache(monkeypatch):
+    side_effects = []
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "stop",
+        lambda: {
+            "accepted": True,
+            "mode": "idle",
+            "state": "stopped",
+            "managed_stop_performed": False,
+            "message": "nothing to stop",
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "reset_thermal_map_stream",
+        lambda _session: side_effects.append("thermal"),
+    )
+
+    response = client.delete("/api/v1/system/mode")
+
+    assert response.status_code == 200
+    assert response.json()["managed_stop_performed"] is False
+    assert side_effects == []
+
+
+def test_managed_stop_endpoint_resets_thermal_cache(monkeypatch):
+    reset_sessions = []
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "stop",
+        lambda: {
+            "accepted": True,
+            "mode": "idle",
+            "state": "stopped",
+            "managed_stop_performed": True,
+            "message": "managed patrol stopped",
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "reset_thermal_map_stream",
+        reset_sessions.append,
+    )
+
+    response = client.delete("/api/v1/system/mode")
+
+    assert response.status_code == 200
+    assert reset_sessions == [None]
+
+
+def test_managed_ros_pre_stop_hook_cancels_navigation_before_zero_velocity(
+    monkeypatch,
+):
+    events = []
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "cancel_route",
+        lambda: events.append("route"),
+    )
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "cancel_navigation",
+        lambda: events.append("navigation"),
+    )
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "stop_motion",
+        lambda: events.append("motion"),
+    )
+
+    result = main_module.prepare_managed_ros_stop()
+
+    assert events == ["route", "navigation", "motion"]
+    assert result == {"accepted": True, "message": None}
+
+
+def test_managed_ros_pre_stop_hook_aggregates_rejection_and_exception(
+    monkeypatch,
+):
+    events = []
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "cancel_route",
+        lambda: events.append("route") or {
+            "accepted": False,
+            "message": "route rejected",
+        },
+    )
+
+    def fail_navigation():
+        events.append("navigation")
+        raise RuntimeError("action unavailable")
+
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "cancel_navigation",
+        fail_navigation,
+    )
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "stop_motion",
+        lambda: events.append("motion") or {"accepted": True},
+    )
+
+    result = main_module.prepare_managed_ros_stop()
+
+    assert events == ["route", "navigation", "motion"]
+    assert result["accepted"] is False
+    assert "route rejected" in str(result["message"])
+    assert "action unavailable" in str(result["message"])
+
+
+def test_save_endpoint_ignores_stale_pose_from_selected_session(monkeypatch):
+    persisted_pose = [{"x": 1.5, "y": -0.5, "yaw": 0.25}]
+    map_id = "facility_map:session-current"
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "snapshot",
+        lambda **_kwargs: {
+            "mode": "idle",
+            "patrol_slam": False,
+            "mapping_session_id": None,
+            "active_map_session_id": "session-current",
+            "active_world_id": "facility_map",
+        },
+    )
+    monkeypatch.setattr(
+        main_module.spatial_store,
+        "snapshot",
+        lambda: {
+            "map": {"map_id": map_id},
+            "pose": {
+                "available": True,
+                "mock": False,
+                "map_id": map_id,
+                "frame_id": "map",
+                "x": 99.0,
+                "y": 99.0,
+                "yaw": 1.0,
+                "updated_at": (
+                    datetime.now(timezone.utc) - timedelta(seconds=3)
+                ).isoformat(),
+            },
+        },
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "set_localization_pose",
+        lambda pose, **_kwargs: persisted_pose.__setitem__(0, dict(pose)),
+    )
+    monkeypatch.setattr(
+        main_module.system_mode_manager,
+        "save_map",
+        lambda: {"accepted": False, "message": "not mapping"},
+    )
+
+    response = client.post("/api/v1/system/map/save")
+
+    assert response.status_code == 409
+    assert persisted_pose == [{"x": 1.5, "y": -0.5, "yaw": 0.25}]
 
 
 def test_map_session_metadata_can_be_updated(monkeypatch):

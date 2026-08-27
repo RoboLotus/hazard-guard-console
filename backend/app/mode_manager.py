@@ -118,6 +118,16 @@ class SystemModeManager:
             else None
         )
         self._thermal_status_provider: Callable[[], dict[str, Any]] | None = None
+        self._pre_stop_hook: Callable[[], Any] | None = None
+        try:
+            configured_grace = float(
+                os.getenv("HAZARD_GUARD_PRE_STOP_GRACE_SEC", "0.15")
+            )
+            if not 0.0 <= configured_grace <= 2.0:
+                raise ValueError("pre-stop grace must be between 0 and 2 seconds")
+            self._pre_stop_grace_sec = configured_grace
+        except ValueError:
+            self._pre_stop_grace_sec = 0.15
         self._gui = os.getenv("HAZARD_GUARD_SIMULATION_GUI", "true").lower() in {
             "1",
             "true",
@@ -141,6 +151,8 @@ class SystemModeManager:
             "state": "disabled" if not self._enabled else "stopped",
             "accepted": False,
             "managed": False,
+            "managed_stop_performed": False,
+            "pre_stop_warning": None,
             "control_enabled": self._enabled,
             "deployment_target": self._deployment_target,
             "pid": None,
@@ -207,6 +219,26 @@ class SystemModeManager:
     ) -> None:
         self._thermal_status_provider = provider
 
+    def set_pre_stop_hook(
+        self,
+        hook: Callable[[], Any] | None,
+        *,
+        grace_seconds: float | None = None,
+    ) -> None:
+        """Configure motion quiescing before a managed ROS group is signaled."""
+
+        configured_grace = None
+        if grace_seconds is not None:
+            configured_grace = float(grace_seconds)
+            if not 0.0 <= configured_grace <= 2.0:
+                raise ValueError(
+                    "pre-stop grace must be between 0 and 2 seconds"
+                )
+        with self._lock:
+            self._pre_stop_hook = hook
+            if configured_grace is not None:
+                self._pre_stop_grace_sec = configured_grace
+
     def _map_files_available(self) -> bool:
         return self._world_catalog.map_available(self._map_path)
 
@@ -242,15 +274,40 @@ class SystemModeManager:
             ),
         }
 
-    def set_localization_pose(self, pose: Any) -> dict[str, float] | None:
+    def set_localization_pose(
+        self,
+        pose: Any,
+        *,
+        world_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, float] | None:
         """Remember the last mapped pose for the following AMCL startup."""
 
         validated = self._validated_pose(pose)
         if validated is None:
             return None
-        with self._lock:
-            self._localization_pose = validated
-            self._data["localization_pose"] = dict(validated)
+        # Session-qualified updates serialize with map selection and mode
+        # transitions. A pose sampled just before a concurrent selection must
+        # never overwrite the newly selected session's stored initial pose.
+        transition_guard = self._cloud_export_lock if session_id else self._lock
+        with transition_guard:
+            with self._lock:
+                if world_id is not None and world_id != self._active_world["id"]:
+                    return None
+                if session_id is not None:
+                    pose_session_id = (
+                        self._current_session_id
+                        if self._data.get("mode") == "mapping"
+                        or (
+                            self._data.get("mode") == "patrol"
+                            and self._patrol_slam
+                        )
+                        else self._active_map_session_id
+                    )
+                    if session_id != pose_session_id:
+                        return None
+                self._localization_pose = validated
+                self._data["localization_pose"] = dict(validated)
         return dict(validated)
 
     @staticmethod
@@ -1067,25 +1124,40 @@ class SystemModeManager:
                         person_safety_enabled=False,
                     ),
                 ]
+            thermal_session_id = (
+                (thermal_map_config or {}).get("session_id")
+                or self._active_map_session_id
+            )
             frozen_thermal_arguments = ["enable_frozen_thermal_map:=false"]
+            if thermal_session_id:
+                # The analyzer uses the active 2D map identity even while the
+                # immutable PLY is unavailable. Never let a failed export fall
+                # back to an unscoped cross-session thermal stream.
+                frozen_thermal_arguments.append(
+                    f"thermal_map_session_id:={thermal_session_id}"
+                )
             if thermal_map_config and thermal_map_config.get("enabled"):
                 frozen_thermal_arguments = [
                     "enable_frozen_thermal_map:=true",
                     f"thermal_map_cloud_path:={thermal_map_config['cloud_path']}",
                     f"thermal_map_state_path:={thermal_map_config['state_path']}",
-                    f"thermal_map_session_id:={thermal_map_config['session_id']}",
+                    f"thermal_map_session_id:={thermal_session_id}",
                 ]
             return [
                 "ros2",
                 "launch",
                 "hazard_guard_simulation",
                 "physical_patrol.launch.py",
-                "enable_thermal_pipeline:=true",
                 f"map:={self._map_path}",
                 f"initial_pose_x:={self._launch_value(initial_pose['x'])}",
                 f"initial_pose_y:={self._launch_value(initial_pose['y'])}",
                 f"initial_pose_yaw:={self._launch_value(initial_pose['yaw'])}",
                 *frozen_thermal_arguments,
+                # Keep physical actuation fail-closed in every WebUI-managed
+                # patrol. The backend approval flag only controls the request
+                # workflow; it must never start the dispenser hardware.
+                "use_dispenser:=false",
+                "enable_physical_drop:=false",
                 *self._physical_patrol_feature_arguments(),
             ]
 
@@ -1245,7 +1317,15 @@ class SystemModeManager:
                 "HAZARD_GUARD_THERMAL_OFFSET_C", "0.0"
             ),
         }
-        return [f"{name}:={value}" for name, value in values.items()]
+        # ROS 2 rejects an empty launch assignment (for example,
+        # ``thermal_roi_config:=``) before the launch file can apply its own
+        # default. Optional settings therefore need to be omitted entirely
+        # when the corresponding environment variable is empty.
+        return [
+            f"{name}:={value}"
+            for name, value in values.items()
+            if str(value).strip()
+        ]
 
     def _simulation_launch_arguments(self) -> list[str]:
         return [
@@ -1428,6 +1508,10 @@ class SystemModeManager:
             )
 
     def save_map(self) -> dict[str, Any]:
+        with self._cloud_export_lock:
+            return self._save_map()
+
+    def _save_map(self) -> dict[str, Any]:
         if not self._enabled:
             return {
                 **self.snapshot(detect_external=False),
@@ -1438,6 +1522,9 @@ class SystemModeManager:
             map_source_running = self._data.get("mode") == "mapping" or (
                 self._data.get("mode") == "patrol" and self._patrol_slam
             )
+            map_source_running = map_source_running and self._data.get(
+                "state"
+            ) in {"starting", "running"}
         if not map_source_running:
             return {
                 **self.snapshot(detect_external=False),
@@ -1447,15 +1534,27 @@ class SystemModeManager:
                     "3D 수집은 전용 종료 버튼으로 RTAB-Map DB를 저장하세요."
                 ),
             }
-        if self._current_session_id is None:
-            session = self._world_catalog.begin_session(
-                self._active_world["id"], self._mapping_profile
+        with self._lock:
+            if self._current_session_id is None:
+                session = self._world_catalog.begin_session(
+                    self._active_world["id"], self._mapping_profile
+                )
+                self._current_session_id = session["id"]
+                self._map_path = session["map_path"]
+                self._rtabmap_database_path = session["rtabmap_database_path"]
+            save_generation = self._generation
+            save_session_id = self._current_session_id
+            save_world_id = self._active_world["id"]
+            save_map_path = self._map_path
+            save_mapping_profile = self._mapping_profile
+            save_database_path = self._rtabmap_database_path
+            save_localization_pose = (
+                dict(self._localization_pose)
+                if self._localization_pose is not None
+                else None
             )
-            self._current_session_id = session["id"]
-            self._map_path = session["map_path"]
-            self._rtabmap_database_path = session["rtabmap_database_path"]
-        self._map_path.parent.mkdir(parents=True, exist_ok=True)
-        map_base = self._map_path.with_suffix("")
+        save_map_path.parent.mkdir(parents=True, exist_ok=True)
+        map_base = save_map_path.with_suffix("")
         try:
             result = self._process_controller.run(
                 [
@@ -1482,36 +1581,66 @@ class SystemModeManager:
                     accepted=False,
                     message=f"지도 저장 명령을 실행하지 못했습니다: {exc}",
                 )
-        accepted = result.returncode == 0 and self._map_files_available()
-        rtabmap_available = bool(
-            self._mapping_profile == "toolbox_rtabmap"
-            and self._rtabmap_database_path is not None
-            and self._rtabmap_database_path.is_file()
-            and self._rtabmap_database_path.stat().st_size > 0
+        accepted = result.returncode == 0 and self._world_catalog.map_available(
+            save_map_path
         )
-        if self._current_session_id is not None:
+        rtabmap_available = bool(
+            save_mapping_profile == "toolbox_rtabmap"
+            and save_database_path is not None
+            and save_database_path.is_file()
+            and save_database_path.stat().st_size > 0
+        )
+        with self._lock:
+            save_is_current = bool(
+                self._generation == save_generation
+                and self._current_session_id == save_session_id
+                and self._active_world["id"] == save_world_id
+                and self._data.get("mode") in {"mapping", "patrol"}
+                and self._data.get("state") in {"starting", "running"}
+            )
+            if not save_is_current:
+                return self._update_locked(
+                    accepted=False,
+                    message=(
+                        "지도 저장 중 운용 모드 또는 세션이 변경되어 결과를 "
+                        "활성 지도에 반영하지 않았습니다. 현재 모드 상태를 "
+                        "확인한 뒤 다시 저장하세요."
+                    ),
+                )
             self._world_catalog.update_session(
-                self._current_session_id,
-                self._active_world["id"],
+                save_session_id,
+                save_world_id,
                 status="saved" if accepted else "save_failed",
-                mapping_profile=self._mapping_profile,
+                mapping_profile=save_mapping_profile,
                 rtabmap_available=rtabmap_available,
                 rtabmap_database_bytes=(
-                    self._rtabmap_database_path.stat().st_size
-                    if rtabmap_available and self._rtabmap_database_path is not None
+                    save_database_path.stat().st_size
+                    if rtabmap_available and save_database_path is not None
                     else 0
                 ),
-                localization_pose=self._localization_pose,
+                localization_pose=save_localization_pose,
             )
             if accepted:
                 self._map_path = self._world_catalog.activate_session(
-                    self._active_world["id"], self._current_session_id
+                    save_world_id, save_session_id
                 )
+                paths = self._world_catalog.session_paths(
+                    save_world_id, save_session_id
+                )
+                # The catalog activation and the in-memory identity must move
+                # together. Otherwise an immediate 2D -> RGB-D/patrol
+                # transition can report (and bind configuration to) the map
+                # session that was active before this save.
+                self._active_map_session_id = save_session_id
+                self._rgbd_session_id = None
+                self._thermal_map_session_id = save_session_id
+                self._thermal_map_cloud_path = paths["cloud"]
+                self._thermal_map_state_path = paths["thermal_layer"]
         detail = (result.stderr or result.stdout).strip().splitlines()
         message = (
             (
-                f"순찰용 지도를 세션 {self._current_session_id}에 저장했습니다. "
-                f"저장 위치: {self._map_path.parent}"
+                f"순찰용 지도를 세션 {save_session_id}에 저장했습니다. "
+                f"저장 위치: {save_map_path.parent}"
             )
             if accepted
             else (
@@ -1523,25 +1652,42 @@ class SystemModeManager:
             return self._update_locked(
                 accepted=accepted,
                 rtabmap_available=rtabmap_available,
+                active_map_session_id=self._active_map_session_id,
+                rgbd_session_id=self._rgbd_session_id,
+                thermal_map_session_id=self._thermal_map_session_id,
+                thermal_map_enabled=False,
+                thermal_map_status=("not_ready" if accepted else self._data.get("thermal_map_status")),
+                thermal_map_message=(None if accepted else self._data.get("thermal_map_message")),
+                thermal_map_cloud_path=(
+                    str(self._thermal_map_cloud_path)
+                    if self._thermal_map_cloud_path is not None
+                    else None
+                ),
+                thermal_map_state_path=(
+                    str(self._thermal_map_state_path)
+                    if self._thermal_map_state_path is not None
+                    else None
+                ),
                 message=message,
             )
 
     def save_map_and_stop(self) -> dict[str, Any]:
-        saved = self.save_map()
-        if not saved.get("accepted"):
-            return saved
-        stopped = self.stop()
-        return {
-            **stopped,
-            "accepted": True,
-            "map_available": True,
-            "rtabmap_available": saved.get("rtabmap_available", False),
-            "message": (
-                "현재 지도 세션을 저장하고 실물 로봇 SLAM을 종료했습니다."
-                if self._deployment_target == "physical"
-                else "현재 지도 세션을 저장하고 SLAM·Gazebo를 종료했습니다."
-            ),
-        }
+        with self._cloud_export_lock:
+            saved = self._save_map()
+            if not saved.get("accepted"):
+                return saved
+            stopped = self._stop()
+            return {
+                **stopped,
+                "accepted": True,
+                "map_available": True,
+                "rtabmap_available": saved.get("rtabmap_available", False),
+                "message": (
+                    "현재 지도 세션을 저장하고 실물 로봇 SLAM을 종료했습니다."
+                    if self._deployment_target == "physical"
+                    else "현재 지도 세션을 저장하고 SLAM·Gazebo를 종료했습니다."
+                ),
+            }
 
     def _stop_managed_process(self) -> None:
         with self._lock:
@@ -1552,6 +1698,30 @@ class SystemModeManager:
             if self._data.get("mode") == "rgbd_mapping":
                 self._rgbd_finalize_pending_id = self._rgbd_session_id
             self._update_locked(state="stopping", message="현재 ROS 모드를 종료하고 있습니다.")
+            pre_stop_hook = self._pre_stop_hook
+            pre_stop_grace_sec = self._pre_stop_grace_sec
+            self._data["pre_stop_warning"] = None
+        if pre_stop_hook is not None:
+            pre_stop_warning = None
+            try:
+                hook_result = pre_stop_hook()
+                if (
+                    isinstance(hook_result, dict)
+                    and hook_result.get("accepted") is False
+                ):
+                    pre_stop_warning = str(
+                        hook_result.get("message")
+                        or "managed ROS pre-stop hook was rejected"
+                    )
+            except Exception as exc:
+                # Process shutdown must remain available even if the bridge is
+                # already degraded. Record the warning and continue fail-safe.
+                pre_stop_warning = str(exc)
+            if pre_stop_warning is not None:
+                with self._lock:
+                    self._data["pre_stop_warning"] = pre_stop_warning
+            if pre_stop_grace_sec > 0:
+                time.sleep(pre_stop_grace_sec)
         self._terminate_process_group(
             process,
             process_group_id=process.pid,
@@ -1884,6 +2054,7 @@ class SystemModeManager:
                 state="starting",
                 accepted=True,
                 managed=True,
+                managed_stop_performed=False,
                 pid=process.pid,
                 exit_code=None,
                 started_at=utc_now(),
@@ -1990,11 +2161,59 @@ class SystemModeManager:
         # owns a process. Waiting on the same guard prevents a Stop request
         # from returning early and then allowing that transition to launch.
         with self._cloud_export_lock:
+            with self._lock:
+                managed_process = self._process
+            external_mode = (
+                self._detect_external_mode()
+                if managed_process is None
+                else None
+            )
+            if external_mode is not None:
+                with self._lock:
+                    return self._update_locked(
+                        mode=external_mode,
+                        state="external",
+                        accepted=False,
+                        managed=False,
+                        managed_stop_performed=False,
+                        pre_stop_warning=None,
+                        pid=None,
+                        message=(
+                            "터미널에서 실행한 ROS 모드는 WebUI에서 종료할 수 "
+                            "없습니다. 해당 터미널에서 launch를 종료하세요."
+                        ),
+                    )
             return self._stop()
 
     def _stop(self) -> dict[str, Any]:
         with self._lock:
             stopped_mode = self._data.get("mode")
+            stopped_state = self._data.get("state")
+            managed_stop_performed = bool(
+                self._process is not None
+                or self._simulation_process is not None
+            )
+            if stopped_state == "external" and self._process is None:
+                return self._update_locked(
+                    accepted=False,
+                    managed_stop_performed=False,
+                    pre_stop_warning=None,
+                    message=(
+                        "터미널에서 실행한 ROS 모드는 WebUI에서 종료할 수 없습니다. "
+                        "해당 터미널에서 launch를 종료하세요."
+                    ),
+                )
+            if (
+                stopped_mode == "idle"
+                and self._process is None
+                and self._simulation_process is None
+            ):
+                return self._update_locked(
+                    accepted=True,
+                    managed_stop_performed=False,
+                    pre_stop_warning=None,
+                    message="종료할 WebUI ROS 운용 모드가 없습니다.",
+                )
         self._stop_managed_process()
         if stopped_mode == "rgbd_mapping":
             self._finalize_rgbd_session()
@@ -2004,13 +2223,20 @@ class SystemModeManager:
             self._stop_managed_simulation()
         with self._lock:
             self._patrol_slam = False
+            self._current_session_id = None
+            self._rgbd_session_id = None
+            self._rgbd_finalize_pending_id = None
+            self._rtabmap_database_path = None
             return self._update_locked(
                 patrol_slam=False,
+                mapping_session_id=None,
                 rgbd_session_id=None,
+                rtabmap_database_path=None,
                 mode="idle",
                 state="disabled" if not self._enabled else "stopped",
                 accepted=True,
                 managed=False,
+                managed_stop_performed=managed_stop_performed,
                 pid=None,
                 message="WebUI가 시작한 ROS 운용 모드를 종료했습니다.",
             )

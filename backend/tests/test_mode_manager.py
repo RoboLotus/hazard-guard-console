@@ -690,13 +690,15 @@ def test_physical_patrol_passes_selected_map_to_hardware_launch(
         "physical_patrol.launch.py",
     ]
     assert f"map:={map_path}" in command
-    assert "enable_thermal_pipeline:=true" in command
     assert "initial_pose_x:=1.25" in command
     assert "initial_pose_y:=-0.4" in command
     assert "initial_pose_yaw:=0.75" in command
     assert "use_person_safety:=false" in command
+    assert "use_dispenser:=false" in command
+    assert "enable_physical_drop:=false" in command
     assert "person_device:=0" in command
     assert "enable_thermal_pipeline:=false" in command
+    assert command.count("enable_thermal_pipeline:=false") == 1
     assert all("start_simulation" not in argument for argument in command)
 
 
@@ -772,6 +774,585 @@ def test_physical_rgbd_mapping_disables_yolo_but_keeps_camera(
         argument.startswith("enable_frozen_thermal_map:=true")
         for argument in command
     )
+
+
+def test_physical_launch_omits_empty_optional_arguments(monkeypatch, tmp_path):
+    map_path = tmp_path / "runtime" / "maps" / "facility" / "map.yaml"
+    map_path.parent.mkdir(parents=True)
+    map_path.write_text("image: map.pgm\nresolution: 0.05\n", encoding="utf-8")
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("HAZARD_GUARD_MAP_PATH", str(map_path))
+    for name in (
+        "HAZARD_GUARD_THERMAL_ROI_CONFIG",
+        "HAZARD_GUARD_THERMAL_BASELINE_PATH",
+        "HAZARD_GUARD_THERMAL_AIR_TOPIC",
+        "HAZARD_GUARD_THERMAL_OIL_TOPIC",
+    ):
+        monkeypatch.setenv(name, "  ")
+    manager = SystemModeManager()
+
+    command = manager._launch_arguments("rgbd_mapping")
+
+    assert "thermal_roi_config:=" not in command
+    assert not any(argument.endswith(":=") for argument in command)
+
+
+def test_physical_patrol_uses_active_session_when_frozen_config_has_no_identity(
+    monkeypatch,
+    tmp_path,
+):
+    map_path = tmp_path / "runtime" / "maps" / "facility" / "map.yaml"
+    map_path.parent.mkdir(parents=True)
+    map_path.write_text("image: map.pgm\nresolution: 0.05\n", encoding="utf-8")
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("HAZARD_GUARD_MAP_PATH", str(map_path))
+    manager = SystemModeManager()
+    manager._active_map_session_id = "session-active"
+
+    command = manager._launch_arguments(
+        "patrol",
+        thermal_map_config={"enabled": False, "session_id": ""},
+    )
+
+    assert "enable_frozen_thermal_map:=false" in command
+    assert "thermal_map_session_id:=session-active" in command
+
+
+def test_saved_mapping_session_immediately_becomes_active_transition_target(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    old_session = _create_saved_session(manager)
+    new_session = manager._world_catalog.begin_session("facility_map", "toolbox")
+    manager._current_session_id = new_session["id"]
+    manager._map_path = new_session["map_path"]
+    manager._localization_pose = {"x": 2.5, "y": -1.0, "yaw": 0.4}
+    manager._data.update(mode="mapping", state="running")
+
+    def save_map(command, **_kwargs):
+        assert command[command.index("-f") + 1] == str(
+            new_session["map_path"].with_suffix("")
+        )
+        new_session["map_path"].write_text(
+            "image: map.pgm\nresolution: 0.05\n",
+            encoding="utf-8",
+        )
+        (new_session["directory"] / "map.pgm").write_bytes(b"P5\n1 1\n255\n\xff")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(manager._process_controller, "run", save_map)
+
+    result = manager.save_map()
+    rgbd_command = manager._launch_arguments("rgbd_mapping")
+
+    assert result["accepted"] is True
+    assert result["active_map_session_id"] == new_session["id"]
+    assert result["thermal_map_session_id"] == new_session["id"]
+    assert f"map:={new_session['map_path']}" in rgbd_command
+    assert "initial_pose_x:=2.5" in rgbd_command
+    assert old_session["id"] != result["active_map_session_id"]
+
+
+def test_stop_rejects_external_stack_and_clears_managed_runtime_ids(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    manager._data.update(mode="patrol", state="external", managed=False)
+
+    external = manager.stop()
+
+    assert external["accepted"] is False
+    assert external["mode"] == "patrol"
+    assert external["state"] == "external"
+
+    manager._data.update(
+        mode="rgbd_mapping",
+        state="failed",
+        mapping_session_id="stale-mapping",
+        rgbd_session_id="stale-rgbd",
+        rtabmap_database_path="stale.db",
+    )
+    manager._current_session_id = "stale-mapping"
+    manager._rgbd_session_id = None
+    manager._rtabmap_database_path = tmp_path / "stale.db"
+
+    stopped = manager.stop()
+
+    assert stopped["accepted"] is True
+    assert stopped["mode"] == "idle"
+    assert stopped["state"] == "stopped"
+    assert stopped["mapping_session_id"] is None
+    assert stopped["rgbd_session_id"] is None
+    assert stopped["rtabmap_database_path"] is None
+
+
+def test_stop_detects_external_stack_before_idle_early_return(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: "patrol")
+    side_effects = []
+    manager.set_pre_stop_hook(lambda: side_effects.append("pre-stop"), grace_seconds=0)
+
+    result = manager.stop()
+
+    assert result["accepted"] is False
+    assert result["mode"] == "patrol"
+    assert result["state"] == "external"
+    assert result["managed"] is False
+    assert side_effects == []
+
+
+def test_idle_stop_does_not_invoke_pre_stop_hook(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: None)
+    side_effects = []
+    manager.set_pre_stop_hook(lambda: side_effects.append("pre-stop"), grace_seconds=0)
+
+    result = manager.stop()
+
+    assert result["accepted"] is True
+    assert result["mode"] == "idle"
+    assert side_effects == []
+
+
+def test_managed_stop_quiesces_motion_before_process_signal(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    events = []
+
+    class FakeProcess:
+        pid = 741
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._process = FakeProcess()
+    manager._data.update(mode="patrol", state="running", managed=True, pid=741)
+
+    def pre_stop():
+        assert manager.snapshot(detect_external=False)["state"] == "stopping"
+        events.extend(["cancel-route", "cancel-navigation", "stop-motion"])
+
+    manager.set_pre_stop_hook(pre_stop, grace_seconds=0.2)
+    monkeypatch.setattr(
+        "app.mode_manager.time.sleep",
+        lambda seconds: events.append(("grace", seconds)),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_terminate_process_group",
+        lambda *_args, **_kwargs: events.append("terminate"),
+    )
+
+    result = manager.stop()
+
+    assert result["accepted"] is True
+    assert events == [
+        "cancel-route",
+        "cancel-navigation",
+        "stop-motion",
+        ("grace", 0.2),
+        "terminate",
+    ]
+
+
+def test_pre_stop_hook_exception_is_exposed_without_blocking_termination(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    events = []
+
+    class FakeProcess:
+        pid = 745
+
+    manager._process = FakeProcess()
+    manager._data.update(mode="patrol", state="running", managed=True, pid=745)
+
+    def failing_hook():
+        events.append("hook")
+        raise RuntimeError("bridge unavailable")
+
+    manager.set_pre_stop_hook(failing_hook, grace_seconds=0)
+    monkeypatch.setattr(
+        manager,
+        "_terminate_process_group",
+        lambda *_args, **_kwargs: events.append("terminate"),
+    )
+
+    result = manager.stop()
+
+    assert result["accepted"] is True
+    assert result["pre_stop_warning"] == "bridge unavailable"
+    assert events == ["hook", "terminate"]
+
+
+def test_pre_stop_hook_rejection_is_exposed_without_blocking_termination(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    events = []
+
+    class FakeProcess:
+        pid = 746
+
+    manager._process = FakeProcess()
+    manager._data.update(mode="patrol", state="running", managed=True, pid=746)
+    manager.set_pre_stop_hook(
+        lambda: {
+            "accepted": False,
+            "message": "zero velocity publish rejected",
+        },
+        grace_seconds=0,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_terminate_process_group",
+        lambda *_args, **_kwargs: events.append("terminate"),
+    )
+
+    result = manager.stop()
+
+    assert result["accepted"] is True
+    assert result["pre_stop_warning"] == "zero velocity publish rejected"
+    assert events == ["terminate"]
+
+
+def test_save_and_stop_uses_pre_stop_ordering(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    events = []
+
+    class FakeProcess:
+        pid = 742
+
+    manager._process = FakeProcess()
+    manager._data.update(mode="mapping", state="running", managed=True, pid=742)
+    manager.set_pre_stop_hook(
+        lambda: events.extend(["cancel-route", "cancel-navigation", "stop-motion"]),
+        grace_seconds=0.1,
+    )
+    monkeypatch.setattr(manager, "_save_map", lambda: {"accepted": True})
+    monkeypatch.setattr(
+        "app.mode_manager.time.sleep",
+        lambda seconds: events.append(("grace", seconds)),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_terminate_process_group",
+        lambda *_args, **_kwargs: events.append("terminate"),
+    )
+
+    result = manager.save_map_and_stop()
+
+    assert result["accepted"] is True
+    assert events == [
+        "cancel-route",
+        "cancel-navigation",
+        "stop-motion",
+        ("grace", 0.1),
+        "terminate",
+    ]
+
+
+def test_patrol_mode_switch_quiesces_motion_before_old_process_signal(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    events = []
+
+    class OldProcess:
+        pid = 743
+
+        @staticmethod
+        def poll():
+            return None
+
+    class NewProcess:
+        pid = 744
+
+        @staticmethod
+        def poll():
+            return None
+
+    class NoopThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    manager._process = OldProcess()
+    manager._data.update(mode="patrol", state="running", managed=True, pid=743)
+    manager.set_pre_stop_hook(
+        lambda: events.extend(["cancel-route", "cancel-navigation", "stop-motion"]),
+        grace_seconds=0.05,
+    )
+    monkeypatch.setattr(manager, "_ensure_runtime_environment", lambda: True)
+    monkeypatch.setattr(
+        "app.mode_manager.time.sleep",
+        lambda seconds: events.append(("grace", seconds)),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_terminate_process_group",
+        lambda *_args, **_kwargs: events.append("terminate-old"),
+    )
+    monkeypatch.setattr(
+        manager._process_controller,
+        "start_logged",
+        lambda *_args, **_kwargs: events.append("launch-new") or NewProcess(),
+    )
+    monkeypatch.setattr("app.mode_manager.threading.Thread", NoopThread)
+
+    result = manager.switch_mode("mapping")
+
+    assert result["accepted"] is True
+    assert events == [
+        "cancel-route",
+        "cancel-navigation",
+        "stop-motion",
+        ("grace", 0.05),
+        "terminate-old",
+        "launch-new",
+    ]
+
+
+def test_session_qualified_pose_loses_race_to_new_map_selection(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    old_session = _create_saved_session(manager)
+    manager._world_catalog.update_session(
+        old_session["id"],
+        "facility_map",
+        localization_pose={"x": 1.0, "y": 1.0, "yaw": 0.1},
+    )
+    new_session = manager._world_catalog.begin_session("facility_map", "toolbox")
+    new_session["map_path"].write_text(
+        "image: map.pgm\nresolution: 0.05\n",
+        encoding="utf-8",
+    )
+    (new_session["directory"] / "map.pgm").write_bytes(b"P5\n1 1\n255\n\xff")
+    new_pose = {"x": 4.0, "y": -2.0, "yaw": 0.8}
+    manager._world_catalog.update_session(
+        new_session["id"],
+        "facility_map",
+        status="saved",
+        localization_pose=new_pose,
+    )
+    attempted = threading.Event()
+    result = []
+
+    def store_old_pose():
+        attempted.set()
+        result.append(manager.set_localization_pose(
+            {"x": 99.0, "y": 99.0, "yaw": 2.0},
+            world_id="facility_map",
+            session_id=old_session["id"],
+        ))
+
+    with manager._cloud_export_lock:
+        worker = threading.Thread(target=store_old_pose)
+        worker.start()
+        assert attempted.wait(timeout=1.0)
+        selected = manager.select_map("facility_map", new_session["id"])
+    worker.join(timeout=1.0)
+
+    assert selected["accepted"] is True
+    assert result == [None]
+    assert manager.snapshot(detect_external=False)["localization_pose"] == new_pose
+
+
+def test_save_and_stop_are_serialized_on_one_transition_guard(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    monkeypatch.setattr(manager, "_detect_external_mode", lambda: None)
+    session = manager._world_catalog.begin_session("facility_map", "toolbox")
+    manager._current_session_id = session["id"]
+    manager._map_path = session["map_path"]
+    manager._data.update(
+        mode="mapping",
+        state="running",
+        mapping_session_id=session["id"],
+    )
+
+    class FakeProcess:
+        pid = 188
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._process = FakeProcess()
+    save_started = threading.Event()
+    allow_save = threading.Event()
+    stop_finished = threading.Event()
+    results = {}
+
+    def save_command(_command, **_kwargs):
+        save_started.set()
+        assert allow_save.wait(timeout=1.0)
+        session["map_path"].write_text(
+            "image: map.pgm\nresolution: 0.05\n",
+            encoding="utf-8",
+        )
+        (session["directory"] / "map.pgm").write_bytes(b"P5\n1 1\n255\n\xff")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(manager._process_controller, "run", save_command)
+    monkeypatch.setattr(manager, "_terminate_process_group", lambda *_args, **_kwargs: None)
+    save_worker = threading.Thread(
+        target=lambda: results.setdefault("save", manager.save_map())
+    )
+    stop_worker = threading.Thread(
+        target=lambda: (results.setdefault("stop", manager.stop()), stop_finished.set())
+    )
+
+    save_worker.start()
+    assert save_started.wait(timeout=1.0)
+    stop_worker.start()
+    assert stop_finished.wait(timeout=0.05) is False
+    allow_save.set()
+    save_worker.join(timeout=1.0)
+    stop_worker.join(timeout=1.0)
+
+    assert results["save"]["accepted"] is True
+    assert results["save"]["active_map_session_id"] == session["id"]
+    assert results["stop"]["accepted"] is True
+    assert results["stop"]["mode"] == "idle"
+
+
+def test_interrupted_save_generation_does_not_activate_result(monkeypatch, tmp_path):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    old_session = _create_saved_session(manager)
+    new_session = manager._world_catalog.begin_session("facility_map", "toolbox")
+    manager._current_session_id = new_session["id"]
+    manager._map_path = new_session["map_path"]
+    manager._data.update(mode="mapping", state="running")
+
+    def interrupted_save(_command, **_kwargs):
+        new_session["map_path"].write_text(
+            "image: map.pgm\nresolution: 0.05\n",
+            encoding="utf-8",
+        )
+        (new_session["directory"] / "map.pgm").write_bytes(b"P5\n1 1\n255\n\xff")
+        with manager._lock:
+            manager._generation += 1
+            manager._data["state"] = "stopping"
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(manager._process_controller, "run", interrupted_save)
+
+    result = manager.save_map()
+
+    assert result["accepted"] is False
+    assert "변경" in result["message"]
+    assert manager._world_catalog.active_map_path("facility_map") == old_session["map_path"]
+    metadata = manager._world_catalog.session_metadata(
+        "facility_map", new_session["id"]
+    )
+    assert metadata["status"] == "mapping"
+
+
+def test_failed_rgbd_retry_after_backend_restart_uses_active_map_pose(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    original = SystemModeManager()
+    session = _create_saved_session(original)
+    expected_pose = {"x": 3.2, "y": -0.8, "yaw": 0.35}
+    original._world_catalog.update_session(
+        session["id"],
+        "facility_map",
+        localization_pose=expected_pose,
+        rgbd_status="failed",
+        cloud_export_status="failed",
+        cloud_export_error="previous launch failed",
+        thermal_map_status="failed",
+        thermal_map_error="previous launch failed",
+    )
+
+    restarted = SystemModeManager()
+    monkeypatch.setattr(restarted, "_detect_external_mode", lambda: None)
+
+    class FakeProcess:
+        pid = 812
+
+        @staticmethod
+        def poll():
+            return None
+
+    class NoopThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    launched = {}
+    monkeypatch.setattr(
+        restarted._process_controller,
+        "start_logged",
+        lambda command, _log_path: launched.setdefault("command", command)
+        and FakeProcess(),
+    )
+    monkeypatch.setattr("app.mode_manager.threading.Thread", NoopThread)
+
+    before_retry = restarted.snapshot(detect_external=False)
+    result = restarted.switch_mode("rgbd_mapping")
+    metadata = restarted._world_catalog.session_metadata(
+        "facility_map", session["id"]
+    )
+
+    assert before_retry["state"] == "stopped"
+    assert before_retry["active_map_session_id"] == session["id"]
+    assert before_retry["localization_pose"] == expected_pose
+    assert result["accepted"] is True
+    assert result["rgbd_session_id"] == session["id"]
+    assert f"map:={session['map_path']}" in launched["command"]
+    assert "initial_pose_x:=3.2" in launched["command"]
+    assert "initial_pose_y:=-0.8" in launched["command"]
+    assert "initial_pose_yaw:=0.35" in launched["command"]
+    assert metadata["rgbd_status"] == "collecting"
+    assert metadata["cloud_export_status"] == "stale"
+    assert metadata["cloud_export_error"] is None
+    assert metadata["thermal_map_status"] == "waiting_for_cloud"
+    assert metadata["thermal_map_error"] is None
 
 
 def test_physical_patrol_prepares_and_passes_frozen_thermal_session(
@@ -942,6 +1523,7 @@ def test_physical_patrol_starts_navigation_when_frozen_map_is_unavailable(
     assert result["thermal_map_enabled"] is False
     assert result["thermal_map_status"] == "failed"
     assert "enable_frozen_thermal_map:=false" in launched["command"]
+    assert f"thermal_map_session_id:={session['id']}" in launched["command"]
     assert not any(
         argument.startswith("thermal_map_cloud_path:=")
         for argument in launched["command"]
