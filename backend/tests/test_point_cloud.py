@@ -6,6 +6,7 @@ from app.point_cloud import (
     PACKET_MAGIC,
     PACKET_VERSION,
     POINT_RECORD,
+    THERMAL_STATE_RECORD,
     PointCloudAdapter,
     PointCloudStore,
 )
@@ -214,3 +215,42 @@ def test_packet_rejects_an_unbounded_frame_id():
         assert "frame_id" in str(error)
     else:
         raise AssertionError("oversized frame_id must be rejected")
+
+
+def test_indexed_thermal_snapshot_preserves_stable_ids_and_state_sequence(monkeypatch):
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MIN_C", "20")
+    monkeypatch.setenv("HAZARD_GUARD_THERMAL_COLOR_MAX_C", "40")
+    store = PointCloudStore(source="ros:/hazard_guard/thermal/map")
+    errors = []
+    adapter = PointCloudAdapter(store, errors.append, temperature_colors=True)
+    adapter._minimum_interval = 0
+    adapter._maximum_points = 1  # Indexed Robot snapshots bypass this second cap.
+    source_record = struct.Struct("<fffIffB3xiiid")
+    records = (
+        source_record.pack(1, 2, 3, 0, 30, .8, 0, 17, 0, 0, 9)
+        + source_record.pack(4, 5, 6, 0, 40, .9, 1, 2, -3, 4, 9)
+    )
+    names = [
+        ("x", 0, 7), ("y", 4, 7), ("z", 8, 7), ("rgb", 12, 6),
+        ("temperature_c", 16, 7), ("confidence", 20, 7),
+        ("thermal_kind", 24, 2), ("voxel_key_x", 28, 5),
+        ("voxel_key_y", 32, 5), ("voxel_key_z", 36, 5),
+        ("thermal_sequence", 40, 8),
+    ]
+    adapter.on_cloud(SimpleNamespace(
+        fields=[field(*item) for item in names], width=2, height=1,
+        point_step=48, row_step=96, is_bigendian=False, data=records,
+        header=SimpleNamespace(frame_id="map"),
+    ))
+
+    assert errors == []
+    _, packet = store.packet_after(None)
+    header = PACKET_HEADER.unpack_from(packet)
+    assert header[1] == 3
+    assert header[5] == 2
+    offset = PACKET_HEADER.size + header[3]
+    first = THERMAL_STATE_RECORD.unpack_from(packet, offset)
+    second = THERMAL_STATE_RECORD.unpack_from(packet, offset + THERMAL_STATE_RECORD.size)
+    assert first[10:13] == (17, 0, 0)
+    assert second[9:13] == (1, 2, -3, 4)
+    assert first[13] == second[13] == 9

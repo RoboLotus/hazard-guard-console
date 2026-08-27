@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 PACKET_HEADER = struct.Struct("<4sBBHIIQ")
 POINT_RECORD = struct.Struct("<fffBBBB")
+THERMAL_STATE_RECORD = struct.Struct("<fffBBBBffB3xiiid")
 PACKET_MAGIC = b"HGPC"
 PACKET_VERSION = 2
 MAX_FRAME_ID_BYTES = 255
@@ -46,6 +47,7 @@ class PointCloudStore:
         color_available: bool,
         frame_id: str,
         source: str,
+        packet_version: int = PACKET_VERSION,
     ) -> None:
         timestamp_ms = int(time.time() * 1000)
         normalized_frame_id = str(frame_id or "map").strip() or "map"
@@ -59,7 +61,7 @@ class PointCloudStore:
             flags = 1 if color_available else 0
             self._packet = PACKET_HEADER.pack(
                 PACKET_MAGIC,
-                PACKET_VERSION,
+                int(packet_version),
                 flags,
                 len(encoded_frame_id),
                 self._sequence,
@@ -235,7 +237,20 @@ class PointCloudAdapter:
             )
             endian = ">" if bool(message.is_bigendian) else "<"
             data = memoryview(message.data)
-            sample_step = max(1, math.ceil(total_points / self._maximum_points))
+            indexed_thermal = self._temperature_colors and all(
+                name in fields for name in (
+                    "temperature_c", "confidence", "thermal_kind",
+                    "voxel_key_x", "voxel_key_y", "voxel_key_z",
+                    "thermal_sequence",
+                )
+            )
+            # The Robot map publisher already applies its authoritative cap.
+            # Sampling indexed bootstrap records here would discard stable
+            # indices and force avoidable snapshot fallbacks later.
+            sample_step = 1 if indexed_thermal else max(
+                1, math.ceil(total_points / self._maximum_points)
+            )
+            output_limit = total_points if indexed_thermal else self._maximum_points
             records = bytearray()
             point_count = 0
 
@@ -287,17 +302,37 @@ class PointCloudAdapter:
                 else:
                     red, green, blue = 75, 145, 220
 
-                records.extend(POINT_RECORD.pack(
-                    x,
-                    y,
-                    z,
-                    max(0, min(255, red)),
-                    max(0, min(255, green)),
-                    max(0, min(255, blue)),
-                    255,
-                ))
+                if indexed_thermal:
+                    confidence = float(self._unpack_scalar(
+                        data, base + fields["confidence"].offset,
+                        fields["confidence"].datatype, endian,
+                    ))
+                    kind = int(self._unpack_scalar(
+                        data, base + fields["thermal_kind"].offset,
+                        fields["thermal_kind"].datatype, endian,
+                    ))
+                    keys = tuple(int(self._unpack_scalar(
+                        data, base + fields[name].offset,
+                        fields[name].datatype, endian,
+                    )) for name in ("voxel_key_x", "voxel_key_y", "voxel_key_z"))
+                    state_sequence = float(self._unpack_scalar(
+                        data, base + fields["thermal_sequence"].offset,
+                        fields["thermal_sequence"].datatype, endian,
+                    ))
+                    records.extend(THERMAL_STATE_RECORD.pack(
+                        x, y, z,
+                        max(0, min(255, red)), max(0, min(255, green)),
+                        max(0, min(255, blue)), 255,
+                        temperature_c, confidence, kind, *keys, state_sequence,
+                    ))
+                else:
+                    records.extend(POINT_RECORD.pack(
+                        x, y, z,
+                        max(0, min(255, red)), max(0, min(255, green)),
+                        max(0, min(255, blue)), 255,
+                    ))
                 point_count += 1
-                if point_count >= self._maximum_points:
+                if point_count >= output_limit:
                     break
 
             self.store.update(
@@ -306,6 +341,7 @@ class PointCloudAdapter:
                 color_available=color_available,
                 frame_id=getattr(message.header, "frame_id", "map"),
                 source=os.getenv(self._source_env, self._source_default),
+                packet_version=3 if indexed_thermal else PACKET_VERSION,
             )
         except Exception as exc:
             self._on_error(f"Point cloud conversion failed: {exc}")
