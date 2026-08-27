@@ -28,6 +28,7 @@ from .bridge import (
     spatial_store,
     telemetry_store,
     thermal_cloud_store,
+    thermal_delta_store,
     thermal_map_status_store,
 )
 from .mode_manager import system_mode_manager
@@ -91,6 +92,7 @@ def reset_thermal_map_stream(session_id: str | None) -> None:
             "/hazard_guard/thermal/map",
         )
     )
+    thermal_delta_store.reset(session_id)
 
 
 @asynccontextmanager
@@ -953,6 +955,41 @@ def thermal_cloud_status():
     return result
 
 
+@app.get("/api/v1/spatial/cloud/thermal/delta/bootstrap")
+def thermal_delta_bootstrap():
+    result = thermal_delta_store.bootstrap()
+    node_status = thermal_map_status_store.snapshot()
+    result["dynamic_voxel_size_m"] = node_status.get("dynamic_voxel_size_m", 0.05)
+    result["snapshot_fallback_available"] = bool(
+        thermal_cloud_store.status().get("available")
+    )
+    return result
+
+
+@app.get("/api/v1/spatial/cloud/thermal/delta/resync")
+def thermal_delta_resync(
+    session_id: str,
+    geometry_fingerprint: str,
+    base_sequence: int,
+):
+    recovery = thermal_delta_store.recover(
+        session_id=session_id,
+        geometry_fingerprint=geometry_fingerprint,
+        base_sequence=base_sequence,
+    )
+    bootstrap = thermal_delta_store.bootstrap()
+    return {
+        "status": recovery.status,
+        "reason": recovery.reason or None,
+        "session_id": bootstrap["session_id"],
+        "geometry_fingerprint": bootstrap["geometry_fingerprint"],
+        "protocol_version": bootstrap["protocol_version"],
+        "latest_sequence": bootstrap["latest_sequence"],
+        "replay_packet_count": len(recovery.packets),
+        "snapshot_fallback_websocket": "/ws/pointcloud/thermal",
+    }
+
+
 @app.get("/api/v1/system/sensors")
 def sensor_diagnostics():
     mode = system_mode_manager.snapshot(detect_external=False)
@@ -1322,6 +1359,62 @@ async def point_cloud(websocket: WebSocket):
 @app.websocket("/ws/pointcloud/thermal")
 async def thermal_point_cloud(websocket: WebSocket):
     await stream_cloud(websocket, thermal_cloud_store)
+
+
+@app.websocket("/ws/pointcloud/thermal/delta")
+async def thermal_point_cloud_delta(websocket: WebSocket):
+    """Replay missing HGTD packets, then relay newly received bytes unchanged."""
+    await websocket.accept()
+    bootstrap = thermal_delta_store.bootstrap()
+    session_id = websocket.query_params.get("session_id", "")
+    fingerprint = websocket.query_params.get("geometry_fingerprint", "")
+    try:
+        base_sequence = int(websocket.query_params.get("base_sequence", "0"))
+    except ValueError:
+        await websocket.send_json({"status": "RESYNC_REQUIRED", "reason": "invalid_sequence"})
+        await websocket.close(code=1008)
+        return
+    recovery = thermal_delta_store.recover(
+        session_id=session_id,
+        geometry_fingerprint=fingerprint,
+        base_sequence=base_sequence,
+    )
+    await websocket.send_json({
+        "status": recovery.status,
+        "reason": recovery.reason or None,
+        "session_id": bootstrap["session_id"],
+        "geometry_fingerprint": bootstrap["geometry_fingerprint"],
+        "protocol_version": bootstrap["protocol_version"],
+        "latest_sequence": bootstrap["latest_sequence"],
+        "snapshot_fallback_websocket": "/ws/pointcloud/thermal",
+    })
+    if recovery.status == "RESYNC_REQUIRED":
+        await websocket.close(code=1008)
+        return
+    cursor = base_sequence
+    try:
+        while True:
+            recovery = thermal_delta_store.recover(
+                session_id=session_id,
+                geometry_fingerprint=fingerprint,
+                base_sequence=cursor,
+            )
+            if recovery.status == "RESYNC_REQUIRED":
+                await websocket.send_json({
+                    "status": "RESYNC_REQUIRED",
+                    "reason": recovery.reason,
+                    "snapshot_fallback_websocket": "/ws/pointcloud/thermal",
+                })
+                await websocket.close(code=1008)
+                return
+            for packet in recovery.packets:
+                await websocket.send_bytes(packet)
+                # Metadata inspection is constant-size/count validation and
+                # does not unpack or rebuild voxel records.
+                cursor = int.from_bytes(packet[8:16], "little")
+            await asyncio.sleep(0.1)
+    except (WebSocketDisconnect, RuntimeError):
+        return
 
 
 @app.websocket("/ws/teleop")

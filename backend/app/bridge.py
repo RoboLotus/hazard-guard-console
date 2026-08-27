@@ -11,6 +11,7 @@ from typing import Any
 
 from .ros_media import RosMediaAdapter
 from .point_cloud import PointCloudAdapter, PointCloudStore
+from .thermal_delta import ThermalDeltaAdapter, ThermalDeltaStore
 from .sensor_diagnostics import SensorDiagnosticsStore
 from .stores import (
     MediaStore,
@@ -178,6 +179,7 @@ class RosBridge:
         thermal_cloud: PointCloudStore,
         diagnostics: SensorDiagnosticsStore,
         thermal_map_status: ThermalMapStatusStore | None = None,
+        thermal_delta: ThermalDeltaStore | None = None,
     ) -> None:
         self.store = store
         self.media = media
@@ -187,6 +189,7 @@ class RosBridge:
         self.point_cloud = point_cloud
         self.thermal_cloud = thermal_cloud
         self.thermal_map_status = thermal_map_status or ThermalMapStatusStore()
+        self.thermal_delta = thermal_delta or ThermalDeltaStore()
         self.diagnostics = diagnostics
         self._point_cloud_adapter = PointCloudAdapter(point_cloud, self._set_error)
         # New robot clouds carry packed RGB. The temperature fallback keeps
@@ -197,6 +200,9 @@ class RosBridge:
             source_env="HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
             source_default="/hazard_guard/thermal/map",
             temperature_colors=True,
+        )
+        self._thermal_delta_adapter = ThermalDeltaAdapter(
+            self.thermal_delta, self._set_error
         )
         self._media_adapter = RosMediaAdapter(
             media,
@@ -344,7 +350,7 @@ class RosBridge:
             from rclpy.time import Time
             from sensor_msgs.msg import BatteryState, CameraInfo, Image, Imu, LaserScan, PointCloud2
             from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
-            from std_msgs.msg import String
+            from std_msgs.msg import ByteMultiArray, String
             from std_srvs.srv import Trigger
             from tf2_ros import Buffer, TransformListener
 
@@ -435,6 +441,19 @@ class RosBridge:
                 "/hazard_guard/dispenser/battery",
                 self._on_dispenser_battery,
                 map_qos,
+            )
+            delta_qos = QoSProfile(
+                depth=100,
+                reliability=ReliabilityPolicy.RELIABLE,
+            )
+            self._node.create_subscription(
+                ByteMultiArray,
+                os.getenv(
+                    "HAZARD_GUARD_THERMAL_DELTA_TOPIC",
+                    "/hazard_guard/thermal/delta",
+                ),
+                self._thermal_delta_adapter.on_message,
+                delta_qos,
             )
             self._node.create_subscription(
                 String,
@@ -632,6 +651,10 @@ class RosBridge:
 
     def _on_thermal_map_status(self, message: Any) -> None:
         if self.thermal_map_status.update(message):
+            status = self.thermal_map_status.snapshot()
+            self.thermal_delta.reset(
+                status.get("session_id"), status.get("fingerprint")
+            )
             self.thermal_cloud.clear(
                 source=os.getenv(
                     "HAZARD_GUARD_THERMAL_CLOUD_TOPIC",
@@ -1994,6 +2017,7 @@ spatial_store = SpatialStore()
 point_cloud_store = PointCloudStore()
 thermal_cloud_store = PointCloudStore(source="ros:/hazard_guard/thermal/map")
 thermal_map_status_store = ThermalMapStatusStore()
+thermal_delta_store = ThermalDeltaStore()
 sensor_diagnostics_store = SensorDiagnosticsStore()
 ros_bridge = RosBridge(
     telemetry_store,
@@ -2005,4 +2029,5 @@ ros_bridge = RosBridge(
     thermal_cloud_store,
     sensor_diagnostics_store,
     thermal_map_status_store,
+    thermal_delta_store,
 )
