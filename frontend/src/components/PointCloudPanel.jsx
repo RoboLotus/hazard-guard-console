@@ -20,6 +20,11 @@ import {
   parseThermalDelta,
   thermalDeltaAction,
 } from "../thermalPointCloud.js";
+import {
+  createThermalPointMaterial,
+  setThermalMaterialTemperatureWindow,
+  updateThermalPointMaterial,
+} from "../thermalPointMaterial.js";
 
 const INITIAL_STATUS = {
   connection: "connecting",
@@ -29,6 +34,7 @@ const INITIAL_STATUS = {
   updatedAt: null,
   error: null,
 };
+const EMPTY_THERMAL_RENDER_CONFIG = Object.freeze({});
 
 // Both variants are the same viewer over the same packet format; only the
 // stream and the words around it change. Thermal packets are authoritative
@@ -187,6 +193,7 @@ export default function PointCloudPanel({
   variant = "rgb",
   equipment = [],
   selectedEquipmentId = null,
+  thermalRenderConfig = EMPTY_THERMAL_RENDER_CONFIG,
 }) {
   const spec = VARIANTS[variant] || VARIANTS.rgb;
   const archived = spec.supportsArchive ? archivedSession : null;
@@ -235,18 +242,16 @@ export default function PointCloudPanel({
     scene.add(new THREE.AxesHelper(0.75));
 
     const geometry = new THREE.BufferGeometry();
-    const material = new THREE.PointsMaterial({
-      size: variant === "thermal" ? 0.055 : 0.035,
-      sizeAttenuation: true,
-      vertexColors: true,
-      transparent: false,
-      opacity: 1,
-      depthWrite: true,
-    });
+    const material = variant === "thermal"
+      ? createThermalPointMaterial({ config: thermalRenderConfig })
+      : new THREE.PointsMaterial({ size: 0.035, sizeAttenuation: true, vertexColors: true });
     const points = new THREE.Points(geometry, material);
     scene.add(points);
     const dynamicGeometry = new THREE.BufferGeometry();
-    const dynamicPoints = new THREE.Points(dynamicGeometry, material);
+    const dynamicMaterial = variant === "thermal"
+      ? createThermalPointMaterial({ dynamic: true, config: thermalRenderConfig })
+      : material;
+    const dynamicPoints = new THREE.Points(dynamicGeometry, dynamicMaterial);
     dynamicPoints.frustumCulled = false;
     dynamicPoints.visible = variant === "thermal";
     scene.add(dynamicPoints);
@@ -260,6 +265,7 @@ export default function PointCloudPanel({
       controls,
       geometry,
       material,
+      dynamicMaterial,
       points,
       dynamicGeometry,
       dynamicPoints,
@@ -273,6 +279,8 @@ export default function PointCloudPanel({
       const width = Math.max(1, mount.clientWidth);
       const height = Math.max(1, mount.clientHeight);
       renderer.setSize(width, height, false);
+      if (material.uniforms?.uPointScale) material.uniforms.uPointScale.value = height * renderer.getPixelRatio() * 0.5;
+      if (dynamicMaterial.uniforms?.uPointScale) dynamicMaterial.uniforms.uPointScale.value = height * renderer.getPixelRatio() * 0.5;
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
     };
@@ -283,6 +291,9 @@ export default function PointCloudPanel({
     let animationFrame;
     const render = () => {
       controls.update();
+      const elapsed = performance.now() * 0.001;
+      if (material.uniforms?.uTime) material.uniforms.uTime.value = elapsed;
+      if (dynamicMaterial.uniforms?.uTime) dynamicMaterial.uniforms.uTime.value = elapsed;
       renderer.render(scene, camera);
       animationFrame = window.requestAnimationFrame(render);
     };
@@ -295,6 +306,7 @@ export default function PointCloudPanel({
       geometry.dispose();
       dynamicGeometry.dispose();
       material.dispose();
+      if (dynamicMaterial !== material) dynamicMaterial.dispose();
       robotMarker.dispose();
       renderer.dispose();
       renderer.domElement.remove();
@@ -305,11 +317,26 @@ export default function PointCloudPanel({
   useEffect(() => {
     const currentScene = sceneRef.current;
     if (!currentScene) return;
-    currentScene.material.size = variant === "thermal" ? 0.055 : 0.035;
-    currentScene.material.needsUpdate = true;
+    if (variant !== "thermal") currentScene.material.size = 0.035;
     currentScene.renderer.domElement.setAttribute("aria-label", spec.ariaLabel);
     currentScene.dynamicPoints.visible = variant === "thermal";
   }, [spec.ariaLabel, variant]);
+
+  useEffect(() => {
+    if (variant !== "thermal") return;
+    const scene = sceneRef.current;
+    if (!scene) return;
+    updateThermalPointMaterial(scene.material, thermalRenderConfig);
+    updateThermalPointMaterial(scene.dynamicMaterial, thermalRenderConfig);
+  }, [thermalRenderConfig, variant]);
+
+  useEffect(() => {
+    if (variant !== "thermal" || !temperatureWindow) return;
+    const scene = sceneRef.current;
+    if (!scene) return;
+    setThermalMaterialTemperatureWindow(scene.material, temperatureWindow[0], temperatureWindow[1]);
+    setThermalMaterialTemperatureWindow(scene.dynamicMaterial, temperatureWindow[0], temperatureWindow[1]);
+  }, [temperatureWindow, variant]);
 
   useEffect(() => {
     const group = sceneRef.current?.equipmentGroup;

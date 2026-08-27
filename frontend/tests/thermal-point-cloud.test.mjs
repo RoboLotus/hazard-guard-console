@@ -10,6 +10,12 @@ import {
   parseThermalDelta,
   thermalDeltaAction,
 } from "../src/thermalPointCloud.js";
+import {
+  createThermalPointMaterial,
+  resolveThermalRenderConfig,
+  setThermalMaterialTemperatureWindow,
+  updateThermalPointMaterial,
+} from "../src/thermalPointMaterial.js";
 
 const encoder = new TextEncoder();
 
@@ -112,4 +118,27 @@ test("unknown static index refuses partial application and forces snapshot fallb
   const state = manager(); state.buffers.bootstrap(parsePointCloudPacket(snapshotPacket([{ kind: 0, key: [1, 0, 0], position: [0, 0, 0], temperature: 20, confidence: 1 }])));
   const result = state.buffers.apply(parseThermalDelta(deltaPacket({ type: STATIC_THERMAL_DELTA, sequence: 5, staticUpdates: [[99, 50, 1]] })));
   assert.deepEqual(result, { applied: false, reason: "STATIC_GEOMETRY_MISSING" });
+});
+
+test("thermal shader effects are independently configurable", () => {
+  const material = createThermalPointMaterial({ dynamic: true, config: { alertGlow: false, pulseAmount: .03 } });
+  assert.equal(material.uniforms.uIsDynamic.value, 1);
+  assert.equal(material.uniforms.uAlertGlowEnabled.value, 0);
+  assert.equal(material.uniforms.uCircularSpriteEnabled.value, 1);
+  assert.equal(material.uniforms.uPulseAmount.value, .03);
+  updateThermalPointMaterial(material, { continuousGradient: false, confidenceOpacity: false });
+  assert.equal(material.uniforms.uContinuousGradientEnabled.value, 0);
+  assert.equal(material.uniforms.uConfidenceOpacityEnabled.value, 0);
+  assert.equal(material.uniforms.uAlertGlowEnabled.value, 1);
+  setThermalMaterialTemperatureWindow(material, 18, 96);
+  assert.equal(material.uniforms.uTemperatureMin.value, 18);
+  assert.equal(material.uniforms.uTemperatureMax.value, 96);
+  material.dispose();
+});
+
+test("thermal rendering config keeps conservative glow defaults", () => {
+  const config = resolveThermalRenderConfig();
+  assert.ok(config.warningGlowStrength < config.criticalGlowStrength);
+  assert.ok(config.maxTemperatureSizeIncrease <= .3);
+  assert.ok(config.pulseAmount <= .1);
 });
