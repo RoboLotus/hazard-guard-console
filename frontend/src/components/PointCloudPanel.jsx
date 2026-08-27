@@ -177,6 +177,7 @@ function disposeObject3d(object) {
 export default function PointCloudPanel({
   systemMode,
   archivedSession,
+  referenceSession,
   spatialState,
   variant = "rgb",
   equipment = [],
@@ -188,7 +189,9 @@ export default function PointCloudPanel({
   const sceneRef = useRef(null);
   const fitRef = useRef(() => {});
   const firstCloudRef = useRef(true);
+  const firstBaseCloudRef = useRef(true);
   const [status, setStatus] = useState(INITIAL_STATUS);
+  const [basePointCount, setBasePointCount] = useState(0);
   const [clockTick, setClockTick] = useState(Date.now());
   const [temperatureWindow, setTemperatureWindow] = useState(null);
   const [thermalApiStatus, setThermalApiStatus] = useState(null);
@@ -228,6 +231,19 @@ export default function PointCloudPanel({
     scene.add(new THREE.AxesHelper(0.75));
 
     const geometry = new THREE.BufferGeometry();
+    const baseGeometry = variant === "thermal" ? new THREE.BufferGeometry() : null;
+    const baseMaterial = variant === "thermal" ? new THREE.PointsMaterial({
+      size: 0.035,
+      sizeAttenuation: true,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+    }) : null;
+    const basePoints = baseGeometry && baseMaterial
+      ? new THREE.Points(baseGeometry, baseMaterial)
+      : null;
+    if (basePoints) scene.add(basePoints);
     const material = new THREE.PointsMaterial({
       size: variant === "thermal" ? 0.055 : 0.035,
       sizeAttenuation: true,
@@ -247,13 +263,23 @@ export default function PointCloudPanel({
       camera,
       controls,
       geometry,
+      baseGeometry,
+      baseMaterial,
+      basePoints,
       material,
       points,
       renderer,
       robotMarker,
       equipmentGroup,
     };
-    fitRef.current = () => fitCameraToCloud(camera, controls, geometry);
+    fitRef.current = () => {
+      const basePositions = baseGeometry?.getAttribute("position");
+      fitCameraToCloud(
+        camera,
+        controls,
+        basePositions?.count ? baseGeometry : geometry,
+      );
+    };
 
     const resize = () => {
       const width = Math.max(1, mount.clientWidth);
@@ -280,6 +306,8 @@ export default function PointCloudPanel({
       controls.dispose();
       geometry.dispose();
       material.dispose();
+      baseGeometry?.dispose();
+      baseMaterial?.dispose();
       robotMarker.dispose();
       renderer.dispose();
       renderer.domElement.remove();
@@ -420,6 +448,97 @@ export default function PointCloudPanel({
       socket?.close();
     };
   }, [archived?.id, spec.socketPath]);
+
+  useEffect(() => {
+    if (variant !== "thermal" || archived) return undefined;
+    firstBaseCloudRef.current = true;
+    setBasePointCount(0);
+    let disposed = false;
+    let socket;
+    let reconnectTimer;
+    const connect = () => {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${protocol}//${window.location.host}/ws/pointcloud`);
+      socket.binaryType = "arraybuffer";
+      socket.onmessage = ({ data }) => {
+        try {
+          const cloud = parsePointCloudPacket(data);
+          const scene = sceneRef.current;
+          if (!scene?.baseGeometry || cloud.pointCount === 0) return;
+          replacePointCloudGeometrySnapshot(
+            scene.baseGeometry,
+            new THREE.BufferAttribute(cloud.positions, 3),
+            new THREE.BufferAttribute(cloud.colors, 3),
+          );
+          setBasePointCount(cloud.pointCount);
+          if (firstBaseCloudRef.current) {
+            firstBaseCloudRef.current = false;
+            fitRef.current();
+          }
+        } catch {
+          // The thermal layer remains usable even if the reference cloud is
+          // temporarily unavailable; its own stream reports any hard error.
+        }
+      };
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
+        if (disposed) return;
+        reconnectTimer = window.setTimeout(connect, 1500);
+      };
+    };
+    connect();
+    return () => {
+      disposed = true;
+      window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, [archived, variant]);
+
+  useEffect(() => {
+    if (variant !== "thermal" || !referenceSession?.id) return undefined;
+    const controller = new AbortController();
+    const loadReferenceCloud = async () => {
+      try {
+        const response = await fetch(
+          `/api/v1/system/maps/${encodeURIComponent(referenceSession.world_id)}/${encodeURIComponent(referenceSession.id)}/cloud.ply`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        if (!response.ok) return;
+        const source = new PLYLoader().parse(await response.arrayBuffer());
+        const position = source.getAttribute("position");
+        const scene = sceneRef.current;
+        if (!scene?.baseGeometry || !position?.count) {
+          source.dispose();
+          return;
+        }
+        scene.baseGeometry.setAttribute("position", position.clone());
+        const sourceColor = source.getAttribute("color");
+        if (sourceColor) {
+          scene.baseGeometry.setAttribute("color", sourceColor.clone());
+        } else {
+          const colors = new Float32Array(position.count * 3);
+          for (let index = 0; index < position.count; index += 1) {
+            colors.set([0.25, 0.43, 0.58], index * 3);
+          }
+          scene.baseGeometry.setAttribute(
+            "color",
+            new THREE.BufferAttribute(colors, 3),
+          );
+        }
+        scene.baseGeometry.computeBoundingSphere();
+        source.dispose();
+        setBasePointCount(position.count);
+        firstBaseCloudRef.current = false;
+        fitRef.current();
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          // The live base stream and thermal stream remain as fallbacks.
+        }
+      }
+    };
+    void loadReferenceCloud();
+    return () => controller.abort();
+  }, [referenceSession?.id, referenceSession?.world_id, variant]);
 
   useEffect(() => {
     if (!archived) return undefined;
@@ -624,7 +743,7 @@ export default function PointCloudPanel({
             <p>다시 보이는 표면만 최신 온도로 갱신하고, 보지 않는 영역은 마지막 측정을 유지합니다.</p>
           </aside>
         )}
-        {!status.pointCount && (
+        {!status.pointCount && !(variant === "thermal" && basePointCount) && (
           <div className="point-cloud-empty">
             <EmptyIcon size={38} weight="duotone" />
             <strong>{emptyTitle}</strong>
