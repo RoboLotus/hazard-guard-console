@@ -21,6 +21,22 @@ test("legacy equipment settings enable the adaptive policy by default", () => {
   assert.equal(normalized.equipment[1].adaptive_threshold_enabled, false);
 });
 
+test("map-scoped equipment settings keep their Jetson storage identity", () => {
+  const normalized = normalizeEquipmentSettings({
+    schema_version: 2,
+    world_id: "facility_map",
+    map_session_id: "session-20260827",
+    frame_id: "map",
+    geometry_fingerprint: "sha256:fixed-map",
+    equipment: [{ id: "pump-a" }],
+  });
+
+  assert.equal(normalized.world_id, "facility_map");
+  assert.equal(normalized.map_session_id, "session-20260827");
+  assert.equal(normalized.frame_id, "map");
+  assert.equal(normalized.geometry_fingerprint, "sha256:fixed-map");
+});
+
 test("equipment synchronization distinguishes desired and applied settings", () => {
   const rejected = equipmentSyncStatus({
     state: "rejected",
