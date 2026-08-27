@@ -117,6 +117,45 @@ def test_drop_decision_is_blocked_when_no_beacon_is_available(
     assert incident_api.decisions_for("incident-1") == []
 
 
+def test_physical_runtime_rejects_incident_from_previous_ros_session(
+    monkeypatch, incident_api
+):
+    incident = incident_api.get("incident-1")
+    monkeypatch.setattr(
+        main_module,
+        "system_mode_status",
+        lambda: {
+            "deployment_target": "physical",
+            "mode": "patrol",
+            "state": "running",
+            "started_at": "2099-01-01T00:00:00+00:00",
+        },
+    )
+    called = []
+    monkeypatch.setattr(
+        main_module.ros_bridge,
+        "decide_incident",
+        lambda payload: called.append(payload),
+    )
+
+    response = client.post(
+        "/api/v1/incidents/incident-1/decision",
+        json={
+            "request_id": "stale-runtime-decision",
+            "decision": "drop_then_monitor",
+            "operator_id": "operator",
+            "confirmed": True,
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert incident is not None
+    assert response.status_code == 409
+    assert "재기동" in response.json()["detail"]
+    assert incident_api.decisions_for("incident-1") == []
+    assert called == []
+
+
 def test_decision_is_signed_dispatched_and_replayed_once(monkeypatch, incident_api):
     calls = []
 

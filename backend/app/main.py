@@ -249,6 +249,61 @@ def validate_incident_decision(incident: dict, decision: str) -> None:
             )
 
 
+def validate_incident_runtime(incident: dict) -> None:
+    """Reject decisions for an incident owned by a previous ROS process.
+
+    The SQLite incident ledger intentionally survives a backend restart, but
+    the mission manager's in-memory approval latch does not. Replaying the old
+    approval against a newly launched physical patrol can otherwise target an
+    empty or unrelated latch. Fail closed and require a fresh sensor visit.
+    """
+    if str(incident.get("state") or "") not in {
+        "approval_required",
+        "dispensing",
+        "monitoring",
+        "admin_release_required",
+        "field_check_required",
+        "hardware_error",
+    }:
+        return
+    runtime = system_mode_status()
+    if runtime.get("deployment_target") != "physical":
+        return
+    if runtime.get("mode") not in {"patrol", "rgbd_mapping"} or runtime.get(
+        "state"
+    ) not in {"running", "external"}:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "현재 ROS 순찰 세션이 없어 이전 위험 이벤트를 처리할 수 "
+                "없습니다. 새 센서 관측으로 이벤트를 다시 확인해 주세요."
+            ),
+        )
+    try:
+        incident_updated = datetime.fromisoformat(str(incident["updated_at"]))
+        runtime_started = datetime.fromisoformat(str(runtime["started_at"]))
+        if incident_updated.tzinfo is None:
+            incident_updated = incident_updated.replace(tzinfo=timezone.utc)
+        if runtime_started.tzinfo is None:
+            runtime_started = runtime_started.replace(tzinfo=timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "위험 이벤트의 ROS 세션 정보를 확인할 수 없어 관리자 조치를 "
+                "차단했습니다. 새 센서 관측으로 다시 확인해 주세요."
+            ),
+        )
+    if incident_updated < runtime_started:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "ROS가 재기동되기 전에 생성된 위험 이벤트입니다. 중복 배출을 "
+                "막기 위해 새 센서 관측 후 다시 승인해 주세요."
+            ),
+        )
+
+
 def require_admin_operator(admin_token: str | None) -> str:
     expected_token = os.getenv("HAZARD_GUARD_ADMIN_API_TOKEN", "")
     operator_id = os.getenv("HAZARD_GUARD_ADMIN_OPERATOR_ID", "").strip()
@@ -494,6 +549,7 @@ def decide_incident(
     incident = store.get(incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="위험 이벤트를 찾을 수 없습니다.")
+    validate_incident_runtime(incident)
     secret = os.getenv("HAZARD_GUARD_DISPENSER_APPROVAL_SECRET", "")
     if not secret:
         raise HTTPException(
