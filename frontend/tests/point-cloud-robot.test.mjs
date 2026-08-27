@@ -7,6 +7,7 @@ import {
   normalizeFrameId,
   resolvePointCloudRobotState,
   selectPointCloudPose,
+  shouldShowPointCloudRobot,
 } from "../src/pointCloudRobot.js";
 
 const NOW = Date.parse("2026-08-15T12:00:00.000Z");
@@ -90,4 +91,159 @@ test("rejects incomplete or invalid pose data", () => {
     resolvePointCloudRobotState(pose(0, { updated_at: "invalid" }), "map", NOW).visible,
     false,
   );
+});
+
+test("shows a fresh map pose over a fixed thermal scene with zero thermal points", () => {
+  const spatialState = {
+    pose: pose(),
+    poses: { map: pose() },
+  };
+  const robotState = resolvePointCloudRobotState(
+    selectPointCloudPose(spatialState, "map"),
+    "map",
+    NOW,
+  );
+
+  assert.equal(shouldShowPointCloudRobot(robotState, {
+    variant: "thermal",
+    pointCount: 0,
+    baseScene: {
+      ready: true,
+      pointCount: 12_000,
+      worldId: "facility_map",
+      sessionId: "session-a",
+      frameId: "map",
+    },
+    referenceSession: {
+      world_id: "facility_map",
+      id: "session-a",
+      cloud_frame_id: "map",
+    },
+    thermalSessionId: "session-a",
+    fixedMapAvailable: true,
+  }), true);
+});
+
+test("hides the robot marker when the fixed base scene has no points", () => {
+  const robotState = resolvePointCloudRobotState(pose(), "map", NOW);
+
+  assert.equal(shouldShowPointCloudRobot(robotState, {
+    variant: "thermal",
+    pointCount: 0,
+    baseScene: {
+      ready: true,
+      pointCount: 0,
+      worldId: "facility_map",
+      sessionId: "session-a",
+      frameId: "map",
+    },
+    referenceSession: {
+      world_id: "facility_map",
+      id: "session-a",
+      cloud_frame_id: "map",
+    },
+    thermalSessionId: "session-a",
+    fixedMapAvailable: true,
+  }), false);
+  assert.equal(shouldShowPointCloudRobot(robotState, {
+    variant: "rgb",
+    pointCount: 0,
+  }), false);
+});
+
+test("rejects a prior thermal scene after a reference session switch or fetch failure", () => {
+  const robotState = resolvePointCloudRobotState(pose(), "map", NOW);
+  const priorScene = {
+    ready: true,
+    pointCount: 12_000,
+    worldId: "facility_map",
+    sessionId: "session-old",
+    frameId: "map",
+  };
+  const newReference = {
+    world_id: "facility_map",
+    id: "session-new",
+    cloud_frame_id: "map",
+  };
+
+  assert.equal(shouldShowPointCloudRobot(robotState, {
+    variant: "thermal",
+    baseScene: priorScene,
+    referenceSession: newReference,
+    thermalSessionId: "session-new",
+    fixedMapAvailable: true,
+  }), false);
+  assert.equal(shouldShowPointCloudRobot(robotState, {
+    variant: "thermal",
+    baseScene: { ...priorScene, ready: false, pointCount: 0 },
+    referenceSession: newReference,
+    thermalSessionId: "session-new",
+    fixedMapAvailable: true,
+  }), false);
+});
+
+test("rejects frame mismatch and stale pose on an otherwise matching thermal scene", () => {
+  const matching = {
+    variant: "thermal",
+    baseScene: {
+      ready: true,
+      pointCount: 12_000,
+      worldId: "facility_map",
+      sessionId: "session-a",
+      frameId: "odom",
+    },
+    referenceSession: {
+      world_id: "facility_map",
+      id: "session-a",
+      cloud_frame_id: "map",
+    },
+    thermalSessionId: "session-a",
+    fixedMapAvailable: true,
+  };
+
+  assert.equal(shouldShowPointCloudRobot(
+    resolvePointCloudRobotState(pose(), "map", NOW),
+    matching,
+  ), false);
+  assert.equal(shouldShowPointCloudRobot(
+    resolvePointCloudRobotState(pose(ROBOT_POSE_EXPIRED_MS + 1), "map", NOW),
+    { ...matching, baseScene: { ...matching.baseScene, frameId: "map" } },
+  ), false);
+});
+
+test("rejects an authoritative thermal stream frame that differs from the base scene", () => {
+  const robotState = resolvePointCloudRobotState(pose(), "map", NOW);
+  const matchingScene = {
+    ready: true,
+    pointCount: 12_000,
+    worldId: "facility_map",
+    sessionId: "session-a",
+    frameId: "map",
+  };
+  const referenceSession = {
+    world_id: "facility_map",
+    id: "session-a",
+    cloud_frame_id: "map",
+  };
+
+  for (const pointCount of [0, 25]) {
+    assert.equal(shouldShowPointCloudRobot(robotState, {
+      variant: "thermal",
+      pointCount,
+      baseScene: matchingScene,
+      referenceSession,
+      thermalSessionId: "session-a",
+      thermalStatusFrameId: "odom",
+      fixedMapAvailable: true,
+    }), false);
+  }
+  assert.equal(shouldShowPointCloudRobot(robotState, {
+    variant: "thermal",
+    pointCount: 0,
+    baseScene: matchingScene,
+    referenceSession,
+    thermalSessionId: "session-a",
+    thermalStatusFrameId: "/map",
+    fixedMapAvailable: true,
+  }), true);
 });

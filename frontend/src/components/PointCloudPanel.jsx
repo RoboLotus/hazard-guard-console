@@ -11,8 +11,10 @@ import {
   resolveThermalLayerPresentation,
 } from "../pointCloud.js";
 import {
+  normalizeFrameId,
   resolvePointCloudRobotState,
   selectPointCloudPose,
+  shouldShowPointCloudRobot,
 } from "../pointCloudRobot.js";
 import {
   HGTD_PROTOCOL_VERSION,
@@ -35,6 +37,13 @@ const INITIAL_STATUS = {
   error: null,
 };
 const EMPTY_THERMAL_RENDER_CONFIG = Object.freeze({});
+const EMPTY_BASE_SCENE = Object.freeze({
+  ready: false,
+  pointCount: 0,
+  worldId: null,
+  sessionId: null,
+  frameId: null,
+});
 
 // Both variants are the same viewer over the same packet format; only the
 // stream and the words around it change. Thermal packets are authoritative
@@ -203,9 +212,8 @@ export default function PointCloudPanel({
   const fitRef = useRef(() => {});
   const firstCloudRef = useRef(true);
   const thermalBuffersRef = useRef(null);
-  const firstBaseCloudRef = useRef(true);
   const [status, setStatus] = useState(INITIAL_STATUS);
-  const [basePointCount, setBasePointCount] = useState(0);
+  const [baseScene, setBaseScene] = useState(EMPTY_BASE_SCENE);
   const [clockTick, setClockTick] = useState(Date.now());
   const [temperatureWindow, setTemperatureWindow] = useState(null);
   const [thermalApiStatus, setThermalApiStatus] = useState(null);
@@ -618,53 +626,21 @@ export default function PointCloudPanel({
   }, [archived?.id, spec.socketPath, variant]);
 
   useEffect(() => {
-    if (variant !== "thermal" || archived) return undefined;
-    firstBaseCloudRef.current = true;
-    setBasePointCount(0);
-    let disposed = false;
-    let socket;
-    let reconnectTimer;
-    const connect = () => {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/pointcloud`);
-      socket.binaryType = "arraybuffer";
-      socket.onmessage = ({ data }) => {
-        try {
-          const cloud = parsePointCloudPacket(data);
-          const scene = sceneRef.current;
-          if (!scene?.baseGeometry || cloud.pointCount === 0) return;
-          replacePointCloudGeometrySnapshot(
-            scene.baseGeometry,
-            new THREE.BufferAttribute(cloud.positions, 3),
-            new THREE.BufferAttribute(cloud.colors, 3),
-          );
-          setBasePointCount(cloud.pointCount);
-          if (firstBaseCloudRef.current) {
-            firstBaseCloudRef.current = false;
-            fitRef.current();
-          }
-        } catch {
-          // The thermal layer remains usable even if the reference cloud is
-          // temporarily unavailable; its own stream reports any hard error.
-        }
-      };
-      socket.onerror = () => socket.close();
-      socket.onclose = () => {
-        if (disposed) return;
-        reconnectTimer = window.setTimeout(connect, 1500);
-      };
+    if (variant !== "thermal") return undefined;
+    const scene = sceneRef.current;
+    scene?.baseGeometry?.deleteAttribute("position");
+    scene?.baseGeometry?.deleteAttribute("color");
+    setBaseScene(EMPTY_BASE_SCENE);
+    if (!referenceSession?.id || !referenceSession?.world_id) return undefined;
+    const referenceIdentity = {
+      worldId: String(referenceSession.world_id),
+      sessionId: String(referenceSession.id),
+      frameId: normalizeFrameId(
+        referenceSession.cloud_frame_id || referenceSession.frame_id,
+      ),
     };
-    connect();
-    return () => {
-      disposed = true;
-      window.clearTimeout(reconnectTimer);
-      socket?.close();
-    };
-  }, [archived, variant]);
-
-  useEffect(() => {
-    if (variant !== "thermal" || !referenceSession?.id) return undefined;
     const controller = new AbortController();
+    let disposed = false;
     const loadReferenceCloud = async () => {
       try {
         const response = await fetch(
@@ -674,29 +650,37 @@ export default function PointCloudPanel({
         if (!response.ok) return;
         const source = new PLYLoader().parse(await response.arrayBuffer());
         const position = source.getAttribute("position");
-        const scene = sceneRef.current;
-        if (!scene?.baseGeometry || !position?.count) {
+        const currentScene = sceneRef.current;
+        if (
+          disposed
+          || !currentScene?.baseGeometry
+          || !position?.count
+          || !referenceIdentity.frameId
+        ) {
           source.dispose();
           return;
         }
-        scene.baseGeometry.setAttribute("position", position.clone());
+        currentScene.baseGeometry.setAttribute("position", position.clone());
         const sourceColor = source.getAttribute("color");
         if (sourceColor) {
-          scene.baseGeometry.setAttribute("color", sourceColor.clone());
+          currentScene.baseGeometry.setAttribute("color", sourceColor.clone());
         } else {
           const colors = new Float32Array(position.count * 3);
           for (let index = 0; index < position.count; index += 1) {
             colors.set([0.25, 0.43, 0.58], index * 3);
           }
-          scene.baseGeometry.setAttribute(
+          currentScene.baseGeometry.setAttribute(
             "color",
             new THREE.BufferAttribute(colors, 3),
           );
         }
-        scene.baseGeometry.computeBoundingSphere();
+        currentScene.baseGeometry.computeBoundingSphere();
         source.dispose();
-        setBasePointCount(position.count);
-        firstBaseCloudRef.current = false;
+        setBaseScene({
+          ready: true,
+          pointCount: position.count,
+          ...referenceIdentity,
+        });
         fitRef.current();
       } catch (error) {
         if (error.name !== "AbortError") {
@@ -705,8 +689,17 @@ export default function PointCloudPanel({
       }
     };
     void loadReferenceCloud();
-    return () => controller.abort();
-  }, [referenceSession?.id, referenceSession?.world_id, variant]);
+    return () => {
+      disposed = true;
+      controller.abort();
+    };
+  }, [
+    referenceSession?.cloud_frame_id,
+    referenceSession?.frame_id,
+    referenceSession?.id,
+    referenceSession?.world_id,
+    variant,
+  ]);
 
   useEffect(() => {
     if (!archived) return undefined;
@@ -769,19 +762,33 @@ export default function PointCloudPanel({
     return () => controller.abort();
   }, [archived?.id]);
 
-  const cloudPose = selectPointCloudPose(spatialState, status.frameId);
-  const robotState = resolvePointCloudRobotState(
-    cloudPose,
-    status.frameId,
+  const thermalLayer = resolveThermalLayerPresentation(
+    thermalApiStatus || {},
+    status,
     clockTick,
   );
+  const markerFrameId = variant === "thermal" ? baseScene.frameId : status.frameId;
+  const cloudPose = selectPointCloudPose(spatialState, markerFrameId);
+  const robotState = resolvePointCloudRobotState(
+    cloudPose,
+    markerFrameId,
+    clockTick,
+  );
+  const robotMarkerVisible = shouldShowPointCloudRobot(robotState, {
+    variant,
+    pointCount: status.pointCount,
+    baseScene,
+    referenceSession,
+    thermalSessionId: thermalLayer.sessionId,
+    thermalStatusFrameId: status.frameId,
+    fixedMapAvailable: thermalLayer.fixedMapAvailable,
+  });
 
   useEffect(() => {
     const marker = sceneRef.current?.robotMarker;
     if (!marker) return;
-    const visible = Boolean(status.pointCount && robotState.visible);
-    marker.group.visible = visible;
-    if (!visible) return;
+    marker.group.visible = robotMarkerVisible;
+    if (!robotMarkerVisible) return;
     marker.group.position.set(robotState.x, robotState.y, Math.max(0, robotState.z));
     marker.group.rotation.set(0, 0, robotState.yaw);
     marker.setStale(robotState.stale);
@@ -792,16 +799,11 @@ export default function PointCloudPanel({
     robotState.y,
     robotState.yaw,
     robotState.z,
-    status.pointCount,
+    robotMarkerVisible,
   ]);
 
   const cloudFresh = Boolean(
     status.updatedAt && clockTick - status.updatedAt.getTime() < 5000,
-  );
-  const thermalLayer = resolveThermalLayerPresentation(
-    thermalApiStatus || {},
-    status,
-    clockTick,
   );
   const thermalLayerAge = formatThermalLayerAge(
     thermalLayer.updatedAtMs,
@@ -829,7 +831,7 @@ export default function PointCloudPanel({
       : "포인트 대기 중",
     disconnected: "연결 끊김",
   }[status.connection]);
-  const robotStatusClass = robotState.visible
+  const robotStatusClass = robotMarkerVisible
     ? (robotState.stale ? "stale" : "live")
     : "unavailable";
   let emptyTitle;
@@ -868,13 +870,13 @@ export default function PointCloudPanel({
         <div className={`map-live-badge ${status.connection === "connected" && status.pointCount && (archived || displayedCloudFresh) ? "" : "mock"}`}>
           <span />{connectionLabel}
         </div>
-        {Boolean(status.pointCount) && (
+        {robotMarkerVisible && (
           <div className={`point-cloud-robot-status ${robotStatusClass}`}>
             <span />
             <strong>{robotState.reason}</strong>
-            {robotState.visible && (
+            {robotMarkerVisible && (
               <small>
-                {status.frameId} · {robotState.x.toFixed(2)}, {robotState.y.toFixed(2)} m
+                {markerFrameId} · {robotState.x.toFixed(2)}, {robotState.y.toFixed(2)} m
               </small>
             )}
           </div>
@@ -911,7 +913,7 @@ export default function PointCloudPanel({
             <p>다시 보이는 표면만 최신 온도로 갱신하고, 보지 않는 영역은 마지막 측정을 유지합니다.</p>
           </aside>
         )}
-        {!status.pointCount && !(variant === "thermal" && basePointCount) && (
+        {!status.pointCount && !(variant === "thermal" && baseScene.ready) && (
           <div className="point-cloud-empty">
             <EmptyIcon size={38} weight="duotone" />
             <strong>{emptyTitle}</strong>
@@ -938,7 +940,7 @@ export default function PointCloudPanel({
           {archived
             ? `저장 세션 · ${archived.name || archived.id}`
             : variant === "thermal"
-            ? `고정 3D 표면 · 누적 열화상 계층 · ${status.frameId || "좌표계 미확인"} 좌표계`
+            ? `고정 3D 표면 · 누적 열화상 계층 · ${markerFrameId || "좌표계 미확인"} 좌표계`
             : `${status.frameId || "좌표계 미확인"} 좌표계 · Z축 높이`}
         </span>
         <strong>
