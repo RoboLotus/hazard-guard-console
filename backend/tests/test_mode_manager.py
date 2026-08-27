@@ -450,6 +450,44 @@ def test_manual_cloud_export_rejects_external_mapping_or_patrol_stack(
         assert "터미널" in result["message"]
 
 
+def test_active_thermal_patrol_can_read_immutable_reference_cloud(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
+    monkeypatch.setenv("HAZARD_GUARD_WORKSPACE", str(tmp_path))
+    manager = SystemModeManager()
+    session = manager._world_catalog.begin_session("facility_map", "toolbox")
+    cloud_path = manager._world_catalog.session_paths(
+        "facility_map", session["id"]
+    )["cloud"]
+    cloud_path.write_bytes(b"ply-reference")
+
+    class RunningProcess:
+        pid = 31337
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._process = RunningProcess()
+    manager._thermal_map_session_id = session["id"]
+    manager._data.update(mode="patrol", state="running")
+    monkeypatch.setattr(
+        manager._process_controller,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("active patrol must not re-export RTAB-Map")
+        ),
+    )
+
+    result = manager.export_map_cloud("facility_map", session["id"])
+
+    assert result["accepted"] is True
+    assert result["path"] == cloud_path
+    assert result["geometry_refreshed"] is False
+
+
 def test_status_poll_does_not_bypass_process_group_finalization(
     monkeypatch,
     tmp_path,
@@ -1055,7 +1093,7 @@ def test_thermal_layer_is_not_marked_saved_without_matching_status(
     assert "fingerprint" in str(saved["thermal_map_error"])
 
 
-def test_physical_patrol_cannot_disable_person_safety(monkeypatch, tmp_path):
+def test_physical_patrol_can_explicitly_disable_person_safety(monkeypatch, tmp_path):
     map_path = tmp_path / "runtime" / "maps" / "facility.yaml"
     monkeypatch.setenv("HAZARD_GUARD_MODE_CONTROL_ENABLED", "1")
     monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
@@ -1066,7 +1104,7 @@ def test_physical_patrol_cannot_disable_person_safety(monkeypatch, tmp_path):
 
     command = manager._launch_arguments("patrol")
 
-    assert "use_person_safety:=true" in command
+    assert "use_person_safety:=false" in command
 
 
 def test_physical_runtime_never_starts_gazebo(monkeypatch, tmp_path):
