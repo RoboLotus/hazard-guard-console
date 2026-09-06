@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { usePolling } from "../hooks/usePolling.js";
+import { useMemo, useState } from "react";
 import {
   Camera,
   CheckCircle,
@@ -83,23 +84,7 @@ export default function SensorDiagnostics({ apiOnline }) {
   const [diagnostics, setDiagnostics] = useState(null);
   const [filter, setFilter] = useState("current");
 
-  useEffect(() => {
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch("/api/v1/system/sensors", { cache: "no-store" });
-        if (!disposed && response.ok) setDiagnostics(await response.json());
-      } catch {
-        if (!disposed) setDiagnostics(null);
-      }
-    };
-    void refresh();
-    const interval = window.setInterval(refresh, 2000);
-    return () => {
-      disposed = true;
-      window.clearInterval(interval);
-    };
-  }, []);
+  usePolling("/api/v1/system/sensors", setDiagnostics, () => setDiagnostics(null));
 
   const sensors = diagnostics?.sensors || [];
   const summary = diagnostics?.summary || {};
@@ -139,7 +124,7 @@ export default function SensorDiagnostics({ apiOnline }) {
         <div><small>운용 환경</small><strong>{diagnostics?.deployment_target === "physical" ? "Jetson 실물 로봇" : diagnostics?.deployment_target === "simulation" ? "Gazebo 시뮬레이션" : "확인 중"}</strong></div>
         <div><small>현재 필요 기능</small><strong>{activeLabels.length ? activeLabels.join(" · ") : "운용 모드 대기"}</strong></div>
         <div><small>선택 입력</small><strong>{summary.optional_total || 0}개</strong></div>
-        <div className={issueCount ? "warning" : "success"}><small>확인 필요</small><strong>{issueCount}개</strong></div>
+        <div className={!diagnostics ? "" : issueCount ? "warning" : "success"}><small>확인 필요</small><strong>{diagnostics ? `${issueCount}개` : "확인 중"}</strong></div>
       </div>
 
       <div className="diagnostic-filter" role="group" aria-label="센서 연결 필터">

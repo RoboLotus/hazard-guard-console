@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowsClockwise,
   Clock,
@@ -142,12 +142,20 @@ export default function ReportsPage({ notify }) {
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
 
+  const listRequest = useRef(null);
+  const listSequence = useRef(0);
   const loadList = useCallback(async ({ quiet = false } = {}) => {
+    const sequence = ++listSequence.current;
+    listRequest.current?.abort();
+    const controller = new AbortController();
+    listRequest.current = controller;
+    const timeout = setTimeout(() => controller.abort(), 3000);
     if (!quiet) setLoading(true);
     try {
-      const response = await fetch("/api/v1/performance/reports", { cache: "no-store" });
+      const response = await fetch("/api/v1/performance/reports", { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error("성능 리포트 목록을 불러오지 못했습니다.");
       const payload = await response.json();
+      if (sequence !== listSequence.current) return;
       const nextReports = sortReports(payload.reports);
       setReports(nextReports);
       setActive(payload.active || []);
@@ -158,16 +166,29 @@ export default function ReportsPage({ notify }) {
       ));
       setError("");
     } catch (loadError) {
+      if (sequence !== listSequence.current) return;
+      setActive((current) => current.map((item) => ({ ...item, stale: true })));
       setError(loadError.message || "성능 리포트 API에 연결하지 못했습니다.");
     } finally {
-      if (!quiet) setLoading(false);
+      clearTimeout(timeout);
+      if (sequence === listSequence.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadList();
-    const interval = window.setInterval(() => void loadList({ quiet: true }), 3000);
-    return () => window.clearInterval(interval);
+    let stopped = false;
+    let timer;
+    const run = async () => {
+      await loadList({ quiet: true });
+      if (!stopped) timer = setTimeout(run, 3000);
+    };
+    void run();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      listSequence.current += 1;
+      listRequest.current?.abort();
+    };
   }, [loadList]);
 
   useEffect(() => {

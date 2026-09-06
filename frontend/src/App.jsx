@@ -13,6 +13,7 @@ import Settings from "./pages/Settings.jsx";
 import VideoPage from "./pages/VideoPage.jsx";
 import RosbagPage from "./pages/RosbagPage.jsx";
 import { mergeIncidentEvents, normalizeDispenserBattery } from "./incidents.js";
+import { usePolling } from "./hooks/usePolling.js";
 import { TELEMETRY_STALE_AFTER_MS, isLiveTelemetry } from "./telemetry.js";
 
 export function App() {
@@ -47,94 +48,23 @@ export function App() {
   const notify = (message, tone = "success") => {
     setToast({ message, tone, id: Date.now() });
   };
-  useEffect(() => {
-    let disposed = false;
-    const checkHealth = async () => {
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 1200);
-      try {
-        const response = await fetch("/api/health", { signal: controller.signal });
-        if (!disposed) setApiOnline(response.ok);
-      } catch {
-        if (!disposed) setApiOnline(false);
-      } finally {
-        window.clearTimeout(timer);
-      }
-    };
-    void checkHealth();
-    const interval = window.setInterval(checkHealth, 5000);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    let requestSequence = 0;
-    let timer;
-    let controller;
-    const refreshIncidents = async () => {
-      const sequence = ++requestSequence;
-      controller = new AbortController();
-      const requestTimeout = window.setTimeout(() => controller.abort(), 3000);
-      try {
-        const response = await fetch("/api/v1/incidents", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(`Incident status ${response.status}`);
-        const payload = await response.json();
-        const battery = normalizeDispenserBattery(payload?.battery);
-        if (!battery) throw new Error("Incident response is missing battery status");
-        if (!disposed && sequence === requestSequence) {
-          setIncidents(Array.isArray(payload.incidents) ? payload.incidents : []);
-          setDispenserBattery(battery);
-        }
-      } catch {
-        if (!disposed && sequence === requestSequence) {
-          setDispenserBattery((current) => ({ ...current, stale: true, available_for_drop: 0 }));
-        }
-      } finally {
-        window.clearTimeout(requestTimeout);
-        if (!disposed) timer = window.setTimeout(refreshIncidents, 1000);
-      }
-    };
-    void refreshIncidents();
-    return () => {
-      disposed = true;
-      requestSequence += 1;
-      controller?.abort();
-      window.clearTimeout(timer);
-    };
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch("/api/v1/rosbag/status", { cache: "no-store" });
-        if (!disposed && response.ok) { const payload = await response.json(); setBagStatus(payload); setBagEnabled(Boolean(payload.recording_control_enabled)); }
-      } catch { if (!disposed) setBagStatus({ state: "offline", recording: false, control_enabled: false }); }
-    };
-    void refresh(); const timer = window.setInterval(refresh, 1500);
-    return () => { disposed = true; window.clearInterval(timer); };
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    const checkSystemMode = async () => {
-      try {
-        const response = await fetch("/api/v1/system/mode", { cache: "no-store" });
-        if (!disposed && response.ok) setSystemMode(await response.json());
-      } catch {
-        if (!disposed) {
-          setSystemMode((current) => ({
-            ...current,
-            state: "disabled",
-            control_enabled: false,
-          }));
-        }
-      }
-    };
-    void checkSystemMode();
-    const interval = window.setInterval(checkSystemMode, 1500);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
+  usePolling("/api/health", () => setApiOnline(true), () => setApiOnline(false), 5000);
+  usePolling("/api/v1/incidents", (payload) => {
+    const battery = normalizeDispenserBattery(payload?.battery);
+    if (!battery) throw new Error("Incident response is missing battery status");
+    setIncidents(Array.isArray(payload.incidents) ? payload.incidents : []);
+    setDispenserBattery(battery);
+  }, () => setDispenserBattery((current) => ({ ...current, stale: true, available_for_drop: 0 })), 1000);
+  usePolling("/api/v1/rosbag/status", (payload) => {
+    setBagStatus(payload);
+    setBagEnabled(Boolean(payload.recording_control_enabled));
+  }, () => {
+    setBagStatus({ state: "offline", recording: false, control_enabled: false });
+    setBagEnabled(false);
+  }, 1500);
+  usePolling("/api/v1/system/mode", setSystemMode, () => {
+    setSystemMode((current) => ({ ...current, state: "disabled", control_enabled: false, navigation_ready: false }));
+  }, 1500);
   useEffect(() => {
     let disposed = false;
     let socket;
@@ -189,20 +119,12 @@ export function App() {
       notify(`열화상 위험 이벤트가 발생했습니다: ${summary}`, criticalCount ? "warning" : "info");
     }
   }, [spatialState]);
-  useEffect(() => {
-    let disposed = false;
-    const checkMedia = async () => {
-      try {
-        const response = await fetch("/api/v1/media/status", { cache: "no-store" });
-        if (!disposed && response.ok) setMediaStatus(await response.json());
-      } catch {
-        if (!disposed) setMediaStatus(null);
-      }
-    };
-    void checkMedia();
-    const interval = window.setInterval(checkMedia, 2000);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
+  usePolling("/api/v1/media/status", setMediaStatus, () => {
+    // Saved map imagery remains useful offline; it is not a live sensor.
+    setMediaStatus((current) => current ? {
+      ...current, stale: true, rgb: { available: false }, thermal: { available: false },
+    } : null);
+  });
   useEffect(() => {
     let disposed = false;
     let socket;
