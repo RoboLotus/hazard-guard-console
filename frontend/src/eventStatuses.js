@@ -1,4 +1,10 @@
 export function mergeEventStatuses(current, incoming) {
+  if (!incoming || typeof incoming.map_id !== "string" || !Array.isArray(incoming.statuses)) return current;
+  incoming = { ...incoming, statuses: incoming.statuses.filter((row) => (
+    row && typeof row.id === "string" && ["watch", "warning", "critical"].includes(row.level)
+    && ["new", "acknowledged", "working", "resolved"].includes(row.status)
+    && Number.isInteger(row.revision) && row.revision > 0
+  )) };
   if (current?.map_id !== incoming.map_id) return incoming;
   const rows = new Map((current.statuses || []).map((row) => [JSON.stringify([row.id, row.level]), row]));
   for (const row of incoming.statuses || []) {
@@ -9,7 +15,7 @@ export function mergeEventStatuses(current, incoming) {
 }
 
 export function applyEventStatuses(events, stored, mapId) {
-  if (stored?.map_id !== mapId) return events;
+  if (!stored || stored.map_id !== mapId) return events;
   return events.map((event) => {
     const row = stored.statuses?.find((item) => item.id === event.id && item.level === event.level);
     if (!row) return event;

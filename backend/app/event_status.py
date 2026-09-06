@@ -24,9 +24,16 @@ class EventStatusStore:
     def _connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         db = sqlite3.connect(self.path, timeout=5)
-        db.execute("CREATE TABLE IF NOT EXISTS statuses (map_id TEXT, event_id TEXT, level TEXT, status TEXT, revision INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(map_id,event_id,level))")
-        if os.name != "nt":
-            os.chmod(self.path, 0o600)
+        try:
+            db.execute("""CREATE TABLE IF NOT EXISTS statuses (
+                map_id TEXT, event_id TEXT, level TEXT, status TEXT,
+                revision INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY(map_id,event_id,level))""")
+            if os.name != "nt":
+                os.chmod(self.path, 0o600)
+        except (OSError, sqlite3.Error):
+            db.close()
+            raise
         return db
 
     def get(self, map_id):

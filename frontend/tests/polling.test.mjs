@@ -11,16 +11,19 @@ test("HTTP 실패도 실패로 처리한다", async () => {
   } finally { globalThis.fetch = original; }
 });
 
-test("요청 중첩 없이 실패 후 복구하며 종료 후 결과를 버린다", async () => {
+test("요청 중첩 없이 실패 후 복구하며 종료 후 결과를 버린다", { timeout: 5000 }, async (t) => {
   let count = 0, pending = 0, peak = 0;
   const received = [], errors = [];
+  let recovered;
+  const recovery = new Promise((resolve) => { recovered = resolve; });
   const stop = startPolling(async () => {
     pending += 1; peak = Math.max(peak, pending);
     await wait(5); pending -= 1;
     if (++count === 1) throw new Error("offline");
     return count;
-  }, (data) => received.push(data), (error) => errors.push(error), { interval: 1, timeout: 100 });
-  await wait(40); stop();
+  }, (data) => { received.push(data); recovered(); }, (error) => errors.push(error), { interval: 1, timeout: 1000 });
+  t.after(stop);
+  await recovery; stop();
   const length = received.length;
   await wait(10);
   assert.equal(peak, 1);

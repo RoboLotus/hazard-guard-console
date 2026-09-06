@@ -7,13 +7,20 @@ export function useCameraFeed(stream) {
   const state = cameraStreamState(stream);
   const key = `${state.source}:${state.available}`;
   const [image, setImage] = useState({ key: null, loaded: false, failed: false });
-  useEffect(() => setImage({ key, loaded: false, failed: false }), [key]);
-  const live = state.available && image.key === key && image.loaded;
-  const failed = image.key === key && image.failed;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => setImage({ key, loaded: false, failed: false, startedAt: Date.now() }), [key]);
+  useEffect(() => {
+    if (!state.available) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [state.available]);
+  const expired = now - (image.loadedAt ?? image.startedAt ?? now) > 5000;
+  const live = state.available && image.key === key && image.loaded && !expired;
+  const failed = image.key === key && (image.failed || expired);
   return {
     ...state, live,
     label: !state.available ? "연결 필요" : failed ? "영상 수신 실패" : !live ? "영상 수신 중" : state.simulated ? "SIMULATED" : "LIVE",
-    onLoadState: (loaded) => setImage({ key, loaded, failed: !loaded }),
+    onLoadState: (loaded) => setImage({ key, loaded, failed: !loaded, loadedAt: loaded ? Date.now() : null }),
   };
 }
 

@@ -1437,3 +1437,10 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
   .incident-dialog > footer .button { width: 100%; }
 }
 .camera-feed-placeholder { position: absolute; inset: 0; display: grid; place-items: center; }
+@media (max-width: 760px) {
+  .video-toolbar { flex-wrap: wrap; gap: 8px; }
+  .video-toolbar .segmented-control { flex: 1 1 200px; }
+  .video-toolbar > .button { flex-shrink: 0; white-space: nowrap; }
+  .video-viewer.view-split { grid-template-columns: 1fr; }
+  .video-viewer.view-split .detail-stream-stage { min-height: 240px; }
+}

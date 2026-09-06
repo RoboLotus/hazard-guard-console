@@ -513,7 +513,7 @@ export default function MapPanel({
             <small>ROS 2 SLAM 지도와 서버가 연결되면 자동으로 표시됩니다.</small>
           </div>
         )}
-        <div className={`map-live-badge ${mapLive ? "" : "offline"}`}><span />{mapLive ? (poseLive ? "지도 · 로봇 위치 실시간" : "보관 지도 · 로봇 위치 대기") : waitingForMap ? "ROS 지도 대기" : "지도 연결 필요"}</div>
+        <div className={`map-live-badge ${mapLive && poseLive ? "" : "offline"}`}><span />{mapLive ? (poseLive ? "지도 · 로봇 위치 실시간" : "보관 지도 · 로봇 위치 대기") : waitingForMap ? "ROS 지도 대기" : "지도 연결 필요"}</div>
         {goalMode && <div className="goal-mode-hint">지도를 클릭해 목적지 후보를 선택하세요</div>}
         {detail && (
           <div className="map-axis-guide" aria-label="ROS 지도 각도 기준">

@@ -120,9 +120,11 @@ export function App() {
     const event = events.find((item) => item.id === id);
     if (!event) return false;
     eventWrites.current.add(id);
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 5000);
     try {
       const response = await fetch(`/api/v1/events/${encodeURIComponent(id)}/status`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
+        method: "PUT", signal: controller.signal, headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ map_id: spatialState?.map?.map_id, level: event.level, status }),
       });
       const payload = await response.json();
@@ -131,7 +133,7 @@ export function App() {
       notify("이벤트 처리 상태를 저장했습니다.");
       return true;
     } catch (error) { notify(error.message, "warning"); return false; }
-    finally { eventWrites.current.delete(id); }
+    finally { clearTimeout(deadline); eventWrites.current.delete(id); }
   };
   const acknowledge = (id) => updateEventStatus(id, "acknowledged");
   const navigate = (id) => {
