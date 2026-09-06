@@ -16,7 +16,7 @@ import RosbagPage from "./pages/RosbagPage.jsx";
 import { mergeIncidentEvents, normalizeDispenserBattery } from "./incidents.js";
 import { useSpatialStream } from "./hooks/useSpatialStream.js";
 import { usePolling } from "./hooks/usePolling.js";
-import { TELEMETRY_STALE_AFTER_MS, isLiveTelemetry } from "./telemetry.js";
+import { useTelemetryStream } from "./hooks/useTelemetryStream.js";
 
 export function App() {
   const [active, setActive] = useState("overview");
@@ -25,8 +25,7 @@ export function App() {
   const eventWrites = useRef(new Set());
   const [toast, setToast] = useState(null);
   const [apiOnline, setApiOnline] = useState(false);
-  const [telemetry, setTelemetry] = useState(null);
-  const [telemetryLive, setTelemetryLive] = useState(false);
+  const { telemetry, telemetryLive } = useTelemetryStream();
   const [mediaStatus, setMediaStatus] = useState(null);
   const spatialState = useSpatialStream();
   const [systemMode, setSystemMode] = useState({
@@ -109,40 +108,7 @@ export function App() {
       ...current, stale: true, rgb: { available: false }, thermal: { available: false },
     } : null);
   });
-  useEffect(() => {
-    let disposed = false;
-    let socket;
-    let reconnectTimer;
-    let staleTimer;
-    const connect = () => {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry`);
-      socket.onmessage = ({ data }) => {
-        try {
-          const payload = JSON.parse(data);
-          if (disposed) return;
-          setTelemetry(payload);
-          setTelemetryLive(isLiveTelemetry(payload));
-          window.clearTimeout(staleTimer);
-          staleTimer = window.setTimeout(() => {
-            if (!disposed) setTelemetryLive(false);
-          }, TELEMETRY_STALE_AFTER_MS);
-        }
-        catch { /* ignore malformed prototype telemetry */ }
-      };
-      socket.onerror = () => socket.close();
-      socket.onclose = () => {
-        if (!disposed) reconnectTimer = window.setTimeout(connect, 1500);
-      };
-    };
-    connect();
-    return () => {
-      disposed = true;
-      window.clearTimeout(reconnectTimer);
-      window.clearTimeout(staleTimer);
-      socket?.close();
-    };
-  }, []);
+
   useEffect(() => {
     if (!toast) return undefined;
     const timer = setTimeout(() => setToast(null), 3200);
@@ -359,7 +325,7 @@ export function App() {
         {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} telemetryLive={telemetryLive} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} dispenserBattery={dispenserBattery} incidents={incidents} />}
         {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} telemetryLive={telemetryLive} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} incidents={incidents} />}
         {active === "events" && <EventsPage events={visibleEvents} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} dispenserBattery={dispenserBattery} onDecideIncident={decideIncident} />}
-        {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={visibleEvents} notify={notify} />}
+        {active === "video" && <VideoPage mediaStatus={mediaStatus} events={visibleEvents} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}
         {active === "rosbag" && <RosbagPage status={bagStatus} enabled={bagEnabled} onEnabledChange={changeBagEnabled} sessions={bagSessions} onRefreshSessions={refreshBagSessions} onControl={controlBag} />}
         {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} />}

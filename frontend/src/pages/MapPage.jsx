@@ -1,3 +1,4 @@
+import { usePolling } from "../hooks/usePolling.js";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   Camera,
@@ -251,35 +252,8 @@ export default function MapPage({
     return () => controller.abort();
   }, [activeWorldId, systemMode?.active_map_session_id]);
 
-  useEffect(() => {
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch("/api/v1/navigation/status", { cache: "no-store" });
-        if (!disposed && response.ok) setNavigationStatus(await response.json());
-      } catch {
-        if (!disposed) setNavigationStatus(null);
-      }
-    };
-    void refresh();
-    const interval = window.setInterval(refresh, 750);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    const refreshMission = async () => {
-      try {
-        const response = await fetch("/api/v1/navigation/route/status", { cache: "no-store" });
-        if (!disposed && response.ok) setMissionStatus(await response.json());
-      } catch {
-        if (!disposed) setMissionStatus(null);
-      }
-    };
-    void refreshMission();
-    const interval = window.setInterval(refreshMission, 750);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
+  usePolling("/api/v1/navigation/status", setNavigationStatus, () => setNavigationStatus(null), 750);
+  usePolling("/api/v1/navigation/route/status", setMissionStatus, () => setMissionStatus(null), 750);
 
   const selectGoal = (candidate) => {
     if (equipmentPointMode) {

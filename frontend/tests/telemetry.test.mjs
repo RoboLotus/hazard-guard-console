@@ -9,7 +9,7 @@ import {
   isLiveTelemetry,
 } from "../src/telemetry.js";
 
-const appSource = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+const appSource = readFileSync(new URL("../src/hooks/useTelemetryStream.js", import.meta.url), "utf8");
 
 test("텔레메트리 유예시간은 순간 지연을 허용하는 5초다", () => {
   assert.equal(TELEMETRY_STALE_AFTER_MS, 5_000);

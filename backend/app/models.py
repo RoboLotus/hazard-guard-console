@@ -406,6 +406,9 @@ class PersonSafetyStatus(BaseModel):
 
 class RobotTelemetry(BaseModel):
     timestamp: str
+    received_at: str | None = None
+    age_sec: float | None = None
+    stale: bool = True
     robot_id: str
     mode: str
     battery_percent: float | None = None

@@ -50,7 +50,7 @@ test("equipment labels are bounded in 2D and rendered in 3D", () => {
   assert.match(mapPanel, /clipPath={`url\(#\$\{clipId\}\)`}/);
   assert.match(mapPanel, /dominantBaseline="central"/);
   assert.match(pointCloudPanel, /createEquipmentLabelSprite/);
-  assert.match(pointCloudPanel, /isEquipmentLabel/);
+  assert.match(readFileSync(new URL("../src/pointCloudScene.js", import.meta.url), "utf8"), /isEquipmentLabel/);
 });
 
 test("sensor diagnostics distinguishes current requirements and TF state", () => {

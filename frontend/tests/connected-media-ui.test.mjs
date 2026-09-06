@@ -13,7 +13,8 @@ test("미연결 Overview는 정적 지도와 카메라 목업을 표시하지 �
   assert.doesNotMatch(mapPanel, /slam-map\.webp|디지털 트윈 목업/);
   assert.match(mapPanel, /지도 연결이 필요합니다/);
   assert.doesNotMatch(overview, /industrial-(rgb|thermal)\.webp|>MOCK</);
-  assert.match(overview, /카메라 연결이 필요합니다/);
+  assert.match(overview, /CameraFeedImage/);
+  assert.match(await source("components/CameraFeed.jsx"), /카메라 연결이 필요합니다/);
 });
 
 test("영상과 이벤트 화면도 예시 사진 대신 연결 상태를 사용한다", async () => {

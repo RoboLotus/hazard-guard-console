@@ -1,7 +1,9 @@
+import { fetchJson, startPolling } from "../polling.js";
+import { createEquipmentLabelSprite, disposeObject3d } from "../pointCloudScene.js";
 import { useEffect, useRef, useState } from "react";
 import { ArrowsClockwise, Crosshair, Cube, ThermometerHot } from "@phosphor-icons/react";
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { usePointCloudScene } from "../hooks/usePointCloudScene.js";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { CurrentTime, PanelHeader } from "./Common.jsx";
 import {
@@ -23,7 +25,6 @@ import {
   thermalDeltaAction,
 } from "../thermalPointCloud.js";
 import {
-  createThermalPointMaterial,
   setThermalMaterialTemperatureWindow,
   updateThermalPointMaterial,
 } from "../thermalPointMaterial.js";
@@ -76,125 +77,6 @@ const VARIANTS = {
   },
 };
 
-function fitCameraToCloud(camera, controls, geometry) {
-  geometry.computeBoundingBox();
-  const bounds = geometry.boundingBox;
-  if (!bounds || bounds.isEmpty()) return;
-  const center = bounds.getCenter(new THREE.Vector3());
-  const size = bounds.getSize(new THREE.Vector3());
-  const distance = Math.max(size.length() * 0.85, 2.5);
-  controls.target.copy(center);
-  camera.position.set(
-    center.x + distance * 0.72,
-    center.y - distance,
-    center.z + distance * 0.62,
-  );
-  camera.near = Math.max(distance / 1000, 0.01);
-  camera.far = Math.max(distance * 20, 100);
-  camera.updateProjectionMatrix();
-  controls.update();
-}
-
-function createRobotMarker() {
-  const group = new THREE.Group();
-  group.name = "hazard-guard-robot-marker";
-  group.visible = false;
-
-  const chassisMaterial = new THREE.MeshBasicMaterial({ color: 0x2f80ed });
-  const frontMaterial = new THREE.MeshBasicMaterial({ color: 0xe9f4ff });
-  const ringMaterial = new THREE.MeshBasicMaterial({
-    color: 0x66b6ff,
-    transparent: true,
-    opacity: 0.72,
-    side: THREE.DoubleSide,
-  });
-  const chassisGeometry = new THREE.BoxGeometry(0.34, 0.26, 0.12);
-  const frontGeometry = new THREE.ConeGeometry(0.075, 0.18, 3);
-  const ringGeometry = new THREE.RingGeometry(0.22, 0.25, 40);
-
-  const chassis = new THREE.Mesh(chassisGeometry, chassisMaterial);
-  chassis.position.z = 0.07;
-  group.add(chassis);
-
-  const front = new THREE.Mesh(frontGeometry, frontMaterial);
-  front.rotation.z = -Math.PI / 2;
-  front.position.set(0.25, 0, 0.08);
-  group.add(front);
-
-  const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-  ring.position.z = 0.006;
-  group.add(ring);
-
-  return {
-    group,
-    setStale(stale) {
-      chassisMaterial.color.setHex(stale ? 0x748190 : 0x2f80ed);
-      frontMaterial.color.setHex(stale ? 0xb8c0c8 : 0xe9f4ff);
-      ringMaterial.color.setHex(stale ? 0x8a949f : 0x66b6ff);
-    },
-    dispose() {
-      chassisGeometry.dispose();
-      frontGeometry.dispose();
-      ringGeometry.dispose();
-      chassisMaterial.dispose();
-      frontMaterial.dispose();
-      ringMaterial.dispose();
-    },
-  };
-}
-
-function createEquipmentLabelSprite(item, selected) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 128;
-  const context = canvas.getContext("2d");
-  const label = String(item.display_name || item.id || "설비");
-  const background = selected ? "rgba(154, 96, 13, .94)" : "rgba(18, 43, 62, .92)";
-
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = background;
-  context.beginPath();
-  context.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 24);
-  context.fill();
-  context.strokeStyle = selected ? "#ffd27a" : "#86c8ff";
-  context.lineWidth = 5;
-  context.stroke();
-  context.fillStyle = "#ffffff";
-  context.font = '800 46px "Pretendard Variable", Pretendard, sans-serif';
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(label, canvas.width / 2, canvas.height / 2, canvas.width - 48);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-  const material = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    depthTest: false,
-    depthWrite: false,
-  });
-  const sprite = new THREE.Sprite(material);
-  const width = Math.max(0.62, Math.min(1.4, 0.44 + label.length * 0.075));
-  sprite.scale.set(width, width / 4, 1);
-  sprite.center.set(0.5, 0);
-  sprite.renderOrder = 20;
-  sprite.userData.equipmentId = item.id;
-  sprite.userData.isEquipmentLabel = true;
-  return sprite;
-}
-
-function disposeObject3d(object) {
-  object.traverse((child) => {
-    child.geometry?.dispose();
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    materials.filter(Boolean).forEach((material) => {
-      material.map?.dispose();
-      material.dispose();
-    });
-  });
-}
-
 export default function PointCloudPanel({
   systemMode,
   archivedSession,
@@ -223,132 +105,7 @@ export default function PointCloudPanel({
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    const mount = mountRef.current;
-    if (!mount) return undefined;
-
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111a25);
-    scene.fog = new THREE.FogExp2(0x111a25, 0.025);
-    const camera = new THREE.PerspectiveCamera(48, 1, 0.01, 200);
-    camera.up.set(0, 0, 1);
-    camera.position.set(4.5, -5.5, 3.6);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.domElement.setAttribute("aria-label", spec.ariaLabel);
-    mount.appendChild(renderer.domElement);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.target.set(0, 0, 0.6);
-    controls.update();
-
-    const grid = new THREE.GridHelper(12, 24, 0x315f8f, 0x273849);
-    grid.rotation.x = Math.PI / 2;
-    grid.material.opacity = 0.5;
-    grid.material.transparent = true;
-    scene.add(grid);
-    scene.add(new THREE.AxesHelper(0.75));
-
-    const geometry = new THREE.BufferGeometry();
-    const baseGeometry = variant === "thermal" ? new THREE.BufferGeometry() : null;
-    const baseMaterial = variant === "thermal" ? new THREE.PointsMaterial({
-      size: 0.035,
-      sizeAttenuation: true,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.34,
-      depthWrite: false,
-    }) : null;
-    const basePoints = baseGeometry && baseMaterial
-      ? new THREE.Points(baseGeometry, baseMaterial)
-      : null;
-    if (basePoints) scene.add(basePoints);
-    const material = variant === "thermal"
-      ? createThermalPointMaterial({ config: thermalRenderConfig })
-      : new THREE.PointsMaterial({ size: 0.035, sizeAttenuation: true, vertexColors: true });
-    const points = new THREE.Points(geometry, material);
-    scene.add(points);
-    const dynamicGeometry = new THREE.BufferGeometry();
-    const dynamicMaterial = variant === "thermal"
-      ? createThermalPointMaterial({ dynamic: true, config: thermalRenderConfig })
-      : material;
-    const dynamicPoints = new THREE.Points(dynamicGeometry, dynamicMaterial);
-    dynamicPoints.frustumCulled = false;
-    dynamicPoints.visible = variant === "thermal";
-    scene.add(dynamicPoints);
-    const robotMarker = createRobotMarker();
-    scene.add(robotMarker.group);
-    const equipmentGroup = new THREE.Group();
-    equipmentGroup.name = "hazard-guard-equipment-rois";
-    scene.add(equipmentGroup);
-    sceneRef.current = {
-      camera,
-      controls,
-      geometry,
-      baseGeometry,
-      baseMaterial,
-      basePoints,
-      material,
-      dynamicMaterial,
-      points,
-      dynamicGeometry,
-      dynamicPoints,
-      renderer,
-      robotMarker,
-      equipmentGroup,
-    };
-    fitRef.current = () => {
-      const basePositions = baseGeometry?.getAttribute("position");
-      fitCameraToCloud(
-        camera,
-        controls,
-        basePositions?.count ? baseGeometry : geometry,
-      );
-    };
-
-    const resize = () => {
-      const width = Math.max(1, mount.clientWidth);
-      const height = Math.max(1, mount.clientHeight);
-      renderer.setSize(width, height, false);
-      if (material.uniforms?.uPointScale) material.uniforms.uPointScale.value = height * renderer.getPixelRatio() * 0.5;
-      if (dynamicMaterial.uniforms?.uPointScale) dynamicMaterial.uniforms.uPointScale.value = height * renderer.getPixelRatio() * 0.5;
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-    };
-    const observer = new ResizeObserver(resize);
-    observer.observe(mount);
-    resize();
-
-    let animationFrame;
-    const render = () => {
-      controls.update();
-      const elapsed = performance.now() * 0.001;
-      if (material.uniforms?.uTime) material.uniforms.uTime.value = elapsed;
-      if (dynamicMaterial.uniforms?.uTime) dynamicMaterial.uniforms.uTime.value = elapsed;
-      renderer.render(scene, camera);
-      animationFrame = window.requestAnimationFrame(render);
-    };
-    render();
-
-    return () => {
-      observer.disconnect();
-      window.cancelAnimationFrame(animationFrame);
-      controls.dispose();
-      geometry.dispose();
-      dynamicGeometry.dispose();
-      material.dispose();
-      if (dynamicMaterial !== material) dynamicMaterial.dispose();
-      baseGeometry?.dispose();
-      baseMaterial?.dispose();
-      robotMarker.dispose();
-      renderer.dispose();
-      renderer.domElement.remove();
-      sceneRef.current = null;
-    };
-  }, []);
+  usePointCloudScene({ mountRef, sceneRef, fitRef, variant, spec, thermalRenderConfig });
 
   useEffect(() => {
     const currentScene = sceneRef.current;
@@ -415,27 +172,19 @@ export default function PointCloudPanel({
 
   useEffect(() => {
     if (variant !== "thermal") return undefined;
-    let disposed = false;
-    const loadStatus = () => {
-      fetch("/api/v1/spatial/cloud/thermal/status", { cache: "no-store" })
-        .then((response) => (response.ok ? response.json() : null))
-        .then((body) => {
-          if (disposed || !body) return;
-          setThermalApiStatus(body);
-          const minimum = Number(body.min_temp_c);
-          const maximum = Number(body.max_temp_c);
-          if (Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum) {
-            setTemperatureWindow([minimum, maximum]);
-          }
-        })
-        .catch(() => {});
-    };
-    loadStatus();
-    const timer = window.setInterval(loadStatus, 5000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
+    return startPolling(
+      (signal) => fetchJson("/api/v1/spatial/cloud/thermal/status", signal),
+      (body) => {
+        setThermalApiStatus(body);
+        const minimum = body.min_temp_c;
+        const maximum = body.max_temp_c;
+        if (Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum) {
+          setTemperatureWindow([minimum, maximum]);
+        }
+      },
+      () => setThermalApiStatus((current) => ({ ...current, request_failed: true })),
+      { interval: 5000 },
+    );
   }, [variant]);
 
   useEffect(() => {

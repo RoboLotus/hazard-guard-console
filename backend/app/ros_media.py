@@ -399,8 +399,6 @@ class RosMediaAdapter:
         if self._cv_bridge is None:
             return
         try:
-            import cv2
-
             frame = self._cv_bridge.imgmsg_to_cv2(
                 message,
                 desired_encoding="bgr8",
@@ -496,18 +494,3 @@ class RosMediaAdapter:
                 height=height,
                 source=source,
             )
-
-    @staticmethod
-    def _label_image(frame: Any, label: str, scale: float) -> None:
-        import cv2
-
-        cv2.putText(
-            frame,
-            label,
-            (14, 28),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            scale,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
