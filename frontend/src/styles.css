@@ -15,6 +15,10 @@
   --watch: #d0a128;
   --danger: #dc4650;
   --sidebar-width: 172px;
+  --page-content-width: 1240px;
+  --page-padding-block-start: 28px;
+  --page-padding-inline: 34px;
+  --page-padding-block-end: 40px;
 }
 
 * { box-sizing: border-box; }
@@ -295,7 +299,14 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
   .operation-buttons .button > svg { width: 23px; height: 23px; }
 }
 
-.detail-page { min-height: 100vh; padding: 22px 24px 28px; }
+.detail-page, .settings-page {
+  min-height: 100vh;
+  padding: var(--page-padding-block-start) var(--page-padding-inline) var(--page-padding-block-end);
+}
+.detail-page {
+  max-width: calc(var(--page-content-width) + 2 * var(--page-padding-inline));
+  margin-inline: auto;
+}
 .detail-heading { min-height: 64px; margin-bottom: 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .detail-heading h1 { margin: 5px 0 4px; color: #1d2b3d; font-size: clamp(22px, 1.35vw, 30px); line-height: 1.1; letter-spacing: -.9px; }
 .detail-heading p { margin: 0; color: #758397; font-size: clamp(10px, .54vw, 13px); }
@@ -837,8 +848,6 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
   .performance-phase-list strong { grid-column: 1 / -1; }
 }
 
-.settings-page { min-height: 100vh; padding: 28px 34px 40px; }
-.help-page { max-width: 1480px; margin: 0 auto; }
 .help-quick-start { margin-bottom: 16px; padding: 18px; background: linear-gradient(135deg, #173f70, #1769c9); border-radius: 13px; box-shadow: 0 8px 24px rgba(20,63,112,.16); }
 .help-quick-start > header { margin-bottom: 14px; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
 .help-quick-start > header .eyebrow { color: #a9c9ee; }
@@ -1121,7 +1130,7 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
   .nav-item { position: relative; min-height: 46px; padding: 0; justify-content: center; }
   .nav-item > span:not(.nav-badge), .sidebar-version { display: none; }
   .nav-badge { position: absolute; top: 3px; right: 1px; min-width: 17px; height: 17px; }
-  .detail-page, .settings-page { padding: 16px; }
+  :root { --page-padding-block-start: 16px; --page-padding-inline: 16px; --page-padding-block-end: 16px; }
   .detail-heading { min-height: 0; flex-wrap: wrap; }
   .detail-heading-actions { width: 100%; flex-wrap: wrap; }
   .map-workspace { height: auto; min-height: 0; grid-template-columns: 1fr; }
@@ -1190,7 +1199,6 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
   .system-mode-buttons { margin-top: 8px; }
   .system-mode-buttons button { min-height: 44px; }
   .system-mode-control > footer { margin-top: 7px; padding-top: 6px; }
-  .detail-page { padding: 14px 18px 18px; }
   .detail-heading { min-height: 54px; margin-bottom: 10px; }
   .detail-heading h1 { font-size: 21px; }
   .map-workspace { height: calc(100vh - 105px); min-height: 520px; }
