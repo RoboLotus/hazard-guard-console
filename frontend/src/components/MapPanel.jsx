@@ -1,3 +1,4 @@
+import { freshPose, robotCenteredView } from "../spatialFreshness.js";
 import { useEffect, useRef, useState } from "react";
 import {
   Bell,
@@ -38,7 +39,7 @@ function SpatialMapOverlay({
   onEquipmentSelect,
 }) {
   const pose = spatialState?.pose;
-  const poseMatchesMap = pose?.available && matchesMapFrame(pose, mapSpec);
+  const poseMatchesMap = freshPose(pose) && matchesMapFrame(pose, mapSpec);
   const trail = (spatialState?.trail || [])
     .filter((point) => matchesMapFrame(point, mapSpec))
     .map((point) => mapToGrid(point.x, point.y, mapSpec))
@@ -309,6 +310,7 @@ export default function MapPanel({
   waitingLabel = "새 SLAM 지도 수신 대기 중",
 }) {
   const mapLive = Boolean(mediaStatus?.map?.available);
+  const poseLive = Boolean(spatialState?.transport_live && freshPose(spatialState?.pose) && matchesMapFrame(spatialState.pose, resolveMapSpec(mediaStatus, spatialState)));
   const mapSpec = resolveMapSpec(mediaStatus, spatialState);
   const depthLegend = sensorLegend(spatialState, "depth");
   const thermalLegend = sensorLegend(spatialState, "thermal");
@@ -349,8 +351,11 @@ export default function MapPanel({
   };
 
   const resetMapView = () => {
-    setMapView({ zoom: 1, x: 0, y: 0 });
-    onLocate();
+    if (!mapLive || !poseLive) return;
+    const point = mapToGrid(spatialState.pose.x, spatialState.pose.y, mapSpec);
+    if (!point) return;
+    setMapView(robotCenteredView(point, { ...imageGeometry, scale: fitScale }, stageSize, mapView.zoom));
+    onLocate?.();
   };
 
   const startMapDrag = (event) => {
@@ -446,7 +451,7 @@ export default function MapPanel({
       <PanelHeader eyebrow="LIVE MAP" title="2D SLAM 지도" action={
         <div className="panel-actions">
           <CurrentTime />
-          <button type="button" className="icon-action" aria-label="지도 중앙 정렬" title="지도 중앙 정렬" onClick={resetMapView}><Crosshair size={19} /></button>
+          <button type="button" className="icon-action" aria-label="로봇 위치 중앙 정렬" title="로봇 위치 중앙 정렬" disabled={!mapLive || !poseLive} onClick={resetMapView}><Crosshair size={19} /></button>
           {onOpen && <button type="button" className="icon-action" aria-label="지도 상세 화면 열기" title="지도 상세 화면 열기" onClick={onOpen}><CaretRight size={19} /></button>}
         </div>
       } />
@@ -508,7 +513,7 @@ export default function MapPanel({
             <small>ROS 2 SLAM 지도와 서버가 연결되면 자동으로 표시됩니다.</small>
           </div>
         )}
-        <div className={`map-live-badge ${mapLive ? "" : "offline"}`}><span />{mapLive ? "SLAM · 공간 데이터 실시간" : waitingForMap ? "ROS 지도 대기" : "지도 연결 필요"}</div>
+        <div className={`map-live-badge ${mapLive ? "" : "offline"}`}><span />{mapLive ? (poseLive ? "지도 · 로봇 위치 실시간" : "보관 지도 · 로봇 위치 대기") : waitingForMap ? "ROS 지도 대기" : "지도 연결 필요"}</div>
         {goalMode && <div className="goal-mode-hint">지도를 클릭해 목적지 후보를 선택하세요</div>}
         {detail && (
           <div className="map-axis-guide" aria-label="ROS 지도 각도 기준">

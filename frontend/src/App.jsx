@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle, Warning } from "@phosphor-icons/react";
-import { fallbackSpatialState, thermalDetectionsToEvents } from "./spatial.js";
+import { thermalDetectionsToEvents } from "./spatial.js";
 import { systemModeLabels } from "./components/Common.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import { navigationLabels } from "./data/dashboardData.js";
@@ -13,6 +13,7 @@ import Settings from "./pages/Settings.jsx";
 import VideoPage from "./pages/VideoPage.jsx";
 import RosbagPage from "./pages/RosbagPage.jsx";
 import { mergeIncidentEvents, normalizeDispenserBattery } from "./incidents.js";
+import { useSpatialStream } from "./hooks/useSpatialStream.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { TELEMETRY_STALE_AFTER_MS, isLiveTelemetry } from "./telemetry.js";
 
@@ -24,7 +25,7 @@ export function App() {
   const [telemetry, setTelemetry] = useState(null);
   const [telemetryLive, setTelemetryLive] = useState(false);
   const [mediaStatus, setMediaStatus] = useState(null);
-  const [spatialState, setSpatialState] = useState(fallbackSpatialState);
+  const spatialState = useSpatialStream();
   const [systemMode, setSystemMode] = useState({
     mode: "idle",
     state: "disabled",
@@ -65,29 +66,6 @@ export function App() {
   usePolling("/api/v1/system/mode", setSystemMode, () => {
     setSystemMode((current) => ({ ...current, state: "disabled", control_enabled: false, navigation_ready: false }));
   }, 1500);
-  useEffect(() => {
-    let disposed = false;
-    let socket;
-    let reconnectTimer;
-    const connect = () => {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/spatial`);
-      socket.onmessage = ({ data }) => {
-        try { setSpatialState(JSON.parse(data)); }
-        catch { /* keep the most recent valid spatial snapshot */ }
-      };
-      socket.onerror = () => socket.close();
-      socket.onclose = () => {
-        if (!disposed) reconnectTimer = window.setTimeout(connect, 1500);
-      };
-    };
-    connect();
-    return () => {
-      disposed = true;
-      window.clearTimeout(reconnectTimer);
-      socket?.close();
-    };
-  }, []);
   useEffect(() => {
     if (spatialState?.source !== "ros" || spatialState?.mock) return;
     const nextEvents = thermalDetectionsToEvents(spatialState?.heatmap?.detections);

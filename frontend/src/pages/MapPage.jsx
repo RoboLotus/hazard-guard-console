@@ -111,7 +111,7 @@ export default function MapPage({
       || (physicalTarget ? "기능 대기" : simulationTarget ? "시뮬레이션 비활성" : "상태 확인 필요");
   const spatialConnected = Boolean(
     spatialState
-    && spatialState.source !== "mock"
+    && spatialState.transport_live === true
     && !spatialState.mock,
   );
   const mapSpatialState = !spatialConnected
@@ -575,7 +575,7 @@ export default function MapPage({
         </div>
         <span className={`api-status ${mapLive ? "online" : ""}`}><span />{
           physicalTarget
-            ? mapLive ? "실물 로봇 지도 연결" : "실물 로봇 데이터 대기"
+            ? mapLive ? "지도 데이터 표시" : "실물 로봇 데이터 대기"
             : simulationTarget
               ? mapLive ? "시뮬레이션 공간 데이터 연결" : "시뮬레이션 지도 연결 필요"
               : "운용 환경 확인 중"
