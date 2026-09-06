@@ -13,7 +13,7 @@ import Settings from "./pages/Settings.jsx";
 import VideoPage from "./pages/VideoPage.jsx";
 import RosbagPage from "./pages/RosbagPage.jsx";
 import { mergeIncidentEvents, normalizeDispenserBattery } from "./incidents.js";
-import { TELEMETRY_STALE_AFTER_MS } from "./telemetry.js";
+import { TELEMETRY_STALE_AFTER_MS, isLiveTelemetry } from "./telemetry.js";
 
 export function App() {
   const [active, setActive] = useState("overview");
@@ -213,8 +213,10 @@ export function App() {
       socket = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry`);
       socket.onmessage = ({ data }) => {
         try {
-          setTelemetry(JSON.parse(data));
-          setTelemetryLive(true);
+          const payload = JSON.parse(data);
+          if (disposed) return;
+          setTelemetry(payload);
+          setTelemetryLive(isLiveTelemetry(payload));
           window.clearTimeout(staleTimer);
           staleTimer = window.setTimeout(() => {
             if (!disposed) setTelemetryLive(false);

@@ -6,6 +6,7 @@ import {
   TELEMETRY_STALE_AFTER_MS,
   telemetryModeLabel,
   telemetryPresentation,
+  isLiveTelemetry,
 } from "../src/telemetry.js";
 
 const appSource = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
@@ -67,6 +68,24 @@ test("연결 표시가 오래되면 보관 중인 과거 값도 노출하지 않
   assert.equal(result.available, false);
   assert.equal(result.modeLabel, "상태 확인 필요");
   assert.equal(result.speedLabel, "—");
+});
+
+test("목업과 오래된 생산자 데이터는 연결로 판정하지 않는다", () => {
+  const sample = { robot_id: "robot", mode: "idle", mock: false, age_sec: 0 };
+  assert.equal(isLiveTelemetry(sample), true);
+  for (const patch of [{ mock: true }, { stale: true }, { age_sec: 6 }, { age_sec: -1 }]) {
+    assert.equal(isLiveTelemetry({ ...sample, ...patch }), false);
+  }
+  for (const value of [null, [], {}, 1]) assert.equal(isLiveTelemetry(value), false);
+});
+
+test("숫자 누락은 0이 아니다", () => {
+  for (const missing of [null, "", " ", false]) {
+    const value = telemetryPresentation({ speed_mps: missing, lidar_hz: missing, network_rssi_dbm: missing }, true);
+    assert.equal(value.speedLabel, "—");
+    assert.equal(value.lidarDetail, "데이터 없음");
+    assert.equal(value.networkDetail, "데이터 없음");
+  }
 });
 
 test("텔레메트리 stale 타이머는 해당 WebSocket effect 안에서 정리된다", () => {
