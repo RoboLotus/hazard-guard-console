@@ -8,22 +8,19 @@ import {
   ThermometerHot,
 } from "@phosphor-icons/react";
 import {
-  ConnectionPlaceholder,
   DetailHeading,
-  LiveImage,
   downloadAsset,
 } from "../components/Common.jsx";
+import { useCameraFeed, CameraFeedLabel, CameraFeedImage } from "../components/CameraFeed.jsx";
 import { EventLevelIcon } from "./EventsPage.jsx";
 
-export default function VideoPage({ mediaStatus, telemetry, events, notify }) {
+export default function VideoPage({ mediaStatus, events, notify }) {
   const [view, setView] = useState("split");
   const viewerRef = useRef(null);
-  const rgbLive = Boolean(mediaStatus?.rgb?.available);
-  const thermalLive = Boolean(mediaStatus?.thermal?.available);
-  const gazeboThermal = mediaStatus?.thermal?.source === "gazebo:/thermal_camera/image_raw";
-  const currentTemperature = thermalLive && Number.isFinite(Number(telemetry?.max_temperature_c))
-    ? Number(telemetry.max_temperature_c)
-    : null;
+  const rgb = useCameraFeed(mediaStatus?.rgb);
+  const thermal = useCameraFeed(mediaStatus?.thermal);
+  const rgbLive = rgb.live;
+  const thermalLive = thermal.live;
 
   const saveSnapshot = async (thermal = false) => {
     const live = thermal ? thermalLive : rgbLive;
@@ -64,42 +61,24 @@ export default function VideoPage({ mediaStatus, telemetry, events, notify }) {
         <section ref={viewerRef} className={`video-viewer panel view-${view}`}>
           {(view === "split" || view === "rgb") && (
             <div className="detail-stream">
-              <div className="stream-label"><div><Camera size={18} /><strong>RGB 전방 카메라</strong></div><span className={`live-label ${rgbLive ? "" : "offline"}`}><span />{rgbLive ? "LIVE" : "연결 필요"}</span></div>
+              <div className="stream-label"><div><Camera size={18} /><strong>RGB 전방 카메라</strong></div><CameraFeedLabel feed={rgb} /></div>
               <div className="detail-stream-stage">
-                {rgbLive ? <>
-                  <LiveImage endpoint="/api/v1/media/rgb" enabled interval={300} alt="로봇 전방 RGB 실시간 영상" />
-                  <div className="camera-meta top-left">CAM-RGB01</div>
-                </> : <ConnectionPlaceholder icon={Camera} title="RGB 카메라 연결이 필요합니다" description="센서와 서버가 연결되면 실시간 영상이 표시됩니다." />}
+                <CameraFeedImage feed={rgb} />
               </div>
               <button type="button" className="snapshot-button" disabled={!rgbLive} onClick={() => saveSnapshot(false)}><ImageSquare size={17} />RGB 스냅샷</button>
             </div>
           )}
           {(view === "split" || view === "thermal") && (
             <div className="detail-stream thermal-stream">
-              <div className="stream-label"><div><ThermometerHot size={18} /><strong>열화상 카메라</strong></div><span className={`live-label ${thermalLive ? "" : "offline"}`}><span />{thermalLive ? (gazeboThermal ? "SIMULATED" : "LIVE") : "연결 필요"}</span></div>
+              <div className="stream-label"><div><ThermometerHot size={18} /><strong>열화상 카메라</strong></div><CameraFeedLabel feed={thermal} /></div>
               <div className="detail-stream-stage">
-                {thermalLive ? <>
-                  <LiveImage endpoint="/api/v1/media/thermal" enabled interval={400} alt="열화상 실시간 영상" />
-                  {currentTemperature != null && <div className="thermal-reading detail-reading"><span>MAX</span><strong>{currentTemperature.toFixed(1)}°C</strong></div>}
-                  <div className="thermal-scale" aria-label="열화상 색상 범위"><span>90°</span><i /><span>20°</span></div>
-                  {gazeboThermal && <span className="simulation-watermark">GAZEBO THERMAL · SIMULATED</span>}
-                </> : <ConnectionPlaceholder icon={ThermometerHot} title="열화상 카메라 연결이 필요합니다" description="센서와 서버가 연결되면 실시간 온도 영상이 표시됩니다." />}
+                <CameraFeedImage feed={thermal} thermal />
               </div>
               <button type="button" className="snapshot-button" disabled={!thermalLive} onClick={() => saveSnapshot(true)}><ImageSquare size={17} />열화상 스냅샷</button>
             </div>
           )}
         </section>
         <aside className="video-side-panel">
-          <section className="detail-card">
-            <div className="detail-card-title"><ThermometerHot size={20} weight="fill" /><div><strong>온도 상태</strong><span>현재 프레임 기준</span></div></div>
-            <div className="temperature-summary"><strong>{currentTemperature == null ? "—" : `${currentTemperature.toFixed(1)}°C`}</strong><span>{currentTemperature == null ? "열화상 연결 필요" : "현재 프레임 최대 온도"}</span></div>
-            <progress className="temperature-progress" value={Math.min(100, currentTemperature ?? 0)} max="100">{currentTemperature ?? 0}%</progress>
-            <dl className="status-list compact">
-              <div><dt>경고 기준</dt><dd>60°C · 5초</dd></div>
-              <div><dt>위험 기준</dt><dd>80°C · 3초</dd></div>
-              <div><dt>센서 상태</dt><dd>{thermalLive ? "연결됨" : "연결 필요"}</dd></div>
-            </dl>
-          </section>
           <section className="detail-card video-event-card">
             <div className="detail-card-title"><Siren size={20} weight="fill" /><div><strong>연관 이벤트</strong><span>최근 위험 감지</span></div></div>
             {events.filter((event) => event.level !== "info").slice(0, 3).map((event) => (
