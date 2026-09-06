@@ -50,7 +50,7 @@ export default function EventsPage({ events, onUpdateStatus, notify, onOpenVideo
   const updateStatus = (status) => {
     if (!selected) return;
     onUpdateStatus(selected.id, status);
-    notify(`이벤트 상태를 '${eventStatusLabels[status]}'으로 변경했습니다.`);
+    // Parent reports success only after the backend has committed the state.
   };
 
   return (

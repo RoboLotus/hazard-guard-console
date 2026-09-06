@@ -1,3 +1,4 @@
+import { applyEventStatuses, mergeEventStatuses } from "./eventStatuses.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle, Warning } from "@phosphor-icons/react";
 import { thermalDetectionsToEvents } from "./spatial.js";
@@ -20,6 +21,8 @@ import { TELEMETRY_STALE_AFTER_MS, isLiveTelemetry } from "./telemetry.js";
 export function App() {
   const [active, setActive] = useState("overview");
   const [events, setEvents] = useState([]);
+  const [eventStatuses, setEventStatuses] = useState(null);
+  const eventWrites = useRef(new Set());
   const [toast, setToast] = useState(null);
   const [apiOnline, setApiOnline] = useState(false);
   const [telemetry, setTelemetry] = useState(null);
@@ -49,6 +52,9 @@ export function App() {
   const notify = (message, tone = "success") => {
     setToast({ message, tone, id: Date.now() });
   };
+  usePolling("/api/v1/events/statuses", (payload) => {
+    setEventStatuses((current) => mergeEventStatuses(current, payload));
+  }, () => { /* Keep already acknowledged historical states, never claim a failed write succeeded. */ });
   usePolling("/api/health", () => setApiOnline(true), () => setApiOnline(false), 5000);
   usePolling("/api/v1/incidents", (payload) => {
     const battery = normalizeDispenserBattery(payload?.battery);
@@ -143,25 +149,32 @@ export function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const acknowledge = (id) => {
-    setEvents((current) => current.map((event) => event.id === id ? { ...event, acknowledged: true, status: "acknowledged" } : event));
-    notify("이벤트를 확인 처리했습니다.");
+  const updateEventStatus = async (id, status) => {
+    if (eventWrites.current.has(id)) return false;
+    const event = events.find((item) => item.id === id);
+    if (!event) return false;
+    eventWrites.current.add(id);
+    try {
+      const response = await fetch(`/api/v1/events/${encodeURIComponent(id)}/status`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ map_id: spatialState?.map?.map_id, level: event.level, status }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "이벤트 상태를 저장하지 못했습니다.");
+      setEventStatuses((current) => mergeEventStatuses(current, { map_id: payload.map_id, statuses: [payload] }));
+      notify("이벤트 처리 상태를 저장했습니다.");
+      return true;
+    } catch (error) { notify(error.message, "warning"); return false; }
+    finally { eventWrites.current.delete(id); }
   };
-  const updateEventStatus = (id, status) => {
-    setEvents((current) => current.map((event) => event.id === id ? {
-      ...event,
-      status,
-      acknowledged: status !== "new",
-      assignee: status === "new" ? "미지정" : status === "resolved" ? "관리자" : "관리자",
-    } : event));
-  };
+  const acknowledge = (id) => updateEventStatus(id, "acknowledged");
   const navigate = (id) => {
     if (["overview", "map", "events", "video", "report", "rosbag", "settings", "help"].includes(id)) setActive(id);
     else notify(`${navigationLabels[id] || "도움말"} 화면은 다음 단계에서 연결됩니다.`, "info");
   };
   const visibleEvents = useMemo(
-    () => mergeIncidentEvents(events, incidents),
-    [events, incidents],
+    () => mergeIncidentEvents(applyEventStatuses(events, eventStatuses, spatialState?.map?.map_id), incidents),
+    [events, incidents, eventStatuses, spatialState?.map?.map_id],
   );
   const decideIncident = async ({ incident, decision, adminToken, requestId }) => {
     const response = await fetch(`/api/v1/incidents/${encodeURIComponent(incident.incident_id)}/decision`, {
