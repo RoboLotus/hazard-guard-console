@@ -67,7 +67,7 @@ export default function VideoPage({ mediaStatus, telemetry, events, notify }) {
               <div className="stream-label"><div><Camera size={18} /><strong>RGB 전방 카메라</strong></div><span className={`live-label ${rgbLive ? "" : "offline"}`}><span />{rgbLive ? "LIVE" : "연결 필요"}</span></div>
               <div className="detail-stream-stage">
                 {rgbLive ? <>
-                  <LiveImage endpoint="/api/v1/media/rgb" enabled interval={300} alt="로봇 전방 RGB 실시간 영상" />
+                  <LiveImage endpoint="/api/v1/media/rgb" adaptive={mediaStatus?.rgb?.adaptive === true} enabled interval={100} alt="로봇 전방 RGB 실시간 영상" />
                   <div className="camera-meta top-left">CAM-RGB01</div>
                 </> : <ConnectionPlaceholder icon={Camera} title="RGB 카메라 연결이 필요합니다" description="센서와 서버가 연결되면 실시간 영상이 표시됩니다." />}
               </div>

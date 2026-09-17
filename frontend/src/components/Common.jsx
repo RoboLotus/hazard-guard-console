@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { startRgbPreview } from "../rgbPreview.js";
+import { startAdaptivePreview } from "../rgbAdaptivePreview.js";
 import {
   CaretDown,
   Clock,
@@ -87,7 +89,42 @@ export async function downloadAsset(source, filename) {
   URL.revokeObjectURL(url);
 }
 
-export function LiveImage({ endpoint, fallback, enabled, interval = 500, ...props }) {
+function RgbLiveImage({ endpoint, fallback, enabled, interval = 100, adaptive = false, ...props }) {
+  const imageRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [status, setStatus] = useState("연결 대기");
+  const [compatibility, setCompatibility] = useState(false);
+  const useAdaptive = adaptive && enabled && !compatibility;
+  useEffect(() => {
+    if (!enabled) return undefined;
+    if (useAdaptive) {
+      try {
+        const player = startAdaptivePreview(canvasRef.current, {
+          endpoint: "/ws/media/rgb/adaptive",
+          onStatus: ({ message }) => setStatus(message),
+        });
+        return () => player.stop();
+      } catch {
+        setCompatibility(true);
+        return undefined;
+      }
+    }
+    return startRgbPreview(imageRef.current, { endpoint, fallback, interval });
+  }, [endpoint, fallback, enabled, interval, useAdaptive]);
+  if (useAdaptive) return <>
+    <canvas ref={canvasRef} className={`rgb-adaptive-canvas ${props.className || ""}`} role="img" aria-label={props.alt || "실시간 RGB 영상"} />
+    <span className="rgb-adaptive-status" role="status">{status}</span>
+  </>;
+  return <img {...props} ref={imageRef} src={enabled ? undefined : fallback} />;
+}
+
+export function LiveImage(props) {
+  return props.endpoint === "/api/v1/media/rgb"
+    ? <RgbLiveImage {...props} />
+    : <PollingImage {...props} />;
+}
+
+function PollingImage({ endpoint, fallback, enabled, interval = 500, ...props }) {
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {

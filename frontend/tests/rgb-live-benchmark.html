@@ -1,0 +1,67 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>고정 실물 RGB 기준선</title>
+<style>body{font:14px system-ui;margin:16px;background:#f1f5f9;color:#16324c}button{padding:10px;margin:4px}#images{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}img{width:100%;max-height:190px;object-fit:contain;background:#111}pre{white-space:pre-wrap;background:white;padding:10px}h1{font-size:20px}</style>
+<h1>고정 실물 RGB 기준선 — 한 브라우저의 동시 영상 뷰</h1>
+<p id="protocol">640×480 / 기존 JPEG Q82 / 뷰마다 300ms 요청. 로봇 제어 없음. 촬영→표시의 정확한 지연이나 독립 사용자 수가 아닙니다.</p>
+<button id="preview">차트 미리보기</button><button id="start">1차 시험 시작</button><button id="stop">추가 단계 중단</button>
+<div id="images"></div><pre id="status">준비</pre>
+<script type="module">
+import { startRgbPreview } from '/src/rgbPreview.js';
+import { timingPlatform } from './rgb-benchmark-timing.js';
+import { websocketFetcher } from './rgb-ws-fetch.js';
+const deliveryTest = new URLSearchParams(location.search).get('profile')==='delivery';
+const poolTest = new URLSearchParams(location.search).get('profile')==='pools';
+const wsTest = new URLSearchParams(location.search).get('profile')==='wscompare';
+const diagnostic = wsTest || poolTest || deliveryTest || new URLSearchParams(location.search).get('profile')==='diagnostic';
+let timing;
+const resetTiming=()=>timing={begin:Infinity,end:-Infinity,rows:[],server_rows:[],frame_events:[],freshness:[],freshness_missing:0,freshness_unobserved:0,errors:0,overflow:0,hidden:false,injection_ms:null};
+resetTiming();
+const capture={
+ add(r,at){if(r.start>=timing.begin && at<=timing.end){if(timing.rows.length<25000){timing.rows.push([r.headersAt-r.start,r.bodyAt-r.headersAt,at-r.bodyAt]);timing.frame_events.push([r.view??0,at-timing.begin]);if(r.server)timing.server_rows.push(r.server);}else timing.overflow++;}},
+ fail(at){if(at>=timing.begin && at<=timing.end)timing.errors++;}
+};
+document.addEventListener('visibilitychange',()=>{if(performance.now()>=timing.begin && performance.now()<=timing.end && document.hidden)timing.hidden=true;});
+let cleanups=[],running=false,stop=false;let current='ready';
+let freshMeters=[],transports=[],lastFresh=performance.now();
+setInterval(()=>{const at=performance.now(),gap=at-lastFresh;lastFresh=at;if(at<timing.begin||at>timing.end)return;for(let i=0;i<freshMeters.length;i++){if(document.hidden||gap>500){timing.freshness_unobserved++;continue;}const row=freshMeters[i].freshness(at);if(!row){timing.freshness_missing++;continue;}if(timing.freshness.length<25000)timing.freshness.push([i,at-timing.begin,...row]);else timing.overflow++;}},100);
+const tenFps = new URLSearchParams(location.search).get('profile')==='10fps';
+if(tenFps)document.querySelector('#protocol').textContent='640×480 / JPEG Q82 / 3.33FPS 재측정 → 10FPS 1·2·4·8·12뷰 → 10FPS 1뷰 회복. 각 15초 준비 + 60초 측정. 정지 로봇, JPEG 원본 1장/단계 저장.';
+if(diagnostic)document.querySelector('#protocol').textContent='640×480 / Q82 / 목표10FPS 고정. 입력마다 인코딩(A) ↔ 주기제어(B). 1뷰 ABBA → 4뷰 AB → 12뷰 AB. 각15초 준비+60초 측정. 구간 타이밍은 측정 시작 확인 후55초 성공 프레임만 수집.';
+if(deliveryTest)document.querySelector('#protocol').textContent='640×480 / JPEG Q82 / 인코딩10FPS 동일. A:100ms 폴링 ↔ B:새 프레임만 대기 수신(다음 요청 즉시, 대기 최대1초). 1뷰 ABBA → 4뷰 AB → 12뷰 AB. 각15초 준비+60초 측정. 서버 handler/wait/active 별도 기록. 운영 코드 변경 없음.';
+const images=document.querySelector('#images'), status=document.querySelector('#status');
+if(poolTest)document.querySelector('#protocol').textContent='640×480 / Q82 / 인코딩10FPS / 새 프레임 수신 동일. 12뷰 단일 origin(A) ↔ 6+6뷰 두 origin(B), ABBA 반복. 프록시 두 개는 모든 조건에서 계속 실행. 각15초 준비+60초 측정. 운영 적용 시험 아님.';
+if(wsTest)document.querySelector('#protocol').textContent='동일 JPEG Q82/640×480/인코딩10FPS. HTTP 새프레임 GET ↔ WebSocket 요청응답 지속연결, 1뷰 ABBA →12뷰 ABBA →12뷰 중1개2FPS →12뷰 강제재접속 →12뷰 회복. 각15초준비+60초측정. 나이 하한/보강상한/기존상한 병행. 로봇 제어 없음.';
+function views(n,observe,interval=300,delivery='poll',split=false,fault=''){
+ cleanups.forEach(f=>f());transports.forEach(t=>t.dispose());cleanups=[];transports=[];freshMeters=[];images.replaceChildren();
+ for(let i=0;i<n;i++){
+  const img=document.createElement('img');img.alt=`실물 RGB ${i+1}`;images.append(img);
+  const endpoint=split&&i>=n/2?'http://127.0.0.1:8768/api/v1/media/rgb':'/api/v1/media/rgb';
+  const ws=delivery==='websocket'?websocketFetcher(globalThis,`ws://${location.host}/ws/bench/rgb`):null;if(ws)transports.push(ws);
+  const p=diagnostic?timingPlatform(globalThis,{...capture,add:(r,at)=>capture.add({...r,view:i},at)},delivery==='websocket'?'new-frame':delivery,ws?.fetch):globalThis;
+  if(diagnostic)freshMeters.push(p);
+  const cadence=fault==='slow'&&i===n-1?500:['new-frame','websocket'].includes(delivery)?0:interval;
+  cleanups.push(startRgbPreview(img,{endpoint,interval:cadence,observe},p));
+ }
+}
+document.querySelector('#preview').onclick=()=>{if(!running){views(1,true);current='chart-preview';}};
+document.querySelector('#stop').onclick=()=>{stop=true;};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+document.querySelector('#start').onclick=async()=>{
+ if(running)return;running=true;stop=false;
+ const phases=tenFps ? [['base3',1,'basic',300],['fps10v1',1,'basic',100],['fps10v2',2,'basic',100],['fps10v4',4,'basic',100],['fps10v8',8,'basic',100],['fps10v12',12,'basic',100],['recover10',1,'basic',100]] : [['zero',0,'basic'],['off1a',1,'off'],['on1a',1,'basic'],['off1b',1,'off'],['on1b',1,'basic'],['on2',2,'basic'],['on4',4,'basic'],['on8',8,'basic'],['on12',12,'basic'],['recover1',1,'basic']];
+ if(diagnostic)phases.splice(0,phases.length,...[['a1r1',1,'ingress'],['b1r1',1,'periodic'],['b1r2',1,'periodic'],['a1r2',1,'ingress'],['a4',4,'ingress'],['b4',4,'periodic'],['a12',12,'ingress'],['b12',12,'periodic']].map(([name,n,encoding])=>[name,n,'basic',100,encoding]));
+ if(deliveryTest)phases.splice(0,phases.length,...[['a1r1',1,'poll'],['b1r1',1,'new-frame'],['b1r2',1,'new-frame'],['a1r2',1,'poll'],['a4',4,'poll'],['b4',4,'new-frame'],['a12',12,'poll'],['b12',12,'new-frame']].map(([name,n,delivery])=>[name,n,'basic',100,'periodic',delivery]));
+ const run=Date.now();
+ if(poolTest)phases.splice(0,phases.length,...[['single12r1',false],['split12r1',true],['split12r2',true],['single12r2',false]].map(([name,split])=>[name,12,'basic',100,'periodic','new-frame',split]));
+ if(wsTest)phases.splice(0,phases.length,...[['h1r1',1,'new-frame'],['w1r1',1,'websocket'],['w1r2',1,'websocket'],['h1r2',1,'new-frame'],['h12r1',12,'new-frame'],['w12r1',12,'websocket'],['w12r2',12,'websocket'],['h12r2',12,'new-frame'],['slow12',12,'websocket','slow'],['reconnect12',12,'websocket','reconnect'],['recover12',12,'websocket']].map(([name,n,delivery,fault=''])=>[name,n,'basic',100,'periodic',delivery,false,fault]));
+ try{for(const [name,n,mode,interval=300,encoding='ingress',delivery='poll',split=false,fault=''] of phases){if(stop)break;views(0,false);resetTiming();current=`${run}-${name}`;
+  const response=await fetch('/api/bench/phase',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:current,views:n,mode,warmup:15,seconds:60,target_fps:1000/interval,encoding,delivery})});
+  if(!response.ok)throw Error(await response.text());views(n,mode!=='off',interval,delivery,split,fault);
+  if(tenFps||diagnostic){await sleep(2000);const snapshot=await fetch('/api/bench/snapshot?label='+current);if(!snapshot.ok)throw Error('snapshot: '+await snapshot.text());await snapshot.blob();}
+  for(;;){await sleep(2000);const data=await(await fetch('/api/bench/status')).json();status.textContent=JSON.stringify({current,visible:document.visibilityState,...data},null,2);if(['aborted','error'].includes(data.phase.state))throw Error(JSON.stringify(data.phase));if(diagnostic && data.phase.state==='measuring' && timing.begin===Infinity){timing.begin=performance.now();timing.end=timing.begin+55000;timing.hidden=document.hidden;}
+   if(fault==='reconnect'&&timing.injection_ms===null&&performance.now()>=timing.begin+25000){timing.injection_ms=performance.now()-timing.begin;transports.forEach(t=>t.disconnect());}
+   if(data.phase.state==='done')break;}
+  if(diagnostic){views(0,false);if(!Number.isFinite(timing.begin)||performance.now()<timing.end)throw Error('Incomplete timing window');const saved=await fetch('/api/bench/client-timings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:current,...timing,begin:undefined,end:undefined,elapsed_ms:55000})});if(!saved.ok)throw Error('timing upload: '+await saved.text());}
+ }}catch(e){status.textContent+='\nSTOP: '+e.message;}finally{views(0,false);running=false;status.textContent+='\n시험 종료: 결과는 젯슨에 저장됨';}
+};
+setInterval(async()=>{if(running)return;try{const data=await(await fetch('/api/bench/status')).json();status.textContent=JSON.stringify({current,visible:document.visibilityState,...data},null,2)}catch{status.textContent='연결 대기'}},3000);
+</script></html>

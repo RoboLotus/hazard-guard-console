@@ -51,8 +51,9 @@ function CameraPanel({ thermal = false, maxTemperature = null, mediaStatus, onOp
         {live ? <>
           <LiveImage
             endpoint={endpoint}
+            adaptive={!thermal && stream?.adaptive === true}
             enabled
-            interval={thermal ? 400 : 300}
+            interval={thermal ? 400 : 100}
             alt={thermal ? (physicalThermal ? "ThermoEye SDK 실시간 열화상 영상" : gazeboThermal ? "Gazebo 열화상 카메라 시뮬레이션 영상" : "열화상 카메라 영상") : "전방 RGB 카메라 영상"}
           />
           <div className="camera-meta top-left">CAM-{thermal ? "TH01" : "RGB01"}</div>

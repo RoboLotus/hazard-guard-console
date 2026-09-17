@@ -1,0 +1,19 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RGB 적응형 전송 실험</title>
+<style>body{font:16px system-ui;background:#f1f5f9;color:#18283d;max-width:1040px;margin:40px auto;padding:0 24px}button{padding:10px 16px;margin:8px 8px 8px 0}canvas{width:min(100%,640px);aspect-ratio:4/3;background:#162033}pre{white-space:pre-wrap;background:white;padding:20px;border-radius:12px}small{display:block;line-height:1.7}</style>
+<h1>RGB 적응형 전송 실험</h1>
+<p>640×480 / 목표 10FPS · 운영 관제 화면과 분리된 실험용</p>
+<small>JPEG / H.264 / 자동 모드는 서버 시작 옵션으로 선택합니다. 원본 분석·로봇 제어는 수행하지 않습니다.<br>표시 나이는 서버 RGB 수신 이후의 보수적 상한 추정입니다. 촬영부터의 전체 지연이 아닙니다.</small>
+<button id="start">시작</button><button id="stop">중지</button><button id="save">현재 프레임 PNG</button><button id="export">측정 JSON 저장</button>
+<div><canvas id="view"></canvas></div><pre id="status">시작을 눌러 주세요.</pre>
+<script type="module">
+import { startAdaptivePreview } from '/src/rgbAdaptivePreview.js';
+let player, latest;
+const canvas=document.querySelector('#view'), status=document.querySelector('#status');
+const percentile=(xs,p)=>xs.length?[...xs].sort((a,b)=>a-b)[Math.ceil(xs.length*p)-1]:null;
+document.querySelector('#start').onclick=()=>{player?.stop();player=startAdaptivePreview(canvas,{onStatus(value){latest=value;status.textContent=JSON.stringify({...value,ages:undefined,decode:undefined,age_p95_last600:percentile(value.ages,.95),decode_p95_last600:percentile(value.decode,.95)},null,2);}});};
+document.querySelector('#stop').onclick=()=>player?.stop();
+function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+document.querySelector('#save').onclick=()=>canvas.toBlob(b=>download(b,`rgb-${latest?.profile?.codec||'unknown'}-${Date.now()}.png`));
+document.querySelector('#export').onclick=()=>download(new Blob([JSON.stringify({recorded_at:new Date().toISOString(),scope:'local client bounded last 600 samples; not a complete benchmark',...latest},null,2)],{type:'application/json'}),`rgb-client-${Date.now()}.json`);
+</script></html>

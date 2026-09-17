@@ -1,0 +1,19 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>RGB 계측 기능 검증 — 실물 아님</title>
+<style>body{font:16px system-ui;max-width:1000px;margin:30px auto;padding:20px}button{padding:12px;margin:4px}img{width:320px;height:240px;object-fit:contain;background:#eee}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f6f8;padding:16px}</style>
+<h1>RGB 계측 기능 검증 — 실물 아님</h1><p>로컬 색상 JPEG를 이용한 기능 확인용입니다. Jetson 성능·화질 측정 결과가 아닙니다.</p>
+<button id="live">정상 갱신</button><button id="freeze">동일 프레임 정지</button><button id="missing">영상 미수신</button><button id="toggle">화면 제거/복원</button>
+<button id="many">12개 화면</button><button id="single">1개 화면</button>
+<div id="root"></div><pre id="status">집계 대기</pre>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {LiveImage} from '/src/components/Common.jsx';
+const root=createRoot(document.querySelector('#root'));let shown=true,count=1;
+const render=()=>root.render(shown?Array.from({length:count},(_,i)=>React.createElement(LiveImage,{key:i,endpoint:'/api/v1/media/rgb',enabled:true,interval:100,alt:'로컬 검증 영상 '+(i+1)})):null);
+render();
+for(const mode of ['live','freeze','missing'])document.querySelector('#'+mode).onclick=()=>fetch('/api/fixture/'+mode,{method:'POST'});
+document.querySelector('#toggle').onclick=()=>{shown=!shown;render()};
+document.querySelector('#many').onclick=()=>{count=12;render()};
+document.querySelector('#single').onclick=()=>{count=1;render()};
+setInterval(async()=>{try{document.querySelector('#status').textContent=JSON.stringify(await(await fetch('/api/v1/stream-observability')).json(),null,2)}catch{document.querySelector('#status').textContent='로컬 검증 서버 연결 없음'}},2000);
+</script></html>
