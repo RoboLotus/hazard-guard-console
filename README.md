@@ -347,3 +347,53 @@ ros2 launch hazard_guard_simulation rtabmap_sim.launch.py \
 추가해야 합니다.
 
 > 현재 열화상은 TMC160B의 160×120, 수평 57°, 8.7 Hz 형식을 반영한 시뮬레이션 데이터입니다. 지도 부채꼴의 5 m 길이는 시뮬레이션 표시 범위이며 제조사 측정거리 보장이 아닙니다. 실제 화재 판정이나 안전 성능을 검증한 결과도 아닙니다.
+
+## RGB 영상 전송 고도화 / 상시 경량 계측
+
+이슈 #29, `perf/rgbd-streaming-pipeline` 브랜치의 설계·변경·검증·남은 작업은
+[RGB_STREAMING_WORKLOG.md](RGB_STREAMING_WORKLOG.md)에 날짜별로 누적합니다.
+
+- RGB JPEG 응답의 `X-HazardGuard-Frame` 헤더에 세션·프레임 번호·영상 나이를 포함합니다.
+- 브라우저는 100ms 주기로 영상 나이를 관측하고 5초 주기로 집계 결과를 전송합니다.
+- `GET /api/v1/stream-observability`: 최근 화면별 집계 및 로그 저장 오류/큐 상태.
+- `POST /api/v1/stream-observability/reports`: 제한된 브라우저 계측 데이터 수신용. 로봇 제어 API가 아닙니다.
+- 기본 저장: `backend/runtime/stream-observability/windows.jsonl`, 2MiB × 최대 4개 파일 순환.
+- RGB 표시 경로는 최신 원본 1개를 대기 슬롯에 보관하고 기본 최대 10FPS로 변환·JPEG 인코딩합니다. 원본 해상도와 JPEG Q82는 유지합니다.
+- `/ws/media/rgb`로 공유 JPEG를 전달합니다. 화면별 요청은 한 번에 하나이며, 표시 완료 후 다음 프레임을 요청합니다. 느린 화면 때문에 과거 프레임을 FIFO로 쌓지 않습니다.
+- WebSocket 실패 시 해당 화면은 HTTP JPEG로 30초간 복구 운용 후 WebSocket을 다시 시도합니다. 센서 미수신(503)은 전송 방식 장애로 취급하지 않습니다.
+- RGB 입력이 2초 이상 오래되면 HTTP/WS 모두 실시간 프레임으로 제공하지 않습니다. 브라우저에도 별도 정지 감시가 있습니다. 지도 스냅샷·열화상 경로의 기존 기준은 유지합니다.
+- 센서 발행 FPS, Depth/열화상 분석 입력, SLAM·주행 정책은 변경하지 않습니다. 표시용 교체/생략은 탐지 원본 프레임 드롭을 의미하지 않습니다.
+
+기본 지표는 **백엔드 수신→브라우저 표시 근사의 보수적 상한**이며, 검증 없는 ROS stamp를
+촬영 시각으로 간주하지 않습니다. 브라우저의 rAF 역시 물리적 모니터 표시 시각은 아닙니다.
+설정, 시계 검증 조건, 로그 해석, 로컬 기능 검증 명령은 작업 기록의 운영 절을 참고하세요.
+
+### RGB 전송 운영 설정 및 복구
+
+| 위치 | 환경변수 | 기본값 / 의미 |
+| --- | --- | --- |
+| 백엔드 | `HAZARD_GUARD_RGB_DISPLAY_FPS` | `10`, 1~30 범위. 변경 후 백엔드 재시작 |
+| 백엔드 | `HAZARD_GUARD_RGB_WS` | `on`, `off`면 WS 거부 → HTTP 자동 복구 |
+| 백엔드 | `HAZARD_GUARD_RGB_WS_ORIGINS` | 추가 허용 프런트 origin을 쉼표로 구분. 예: `http://노트북주소:5173` |
+| 프런트 빌드 | `VITE_HAZARD_GUARD_RGB_TRANSPORT` | 기본 WS 우선. `http`로 빌드하면 HTTP만 사용 |
+| 양쪽 | 기존 `*_STREAM_DIAGNOSTICS` | 계측 off여도 WS 세션/순번 제어는 유지 |
+
+`GET /api/v1/media/rgb/pipeline`에서 입력 프레임, 대기 프레임 교체 수, 완료/실패 표시 작업,
+대기 슬롯 수, WS 접속 수를 확인합니다. 누적 카운터이며 **FPS 자체가 아닙니다**.
+RGB 표시 작업에는 기존 RGB 기반 보조 화면 처리도 포함될 수 있어 JPEG 인코딩 횟수와 구별합니다.
+백엔드 단일 프로세스 운용을 전제로 공유 인코딩하며 WS 최대 16개 연결입니다.
+여러 uvicorn worker를 띄우면 worker마다 ROS 구독·캐시·제한이 생기므로 이 설정의 확장 방법으로 사용하지 마세요.
+WS는 같은 origin 및 지정 origin만 허용합니다. 이것은 사용자 인증을 대체하지 않으며 기존 사설망/접근제어 안에서 운용해야 합니다.
+허용 origin 설정에 와일드카드를 쓰지 마세요. API/WS는 동일 프런트 프록시를 통해 연결하는 구성을 권장합니다.
+
+표시 목표는 10FPS이고 느린 네트워크/디코딩에서는 실제 FPS가 낮아질 수 있습니다.
+운영 기본값은 기존 JPEG이며, `HAZARD_GUARD_RGB_ADAPTIVE=on`으로 CPU·전달지연 기반
+품질/FPS/비트레이트 및 JPEG↔H.264 자동 조절을 사용할 수 있습니다.
+`backend/requirements-adaptive.txt` 설치 후 backend를 단일 worker로 재시작하고 프런트를 새 빌드로 실행합니다.
+Overview·영상 페이지는 backend의 미디어 상태에 따라 자동 선택하며, 미지원 디코더는 JPEG로 복귀합니다.
+최신 입력/결과 각1개만 유지하고 참조 복구 과다·CPU 압박 시 JPEG로 되돌립니다. 기존 스냅샷/HTTP API는 유지합니다.
+`/api/v1/media/rgb/adaptive`에서 현재 정책/오류를 확인할 수 있습니다. 상세 설정·회귀 결과·수치 해석 한계와
+별도 실험 서버 실행 방법은 [RGB_ADAPTIVE_EXPERIMENT.md](RGB_ADAPTIVE_EXPERIMENT.md)를 참고하세요.
+로컬 기능 검증: 백엔드에서 `python -m scripts.rgb_stream_smoke`,
+프런트는 `HAZARD_GUARD_BACKEND_URL=http://127.0.0.1:8891`로 실행한 뒤
+`/tests/rgb-preview-harness.html`을 엽니다. 이 서버는 ROS·모터를 사용하지 않는 색상 영상 fixture입니다.
