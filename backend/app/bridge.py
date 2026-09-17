@@ -1980,6 +1980,13 @@ class RosBridge:
             )
         return self.mission.snapshot()
 
+    def rgb_pipeline_status(self) -> dict:
+        return {**self._media_adapter._rgb_worker.snapshot(), "adaptive": self.adaptive_rgb.status()}
+
+    @property
+    def adaptive_rgb(self):
+        return self._media_adapter.adaptive_rgb
+
     def stop(self) -> None:
         self.stop_simulation_teleop()
         if self._mission_goal_handle is not None:
@@ -1991,6 +1998,7 @@ class RosBridge:
             self._thread.join(timeout=2)
         if self._executor is not None:
             self._executor.shutdown(timeout_sec=1)
+        self._media_adapter.close()
         if self._node is not None:
             self._node.destroy_node()
         if self._context is not None and self._context.ok():

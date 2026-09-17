@@ -9,6 +9,9 @@ from typing import Any
 
 from .stores import MediaStore, SpatialStore
 from .thermal import calibrated_thermal_u8
+from .stream_observability import rgb_receive_metadata
+from .rgb_stream import LatestRgbWorker
+from .rgb_adaptive_runtime import AdaptiveRgbRuntime
 
 
 class RosMediaAdapter:
@@ -31,6 +34,11 @@ class RosMediaAdapter:
         self._last_odom_update = 0.0
         self._latest_thermal_detections: dict[str, dict[str, Any]] = {}
         self._completed_thermal_trends: dict[str, dict[str, Any]] = {}
+        self._rgb_worker = LatestRgbWorker(self._encode_rgb_image)
+        self.adaptive_rgb = AdaptiveRgbRuntime(self._convert_adaptive_rgb)
+
+    def _convert_adaptive_rgb(self, message):
+        return self._cv_bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
 
     @staticmethod
     def _image_source(topic: str) -> str:
@@ -49,6 +57,14 @@ class RosMediaAdapter:
         ros_time_type: Any,
     ) -> None:
         self._cv_bridge = cv_bridge
+        if self._rgb_worker.stopped:
+            if self._rgb_worker.thread and self._rgb_worker.thread.is_alive():
+                raise RuntimeError("Previous RGB worker is still stopping")
+            self._rgb_worker = LatestRgbWorker(self._encode_rgb_image)
+        if self.adaptive_rgb.stop_event.is_set():
+            if self.adaptive_rgb.session and self.adaptive_rgb.session.thread and self.adaptive_rgb.session.thread.is_alive():
+                raise RuntimeError("Previous adaptive RGB worker is still stopping")
+            self.adaptive_rgb = AdaptiveRgbRuntime(self._convert_adaptive_rgb)
         self._tf_buffer = tf_buffer
         self._ros_time_type = ros_time_type
 
@@ -398,6 +414,18 @@ class RosMediaAdapter:
     def on_rgb_image(self, message: Any) -> None:
         if self._cv_bridge is None:
             return
+        received = rgb_receive_metadata(message)
+        received.setdefault("received_monotonic", time.monotonic())
+        self.adaptive_rgb.offer(message, received["received_monotonic"], self._image_source(
+            os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw")))
+        if self.adaptive_rgb.needs_legacy() or not self._thermal_stream_seen:
+            self._rgb_worker.submit(message, received)
+
+    def close(self) -> None:
+        self._rgb_worker.close()
+        self.adaptive_rgb.close()
+
+    def _encode_rgb_image(self, message: Any, received: dict) -> None:
         try:
             import cv2
 
@@ -406,15 +434,12 @@ class RosMediaAdapter:
                 desired_encoding="bgr8",
             )
             height, width = frame.shape[:2]
-            self._store_jpeg(
-                "rgb",
-                frame,
-                width,
-                height,
-                self._image_source(
-                    os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw")
-                ),
-            )
+            if self.adaptive_rgb.needs_legacy():
+                self._store_jpeg(
+                    "rgb", frame, width, height,
+                    self._image_source(os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw")),
+                    metadata=received,
+                )
             if self._thermal_stream_seen:
                 return
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -429,6 +454,7 @@ class RosMediaAdapter:
             )
         except Exception as exc:
             self._on_error(f"Camera conversion failed: {exc}")
+            raise
 
     def on_thermal_image(self, message: Any) -> None:
         if self._cv_bridge is None:
@@ -499,6 +525,7 @@ class RosMediaAdapter:
         width: int,
         height: int,
         source: str,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         import cv2
 
@@ -515,6 +542,7 @@ class RosMediaAdapter:
                 width=width,
                 height=height,
                 source=source,
+                metadata=metadata,
             )
 
     @staticmethod

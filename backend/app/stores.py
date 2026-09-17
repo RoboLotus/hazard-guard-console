@@ -23,6 +23,8 @@ class MediaStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._items: dict[str, dict[str, Any]] = {}
+        self._stream_session = uuid.uuid4().hex
+        self._frame_sequence = 0
 
     def update(
         self,
@@ -36,7 +38,10 @@ class MediaStore:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         with self._lock:
+            self._frame_sequence += 1
             self._items[kind] = {
+                "stream_session": self._stream_session,
+                "frame_sequence": self._frame_sequence,
                 "content": content,
                 "media_type": media_type,
                 "width": width,
@@ -73,8 +78,12 @@ class MediaStore:
             # An occupancy map is a snapshot and may be published only once by
             # map_server. Camera frames are streams and must remain fresh.
             freshness_limit = math.inf if kind == "map" else 5.0
+            received_at = item["updated_monotonic"]
+            if kind == "rgb":
+                freshness_limit = 2.0
+                received_at = item["metadata"].get("received_monotonic", received_at)
             result[kind] = {
-                "available": now - item["updated_monotonic"] < freshness_limit,
+                "available": 0 <= now - received_at < freshness_limit,
                 "updated_at": item["updated_at"],
                 "width": item["width"],
                 "height": item["height"],

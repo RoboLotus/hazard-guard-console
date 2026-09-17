@@ -1061,7 +1061,12 @@ def test_telemetry_websocket_sends_snapshot_and_closes_cleanly():
         assert "timestamp" in payload
 
 
-def test_spatial_status_exposes_pose_sensor_specs_and_heatmap():
+def test_spatial_status_exposes_pose_sensor_specs_and_heatmap(monkeypatch):
+    # This endpoint contract must not depend on prior mode-transition tests.
+    from app.stores import SpatialStore
+
+    monkeypatch.setenv("HAZARD_GUARD_MOCK_DATA_ENABLED", "1")
+    monkeypatch.setattr(main_module, "spatial_store", SpatialStore())
     response = client.get("/api/v1/spatial/status")
     assert response.status_code == 200
     payload = response.json()

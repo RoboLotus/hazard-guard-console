@@ -2,6 +2,7 @@ import asyncio
 import hmac
 import math
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -64,6 +65,7 @@ from .models import (
     WorldSelectionRequest,
 )
 from .performance_reports import PerformanceReportStore, UnsafeReportPathError
+from .stream_observability import HEADER as FRAME_HEADER, diagnostics, frame_header, router as stream_router
 from .settings_store import (
     ThermalEquipmentSettingsStore,
     ThresholdSettingsStore,
@@ -134,7 +136,10 @@ async def lifespan(_: FastAPI):
         try:
             system_mode_manager.stop()
         finally:
-            ros_bridge.stop()
+            try:
+                ros_bridge.stop()
+            finally:
+                diagnostics.close()
 
 
 app = FastAPI(
@@ -146,7 +151,38 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[FRAME_HEADER],
 )
+app.include_router(stream_router)
+
+from .rgb_stream import RgbSocketHub, fresh_rgb
+
+rgb_socket_hub = RgbSocketHub()
+
+
+@app.websocket("/ws/media/rgb")
+async def rgb_preview_socket(websocket: WebSocket):
+    await rgb_socket_hub.serve(websocket, media_store, ros_bridge.adaptive_rgb.demand_legacy)
+
+
+@app.websocket("/ws/media/rgb/adaptive")
+async def adaptive_rgb_socket(websocket: WebSocket):
+    runtime = ros_bridge.adaptive_rgb
+    if not runtime.enabled or runtime.stop_event.is_set():
+        await websocket.close(code=1008)
+        return
+    await runtime.hub.serve(websocket)
+
+
+@app.get("/api/v1/media/rgb/adaptive")
+def adaptive_rgb_status():
+    return ros_bridge.adaptive_rgb.status()
+
+
+@app.get("/api/v1/media/rgb/pipeline")
+def rgb_pipeline_status():
+    return {**ros_bridge.rgb_pipeline_status(), "websocket_clients": rgb_socket_hub.active,
+            "websocket_limit": rgb_socket_hub.limit, "scope": "per_backend_process"}
 
 threshold_store = ThresholdSettingsStore()
 performance_report_store = PerformanceReportStore()
@@ -898,7 +934,11 @@ def system_map_cloud(world_id: str, session_id: str, download: bool = False):
 
 @app.get("/api/v1/media/status")
 def media_status():
-    return media_store.status()
+    result = media_store.status()
+    adaptive = ros_bridge.adaptive_rgb.media_status()
+    if adaptive is not None:
+        result["rgb"] = adaptive
+    return result
 
 
 @app.get("/api/v1/spatial/status")
@@ -1152,8 +1192,15 @@ def add_spatial_detection(detection: ThermalDetection):
 def media_image(kind: str):
     if kind not in {"map", "rgb", "thermal"}:
         raise HTTPException(status_code=404, detail="Unknown media stream")
+    if kind == "rgb":
+        ros_bridge.adaptive_rgb.demand_legacy()
+        # Snapshot/legacy readers may be the first JPEG consumer. Wait briefly
+        # in this sync endpoint's threadpool, never in the event loop/ROS callback.
+        until = time.monotonic() + .25
+        while ros_bridge.adaptive_rgb.enabled and not fresh_rgb(media_store.get("rgb")) and time.monotonic() < until:
+            time.sleep(.01)
     item = media_store.get(kind)
-    if item is None:
+    if item is None or (kind == "rgb" and not fresh_rgb(item)):
         raise HTTPException(status_code=503, detail=f"{kind} stream is not ready")
     return Response(
         content=item["content"],
@@ -1161,6 +1208,7 @@ def media_image(kind: str):
         headers={
             "Cache-Control": "no-store, max-age=0",
             "X-HazardGuard-Media-Source": item["source"],
+            **(frame_header(item) if kind == "rgb" else {}),
         },
     )
 
