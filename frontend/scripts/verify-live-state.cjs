@@ -12,6 +12,7 @@ const path = require('node:path');
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   let fail = false, imageFail = false, imageHang = false, eventFail = false;
+  let adaptive = false, rgbFail = false, rgbConnections = 0, rgbSequence = 0;
   let source = 'derived:rgb-colormap';
   let poseFresh = true;
   let telemetry = { mock: true, robot_id: 'mock', mode: 'patrol', speed_mps: .32, network_quality: 'good', network_rssi_dbm: -48, lidar_status: 'normal', lidar_hz: 10.2, max_temperature_c: 63, battery_stale: true };
@@ -31,13 +32,45 @@ const path = require('node:path');
       } catch { sockets.delete(ws); }
     }
   };
-  await page.routeWebSocket(/\/ws\//, ws => { sockets.add(ws); ws.onClose(() => sockets.delete(ws)); send(); });
+  await page.routeWebSocket(/\/ws\//, ws => {
+    if (ws.url().endsWith('/ws/media/rgb/adaptive')) {
+      rgbConnections++;
+      let timer;
+      ws.onClose(() => clearTimeout(timer));
+      ws.onMessage(message => {
+        const request = JSON.parse(String(message));
+        if ('h264' in request) return;
+        timer = setTimeout(() => {
+          const unavailable = fail || rgbFail;
+          const meta = unavailable ? { status: 503 } : {
+            status: 200, session: 'integration-test', epoch: 1,
+            sequence: ++rgbSequence, token: String(rgbSequence), codec: 'jpeg',
+            key: true, age_ms: 1, profile: { fps: 10 },
+          };
+          const header = Buffer.from(JSON.stringify(meta));
+          const length = Buffer.alloc(4); length.writeUInt32BE(header.length);
+          try { ws.send(Buffer.concat([length, header, ...(unavailable ? [] : [rgbJpeg])])); } catch { /* closed */ }
+        }, 100);
+      });
+      return;
+    }
+    if (ws.url().endsWith('/ws/media/rgb')) { ws.close(); return; } // Verify HTTP compatibility too.
+    sockets.add(ws); ws.onClose(() => sockets.delete(ws)); send();
+  });
   const producer = setInterval(send, 200);
   const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=', 'base64');
+  const rgbJpeg = Buffer.from(await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640; canvas.height = 480;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#2488bb'; context.fillRect(0, 0, 640, 480);
+    return canvas.toDataURL('image/jpeg').split(',')[1];
+  }), 'base64');
   await page.route('**/api/**', async route => {
     const req = route.request();
     const p = new URL(req.url()).pathname;
     const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    if (p === '/api/v1/stream-observability/reports') return json({}, 202);
     if (fail) return json({ detail: 'test offline' }, 503);
     if (req.method() !== 'GET') {
       if (req.method() !== 'PUT' || !p.startsWith('/api/v1/events/')) throw new Error(`Unexpected mutation ${req.method()} ${p}`);
@@ -54,7 +87,7 @@ const path = require('node:path');
     if (/\/media\/(rgb|thermal|map)$/.test(p)) return imageFail && p.endsWith('/thermal')
       ? json({}, 503) : route.fulfill({ contentType: 'image/png', body: pixel });
     if (p === '/api/health') return json({ status: 'ok', deployment_target: 'physical' });
-    if (p === '/api/v1/media/status') return json({ map: { available: true, width: 100, height: 100, metadata: map }, rgb: { available: true, source: 'ros:/rgb' }, thermal: { available: true, source } });
+    if (p === '/api/v1/media/status') return json({ map: { available: true, width: 100, height: 100, metadata: map }, rgb: { available: true, source: 'ros:/rgb', adaptive }, thermal: { available: true, source } });
     if (p === '/api/v1/incidents') return json({ incidents: [], battery: { expected: 3, connected: 0, available_for_drop: 0, beacons: [], stale: true } });
     if (p === '/api/v1/events/statuses') return json({ map_id: map.map_id, statuses });
     if (p === '/api/v1/system/mode') return json({ mode: 'patrol', state: 'running', deployment_target: 'physical', control_enabled: false, navigation_ready: true });
@@ -67,7 +100,11 @@ const path = require('node:path');
   const nav = async name => page.getByRole('button', { name, exact: true }).click();
   const eventually = async check => {
     for (let i = 0; i < 80; i++) { if (await check()) return; await page.waitForTimeout(100); }
-    throw new Error('Condition did not become true');
+    throw new Error(`Condition did not become true: ${JSON.stringify({
+      labels: await page.locator('.live-label').allTextContents(),
+      rgbStatus: await page.locator('.rgb-adaptive-status').allTextContents(),
+      rgbConnections, rgbSequence, errors,
+    })}`);
   };
   try {
     await page.goto(base);
@@ -76,6 +113,19 @@ const path = require('node:path');
     assert.equal(await page.getByRole('button', { name: '일시정지', exact: true }).isEnabled(), false);
     assert.ok(!(await page.locator('.dock-block.telemetry').innerText()).includes('0.32'));
     await nav('영상');
+    await eventually(async () => (await page.locator('.detail-stream').first().locator('.live-label').innerText()) === 'LIVE');
+    adaptive = true;
+    await eventually(async () => await page.locator('.detail-stream canvas').isVisible());
+    const connected = rgbConnections;
+    await page.waitForTimeout(700);
+    assert.equal(rgbConnections, connected, 'React status updates must not recreate the stream');
+    rgbFail = true;
+    await eventually(async () => (await page.locator('.detail-stream').first().locator('.live-label').innerText()) === '영상 수신 실패');
+    assert.equal(await page.getByRole('button', { name: 'RGB 스냅샷', exact: true }).isEnabled(), false);
+    rgbFail = false;
+    await eventually(async () => (await page.locator('.detail-stream').first().locator('.live-label').innerText()) === 'LIVE');
+    adaptive = false;
+    await eventually(async () => await page.locator('.detail-stream').first().locator('img').isVisible());
     assert.equal(await page.locator('.thermal-stream img').count(), 0);
     assert.equal(await page.locator('.temperature-summary, .thermal-reading, .temperature-progress').count(), 0);
     source = 'ros:/thermal_camera/image_color';
@@ -157,7 +207,7 @@ const path = require('node:path');
       }
     }
     assert.deepEqual(errors, []);
-    console.log('PASS: mock/stale telemetry, missing values, derived thermal, image failure/recovery, HTTP 503, saved map/pose, robot centering, event save failure/persistence, 8 pages x 3 widths.');
+    console.log('PASS: RGB HTTP/adaptive Canvas status integration and recovery, mock/stale telemetry, missing values, derived thermal, image failure/recovery, HTTP 503, saved map/pose, robot centering, event save failure/persistence, 8 pages x 3 widths.');
   } finally {
     clearInterval(producer);
     await browser.close();

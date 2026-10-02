@@ -1,0 +1,70 @@
+<!doctype html><meta charset="utf-8"><title>RGB Codec Experiment — stationary only</title>
+<style>body{background:#15202f;color:white;font:14px system-ui;margin:16px}#views{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}video,canvas{width:100%;background:#000}pre{white-space:pre-wrap}</style>
+<h1>정지 RGB · 코덱 비교</h1><button id="start">측정 시작</button><p id="state">대기</p><div id="views"></div><pre id="log"></pre>
+<script type="module">
+const $=id=>document.getElementById(id), sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const post=async(url,body)=>{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error(url+':'+r.status+':'+await r.text());return r.json()};
+const profile=new URLSearchParams(location.search).get('profile')||'jpeg82';
+const mode=new URLSearchParams(location.search).get('mode')||'normal';
+const run=Date.now(); let active=[],record=false,begin=0,events=[],ages=[],hidden=false,errors=[],injection=null;
+const log=t=>{$('log').textContent+=t+'\n';$('state').textContent=t};
+async function sync(){let a=[];for(let i=0;i<7;i++){let t0=performance.now(),r=await(await fetch('/api/codec/clock',{cache:'no-store'})).json(),t1=performance.now();a.push({lo:r.monotonic_ms-t1,hi:r.monotonic_ms-t0,rtt:t1-t0});await sleep(40)}return a;}
+function markRead(ctx,source){ctx.drawImage(source,0,468,512,12,0,0,512,12);let p=ctx.getImageData(0,0,512,12).data,n=0;for(let b=0;b<32;b++){let k=(6*512+b*16+8)*4;n=n*2+(p[k]+p[k+1]+p[k+2]>384?1:0)}return Math.floor(n/16777216)===165?n%16777216:null;}
+async function view(index){
+ const obj={index,lastSeq:null,lastPaint:null,closed:false,pc:null,bytes:0,frames:0,error:0};active.push(obj);
+ const reader=document.createElement('canvas');reader.width=512;reader.height=12;const ctx=reader.getContext('2d',{willReadFrequently:true});
+ function painted(source,now){if(obj.closed)return;let s=markRead(ctx,source);obj.frames++;obj.lastPaint=now;if(s!==null){obj.lastSeq=s;if(record&&now-begin<=35000)events.push([index,now-begin,s]);}else if(record)errors.push({index,type:'marker',at:now-begin});}
+ if(profile==='jpeg82'){
+  const canvas=document.createElement('canvas');canvas.width=640;canvas.height=480;$('views').append(canvas);const draw=canvas.getContext('2d');
+  obj.connect=()=>{let ws=new WebSocket(location.origin.replace('http','ws')+'/ws/codec/jpeg');obj.ws=ws;ws.binaryType='arraybuffer';let after=0;
+   ws.onopen=()=>ws.send(JSON.stringify({after}));ws.onmessage=async e=>{try{obj.bytes+=e.data.byteLength;const image=await createImageBitmap(new Blob([e.data],{type:'image/jpeg'}));draw.drawImage(image,0,0);image.close();await new Promise(requestAnimationFrame);painted(canvas,performance.now());after=obj.lastSeq||after;if(mode==='slow'&&index===11)await sleep(500);if(!obj.closed&&ws.readyState===1)ws.send(JSON.stringify({after}));}catch(e){obj.error++;}};
+   ws.onerror=()=>obj.error++;return ws;};obj.connect();
+  obj.close=()=>{obj.closed=true;obj.ws?.close();canvas.remove()};
+ }else{
+  const video=document.createElement('video');video.muted=true;video.autoplay=true;video.playsInline=true;$('views').append(video);obj.video=video;
+  const pc=new RTCPeerConnection({iceServers:[]});obj.pc=pc;
+  const transceiver=pc.addTransceiver('video',{direction:'recvonly'});
+  const mime=profile.startsWith('h264')?'video/h264':'video/vp8';
+  const caps=RTCRtpReceiver.getCapabilities('video').codecs.filter(c=>c.mimeType.toLowerCase()===mime);
+  if(!caps.length)throw Error('Browser codec unavailable: '+mime);
+  transceiver.setCodecPreferences(caps);
+  pc.ontrack=e=>{video.srcObject=new MediaStream([e.track]);video.play().catch(()=>obj.error++)};
+  const vf=(now,meta)=>{if(obj.closed)return;painted(video,now);obj.vf=video.requestVideoFrameCallback(vf)};
+  obj.vf=video.requestVideoFrameCallback(vf);
+  await pc.setLocalDescription(await pc.createOffer());
+  await Promise.race([new Promise(r=>{if(pc.iceGatheringState==='complete')return r();pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete')r()})}),sleep(5000)]);
+  const answer=await post('/api/codec/offer',{sdp:pc.localDescription.sdp,type:'offer'});await pc.setRemoteDescription(answer);
+  obj.close=()=>{obj.closed=true;video.cancelVideoFrameCallback(obj.vf);pc.close();video.srcObject=null;video.remove()};
+ }
+ return obj;
+}
+async function stats(){return Promise.all(active.map(async x=>{let out={index:x.index,bytes:x.bytes,frames:x.frames,error:x.error};if(x.pc){out.rtc=[];for(const v of(await x.pc.getStats()).values())if(['inbound-rtp','codec','candidate-pair'].includes(v.type))out.rtc.push(v)}return out}));}
+async function cleanup(){for(const x of active)x.close();active=[];await post('/api/codec/close',{});}
+document.addEventListener('visibilitychange',()=>{if(record&&document.hidden)hidden=true});
+setInterval(()=>{if(!record)return;let t=performance.now()-begin;if(t>35000)return;for(let x of active)ages.push([x.index,t,x.lastSeq]);},100);
+async function phase(n,suffix){
+ await cleanup();events=[];ages=[];errors=[];hidden=false;injection=null;
+ for(let i=0;i<n;i++)await view(i);
+ const readyUntil=performance.now()+20000;
+ while(active.some(x=>!x.frames)&&performance.now()<readyUntil)await sleep(250);
+ if(active.some(x=>!x.frames))throw Error('No rendered frames: '+JSON.stringify(await stats())+' states='+active.map(x=>x.pc?.connectionState));
+ const before=await sync();const label=run+'-'+profile+'-'+suffix;
+ await post('/api/bench/phase',{label,mode:'off',views:n,warmup:10,seconds:40,target_fps:10,encoding:'periodic',delivery:'websocket'});
+ log(label+' 준비');
+ let p;do{await sleep(500);p=await(await fetch('/api/bench/status')).json();if(p.errors.length)throw Error(JSON.stringify(p.errors));}while(p.phase.state==='warming');
+ if(p.phase.state!=='measuring')throw Error('phase state '+p.phase.state);
+ const startStats=await stats();begin=performance.now();record=true;log(label+' 측정');
+ if(mode==='reconnect'){
+  await sleep(17000);injection=performance.now()-begin;
+  const old=active.find(x=>x.index===11);old.lastSeq=null;old.close();
+  active=active.filter(x=>x!==old);await view(11);
+  await sleep(Math.max(0,35000-(performance.now()-begin)));
+ }else await sleep(35000);
+ record=false;const endStats=await stats();const after=await sync();
+ const hist=await(await fetch('/api/codec/history')).json();
+ await post('/api/codec/client/'+label,{profile,mode,n,before,after,events,ages,errors,hidden,begin,startStats,endStats,history:hist,injection});
+ do{await sleep(500);p=await(await fetch('/api/bench/status')).json();}while(p.phase.state==='measuring');
+ if(p.phase.state!=='done')throw Error(JSON.stringify(p));log(label+' 완료');
+}
+$('start').onclick=async()=>{ $('start').disabled=true;try{for(const [n,s] of(mode==='smoke'?[[1,'smoke']]:mode==='reconnect'?[[12,'reconnect']]:[[1,'one1'],[4,'four'],[12,'twelve'],[1,'one2']]))await phase(n,s);await cleanup();log('ALL DONE '+run);}catch(e){record=false;log('ERROR '+e.stack);await cleanup().catch(()=>{});}};
+</script>

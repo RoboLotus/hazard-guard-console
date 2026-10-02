@@ -1,0 +1,5 @@
+# Optional adaptive RGB runtime and experiments; default JPEG needs no PyAV.
+# Jetson codec availability must be checked on-device before enabling adaptation.
+-r requirements.txt
+av>=14,<17
+psutil>=5.9,<8

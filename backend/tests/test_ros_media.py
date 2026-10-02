@@ -11,8 +11,16 @@ def test_rgb_never_generates_a_thermal_replacement():
     frame = np.zeros((32, 32, 3), dtype=np.uint8)
     adapter.configure(cv_bridge=SimpleNamespace(imgmsg_to_cv2=lambda *a, **k: frame), tf_buffer=None, ros_time_type=None)
     adapter.on_rgb_image(SimpleNamespace(encoding="bgr8"))
-    assert media.get("rgb") is not None
-    assert media.get("thermal") is None
+    # RGB conversion now runs on the bounded latest-frame worker.
+    import time
+    try:
+        deadline = time.monotonic() + 2
+        while media.get("rgb") is None and time.monotonic() < deadline:
+            time.sleep(.005)
+        assert media.get("rgb") is not None
+        assert media.get("thermal") is None
+    finally:
+        adapter.close()
 
 
 def test_raw_thermal_does_not_burn_text_into_the_image(monkeypatch):

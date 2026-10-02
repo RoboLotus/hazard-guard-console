@@ -1,6 +1,8 @@
 # Local orchestration and documentation (never commit)
 *.md
 !README.md
+!RGB_STREAMING_WORKLOG.md
+!RGB_ADAPTIVE_EXPERIMENT.md
 docs/
 AGENTS*
 .codex/
@@ -28,6 +30,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+/backend/runtime/stream-observability/
+/backend/runtime/rgb-adaptive.jsonl*
 
 # ROS / colcon outputs
 build/

@@ -5,7 +5,7 @@ import { LiveImage, ConnectionPlaceholder } from "./Common.jsx";
 
 export function useCameraFeed(stream) {
   const state = cameraStreamState(stream);
-  const key = `${state.source}:${state.available}`;
+  const key = `${state.source}:${state.available}:${stream?.adaptive === true}`;
   const [image, setImage] = useState({ key: null, loaded: false, failed: false });
   const [now, setNow] = useState(Date.now());
   useEffect(() => setImage({ key, loaded: false, failed: false, startedAt: Date.now() }), [key]);
@@ -18,7 +18,7 @@ export function useCameraFeed(stream) {
   const live = state.available && image.key === key && image.loaded && !expired;
   const failed = image.key === key && (image.failed || expired);
   return {
-    ...state, live,
+    ...state, live, adaptive: stream?.adaptive === true,
     label: !state.available ? "연결 필요" : failed ? "영상 수신 실패" : !live ? "영상 수신 중" : state.simulated ? "SIMULATED" : "LIVE",
     onLoadState: (loaded) => setImage({ key, loaded, failed: !loaded, loadedAt: loaded ? Date.now() : null }),
   };
@@ -34,7 +34,8 @@ export function CameraFeedImage({ feed, thermal = false }) {
     {feed.available && <LiveImage
       key={feed.source}
       endpoint={`/api/v1/media/${thermal ? "thermal" : "rgb"}`}
-      enabled interval={thermal ? 400 : 300}
+      {...(!thermal ? { adaptive: feed.adaptive } : {})}
+      enabled interval={thermal ? 400 : 100}
       alt={`${name} 카메라 영상`}
       onLoadState={feed.onLoadState}
       style={{ visibility: feed.live ? "visible" : "hidden" }}

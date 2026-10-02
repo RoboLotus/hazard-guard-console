@@ -1,0 +1,36 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>Jetson 운영 RGB 경로 검증</title>
+<style>body{font:15px system-ui;margin:20px;background:#edf1f7;color:#172434}button{padding:12px}#views{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}img{width:100%;background:#ddd}pre{white-space:pre-wrap}</style>
+<h1>Jetson · 통합 RGB 전송 경로</h1><p>정지 RGB 입력만 사용합니다. 로봇 제어·열화상·YOLO는 실행하지 않습니다.</p>
+<button id="start">측정 시작</button><div id="views"></div><pre id="log">대기</pre>
+<script type="module">
+import { startRgbPreview } from '/src/rgbPreview.js';
+const root=document.querySelector('#views'),log=document.querySelector('#log'),button=document.querySelector('#start');
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const post=async(url,body={})=>{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error(url+':'+r.status);return r.json();};
+let cleaners=[],images=[];
+const clear=()=>{cleaners.forEach(x=>x());cleaners=[];images=[];root.replaceChildren();};
+function views(n,websocket){clear();for(let i=0;i<n;i++){const img=document.createElement('img');img.alt='실물 RGB '+(i+1);root.append(img);images.push(img);cleaners.push(startRgbPreview(img,{endpoint:'/api/v1/media/rgb',interval:100,websocket}));}}
+button.onclick=async()=>{
+ button.disabled=true;const run=Date.now();
+ const phases=[['ws1a',1,true],['ws12a',12,true],['http12',12,false],['ws12b',12,true],['ws1b',1,true]];
+ try{
+  for(const [name,n,ws]of phases){
+   clear();const label=run+'-'+name;
+   await post('/api/bench/phase',{label,views:n,mode:'basic',warmup:15,seconds:60,target_fps:10,encoding:'periodic',delivery:ws?'websocket':'poll'});
+   views(n,ws);log.textContent+='\n'+label+' 시작';
+   await sleep(3000);const snap=await fetch('/api/bench/snapshot?label='+label);if(!snap.ok)throw Error('snapshot unavailable');await snap.blob();
+   for(;;){await sleep(2000);const status=await(await fetch('/api/bench/status')).json();document.title=name+' '+status.phase.state;if(document.hidden)throw Error('Browser hidden');if(['error','aborted'].includes(status.phase.state))throw Error(JSON.stringify(status));if(status.phase.state==='done')break;}
+   log.textContent+='\n'+label+' 완료';
+  }
+  // Browser-level stale/recovery and complete unmount/remount, outside CPU phases.
+  views(1,true);await sleep(2000);
+  await post('/api/integrated/pause');await sleep(2700);
+  const hidden=images[0].hidden;await sleep(2500);const restored=!images[0].hidden&&images[0].naturalWidth>0;
+  clear();await sleep(200);const zero=await(await fetch('/api/integrated/status')).json();
+  views(1,true);await sleep(2000);const reconnected=!images[0].hidden&&images[0].naturalWidth>0;
+  log.textContent+='\n'+JSON.stringify({test:'input_pause_and_reconnect',hidden,restored,closedClients:zero.clients,reconnected});
+  if(!hidden||!restored||zero.clients!==0||!reconnected)throw Error('fault check failed');
+  log.textContent+='\n전체 검증 완료';
+ }catch(e){log.textContent+='\n중단: '+e.message;}finally{clear();button.disabled=false;document.title='Jetson RGB 검증 종료';}
+};
+</script></html>
