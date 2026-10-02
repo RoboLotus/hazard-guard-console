@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
+import { getRecording } from "../demo/runtime.js";
 import { fallbackSpatialState } from "../spatial.js";
 import { normalizeSpatial, SPATIAL_STALE_MS } from "../spatialFreshness.js";
 
 export function useSpatialStream() {
   const [state, setState] = useState(fallbackSpatialState);
   useEffect(() => {
+    const demo = getRecording();
+    if (demo) {
+      const m = demo.manifest;
+      setState({ ...fallbackSpatialState, source: 'recorded',
+        map: { map_id: m.session, frame_id: 'map', ...m.map, origin_x: m.map.origin[0], origin_y: m.map.origin[1] } });
+      return undefined;
+    }
     let disposed = false, socket, reconnect, stale;
     const expire = () => setState((current) => normalizeSpatial(current, false));
     const connect = () => {

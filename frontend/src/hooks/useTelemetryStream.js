@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { getRecording } from "../demo/runtime.js";
 import { TELEMETRY_STALE_AFTER_MS, isLiveTelemetry } from "../telemetry.js";
 
 export function useTelemetryStream() {
   const [telemetry, setTelemetry] = useState(null);
   const [telemetryLive, setTelemetryLive] = useState(false);
   useEffect(() => {
+    if (getRecording()) return undefined;
     let disposed = false;
     let socket;
     let reconnectTimer;

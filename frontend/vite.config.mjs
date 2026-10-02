@@ -1,11 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig(({ mode }) => {
-  const defaultBackendPort = mode === "simulation" ? 8001 : 8000;
-  const backendUrl = process.env.HAZARD_GUARD_BACKEND_URL || `http://127.0.0.1:${defaultBackendPort}`;
-  const backendWsUrl = backendUrl.replace(/^http/, "ws");
-
+export default defineConfig(() => {
   return {
     build: {
       outDir: "dist/client",
@@ -14,16 +10,24 @@ export default defineConfig(({ mode }) => {
       include: ["react", "react-dom/client"],
     },
     server: {
-      host: "0.0.0.0",
+      host: "127.0.0.1",
+      port: 5179,
+      strictPort: true,
       allowedHosts: ["terminal.local"],
-      proxy: {
-        "/api": backendUrl,
-        "/ws": { target: backendWsUrl, ws: true },
-      },
       warmup: {
         clientFiles: ["./src/main.jsx"],
       },
     },
-    plugins: [react()],
+    plugins: [react(), {
+      name: "recorded-demo-no-controls",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (/^\/(api|ws)(\/|\?|$)/.test(req.url || "")) {
+            res.statusCode = 403; res.end("Recorded demo: robot control is disabled"); return;
+          }
+          next();
+        });
+      },
+    }],
   };
 });
