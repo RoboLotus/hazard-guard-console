@@ -1,5 +1,10 @@
 # HazardGuard Console
 
+> **Demo 브랜치:** 로봇 없이 실측 저장 자료를 탐색하는 읽기 전용 시연입니다.
+> 백엔드·ROS를 실행하지 마세요. 자료 준비와 실행 방법은 [DEMO.md](DEMO.md)를 참고하세요.
+> 기존 Overview·지도·이벤트·설정 화면을 그대로 사용하며, 데이터 연결만 저장 자료로 대체합니다.
+> 아래 내용은 운영 버전 설명입니다. Demo의 실제 제어·저장은 차단됩니다.
+
 산업 현장을 순찰하는 ROSMASTER-M1 기반 안전 로봇의 관제 WebUI 프로토타입입니다. React 대시보드와 FastAPI ROS bridge를 통해 로봇 상태, 2D SLAM 지도, RTAB-Map RGB-D 컬러 3D 지도, 캘리브레이션으로 온도를 입힌 열화상 3D 지도,
 RGB·ThermoEye TMC160B 사양 기반 합성 열화상 영상, 위험 이벤트, Nav2 목적지와 열원 히트맵을 확인합니다.
 
