@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getRecording } from "../demo/runtime.js";
 import { startRgbPreview } from "../rgbPreview.js";
 import { startAdaptivePreview } from "../rgbAdaptivePreview.js";
 import {
@@ -125,6 +126,9 @@ function RgbLiveImage({ endpoint, fallback, enabled, interval = 100, adaptive = 
 }
 
 export function LiveImage(props) {
+  if (getRecording() && props.endpoint === '/api/v1/media/map') {
+    return <img className={props.className} draggable={props.draggable} alt="저장된 2D SLAM 지도" src="/demo-data/map.png" />;
+  }
   return props.endpoint === "/api/v1/media/rgb"
     ? <RgbLiveImage {...props} />
     : <PollingImage {...props} />;

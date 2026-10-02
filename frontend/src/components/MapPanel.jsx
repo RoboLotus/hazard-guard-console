@@ -1,4 +1,5 @@
 import { freshPose, robotCenteredView } from "../spatialFreshness.js";
+import { getRecording } from "../demo/runtime.js";
 import { useEffect, useRef, useState } from "react";
 import {
   Bell,
@@ -448,7 +449,7 @@ export default function MapPanel({
 
   return (
     <section className={`panel map-panel ${detail ? "map-panel-detail" : ""}`}>
-      <PanelHeader eyebrow="LIVE MAP" title="2D SLAM 지도" action={
+      <PanelHeader eyebrow={getRecording() ? "RECORDED MAP" : "LIVE MAP"} title="2D SLAM 지도" action={
         <div className="panel-actions">
           <CurrentTime />
           <button type="button" className="icon-action" aria-label="로봇 위치 중앙 정렬" title="로봇 위치 중앙 정렬" disabled={!mapLive || !poseLive} onClick={resetMapView}><Crosshair size={19} /></button>
@@ -513,7 +514,7 @@ export default function MapPanel({
             <small>ROS 2 SLAM 지도와 서버가 연결되면 자동으로 표시됩니다.</small>
           </div>
         )}
-        <div className={`map-live-badge ${mapLive && poseLive ? "" : "offline"}`}><span />{mapLive ? (poseLive ? "지도 · 로봇 위치 실시간" : "보관 지도 · 로봇 위치 대기") : waitingForMap ? "ROS 지도 대기" : "지도 연결 필요"}</div>
+        <div className={`map-live-badge ${mapLive && poseLive ? "" : "offline"}`}><span />{getRecording() ? "실측 저장 지도 · 현재 위치 없음" : mapLive ? (poseLive ? "지도 · 로봇 위치 실시간" : "보관 지도 · 로봇 위치 대기") : waitingForMap ? "ROS 지도 대기" : "지도 연결 필요"}</div>
         {goalMode && <div className="goal-mode-hint">지도를 클릭해 목적지 후보를 선택하세요</div>}
         {detail && (
           <div className="map-axis-guide" aria-label="ROS 지도 각도 기준">
@@ -532,7 +533,7 @@ export default function MapPanel({
         {thermalLegend && <span><i className="legend-thermal" />{thermalLegend}</span>}
         <span><i className="legend-heat" />열원</span>
         {incidentMarkers.length > 0 && <span><i className="legend-beacon" />비콘 위치</span>}
-        <strong>{mapLive ? `ROS /map · ${Math.round(mapView.zoom * 100)}%` : "지도 연결 대기"}</strong>
+        <strong>{mapLive ? `${getRecording() ? '저장 지도' : 'ROS /map'} · ${Math.round(mapView.zoom * 100)}%` : "지도 연결 대기"}</strong>
       </footer>
     </section>
   );

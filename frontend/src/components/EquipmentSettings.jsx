@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getRecording } from "../demo/runtime.js";
 import {
   ArrowCounterClockwise,
   Check,
@@ -144,7 +145,7 @@ export default function EquipmentSettings({
   }, [dirty, onDirtyChange]);
 
   useEffect(() => {
-    if (!apiOnline) return undefined;
+    if (!apiOnline && !getRecording()) return undefined;
     const controller = new AbortController();
     const load = async () => {
       const response = await fetch("/api/v1/settings/equipment", {

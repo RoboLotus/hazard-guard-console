@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getRecording } from "../demo/runtime.js";
 import {
   BellRinging,
   Pulse,
@@ -53,7 +54,7 @@ export default function Settings({ notify, apiOnline }) {
         </div>
         <div className="settings-heading-badges">
           <span className={`environment-chip ${deploymentTarget || "unknown"}`}>
-            {deploymentTarget === "physical" ? "JETSON · 실물" : deploymentTarget === "simulation" ? "GAZEBO · 시뮬레이션" : "환경 확인 중"}
+            {getRecording() ? "DEMO · 저장 자료" : deploymentTarget === "physical" ? "JETSON · 실물" : deploymentTarget === "simulation" ? "GAZEBO · 시뮬레이션" : "환경 확인 중"}
           </span>
           <span className={`api-status ${apiOnline ? "online" : ""}`}>
             <span />{apiOnline ? "서버 연결" : "서버 미연결"}

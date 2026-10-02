@@ -1,0 +1,15 @@
+.recorded-demo-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 9px 16px;
+  margin-bottom: 12px;
+  border: 1px solid #d5e3f5;
+  border-radius: 9px;
+  background: #f1f6fe;
+  color: #526b89;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.recorded-demo-banner strong { color: #2167b9; }

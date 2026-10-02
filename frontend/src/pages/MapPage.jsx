@@ -1,4 +1,5 @@
 import { usePolling } from "../hooks/usePolling.js";
+import { getRecording } from "../demo/runtime.js";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   Camera,
@@ -548,7 +549,7 @@ export default function MapPage({
           </button>
         </div>
         <span className={`api-status ${mapLive ? "online" : ""}`}><span />{
-          physicalTarget
+          getRecording() ? "저장 자료 · 읽기 전용" : physicalTarget
             ? mapLive ? "지도 데이터 표시" : "실물 로봇 데이터 대기"
             : simulationTarget
               ? mapLive ? "시뮬레이션 공간 데이터 연결" : "시뮬레이션 지도 연결 필요"

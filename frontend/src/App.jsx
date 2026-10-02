@@ -1,4 +1,5 @@
 import { applyEventStatuses, mergeEventStatuses } from "./eventStatuses.js";
+import { getRecording } from "./demo/runtime.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle, Warning } from "@phosphor-icons/react";
 import { thermalDetectionsToEvents } from "./spatial.js";
@@ -324,6 +325,7 @@ export function App() {
         pendingEvents={visibleEvents.filter((event) => event.status === "new").length}
       />
       <main className="main-content">
+        {getRecording() && <div className="recorded-demo-banner" role="note"><strong>DEMO · 저장 자료</strong><span>기존 관제 화면 · 로봇 미연결 · 실제 제어/저장 불가 · 지도 탭에서 2D / 3D RGB-D / 열화상 확인</span></div>}
         {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} telemetryLive={telemetryLive} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} dispenserBattery={dispenserBattery} incidents={incidents} />}
         {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} telemetryLive={telemetryLive} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} incidents={incidents} />}
         {active === "events" && <EventsPage events={visibleEvents} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} dispenserBattery={dispenserBattery} onDecideIncident={decideIncident} />}

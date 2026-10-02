@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { getRecording } from "../demo/runtime.js";
 import {
   Buildings,
   Cube,
@@ -126,7 +127,7 @@ export default function MapEquipmentPanel({
       <div className={`map-registration-gate ${registrationReady ? "ready" : "blocked"}`}>
         <span />
         <div>
-          <strong>{registrationReady ? "등록 가능" : "등록 대기"}</strong>
+          <strong>{getRecording() ? "저장된 설비" : registrationReady ? "등록 가능" : "등록 대기"}</strong>
           <small>{spatialContext?.message || "지도 상태를 확인하고 있습니다."}</small>
         </div>
       </div>
@@ -134,7 +135,7 @@ export default function MapEquipmentPanel({
         <button type="button" className="button secondary" disabled={!registrationReady} onClick={onStartPoint}>
           <MapPin size={15} weight="duotone" />{pointMode ? "지도에서 선택 중" : "2D 위치 추가"}
         </button>
-        <button type="button" className="button secondary" disabled={!registrationReady || !selected} onClick={onOpen3d}>
+        <button type="button" className="button secondary" disabled={(!registrationReady && !getRecording()) || !selected} onClick={onOpen3d}>
           <Cube size={15} />3D ROI 확인
         </button>
       </div>
@@ -149,7 +150,7 @@ export default function MapEquipmentPanel({
             >
               <span />
               <strong>{item.display_name}</strong>
-              <small>{item.enabled ? "감시" : "비활성"}{overlapping.has(item.id) ? " · ROI 충돌" : ""}</small>
+              <small>{getRecording() ? "저장본" : item.enabled ? "감시" : "비활성"}{overlapping.has(item.id) ? " · ROI 충돌" : ""}</small>
             </button>
           ))}
         </div>
@@ -157,7 +158,7 @@ export default function MapEquipmentPanel({
         <p className="map-equipment-empty">현재 지도에 등록된 설비가 없습니다.</p>
       )}
       {selected && (
-        <div className="map-equipment-editor">
+        <fieldset className="map-equipment-editor" disabled={Boolean(getRecording())} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <label>
             <span>설비 이름</span>
             <input value={selected.display_name} onChange={(event) => updateSelected({ display_name: event.target.value })} />
@@ -198,7 +199,7 @@ export default function MapEquipmentPanel({
               <FloppyDisk size={15} />{busy ? "저장 중" : "저장"}
             </button>
           </div>
-        </div>
+        </fieldset>
       )}
       {!selected && registrationReady && (
         <button type="button" className="map-equipment-add-empty" onClick={onStartPoint}>

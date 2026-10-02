@@ -1,4 +1,6 @@
 import { fetchJson, startPolling } from "../polling.js";
+import { getRecording } from "../demo/runtime.js";
+import { populateRecordedScene } from "../demo/populateScene.js";
 import { createEquipmentLabelSprite, disposeObject3d } from "../pointCloudScene.js";
 import { useEffect, useRef, useState } from "react";
 import { ArrowsClockwise, Crosshair, Cube, ThermometerHot } from "@phosphor-icons/react";
@@ -88,6 +90,7 @@ export default function PointCloudPanel({
   thermalRenderConfig = EMPTY_THERMAL_RENDER_CONFIG,
 }) {
   const spec = VARIANTS[variant] || VARIANTS.rgb;
+  const recording = getRecording();
   const archived = spec.supportsArchive ? archivedSession : null;
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
@@ -108,18 +111,33 @@ export default function PointCloudPanel({
   usePointCloudScene({ mountRef, sceneRef, fitRef, variant, spec, thermalRenderConfig });
 
   useEffect(() => {
+    if (!recording || !sceneRef.current) return;
+    const m = recording.manifest;
+    populateRecordedScene(sceneRef.current, recording, variant);
+    setStatus({ connection: 'connected', pointCount: variant === 'thermal' ? m.observedCount : m.pointCount,
+      colorAvailable: true, frameId: 'map', updatedAt: new Date(variant === 'thermal' ? m.thermalRecordedAt : m.recordedAt), error: null });
+    if (variant === 'thermal') {
+      setTemperatureWindow([m.temperatureMin, m.temperatureMax]);
+      setThermalApiStatus({ fixed_map_available: true, observed_voxel_count: m.observedCount,
+        last_observation_at: m.thermalRecordedAt, stale: true, session_id: m.session });
+      setBaseScene({ ready: true, pointCount: m.pointCount, worldId: m.world, sessionId: m.session, frameId: 'map' });
+    }
+    fitRef.current();
+  }, [recording, variant]);
+
+  useEffect(() => {
     const currentScene = sceneRef.current;
     if (!currentScene) return;
     if (variant !== "thermal") currentScene.material.size = 0.035;
     currentScene.renderer.domElement.setAttribute("aria-label", spec.ariaLabel);
-    currentScene.dynamicPoints.visible = variant === "thermal";
+    currentScene.dynamicPoints.visible = variant === "thermal" && !recording;
   }, [spec.ariaLabel, variant]);
 
   useEffect(() => {
     if (variant !== "thermal") return;
     const scene = sceneRef.current;
     if (!scene) return;
-    updateThermalPointMaterial(scene.material, thermalRenderConfig);
+    updateThermalPointMaterial(scene.material, recording ? { ...thermalRenderConfig, confidenceOpacity: false, alertGlow: false } : thermalRenderConfig);
     updateThermalPointMaterial(scene.dynamicMaterial, thermalRenderConfig);
   }, [thermalRenderConfig, variant]);
 
@@ -171,7 +189,7 @@ export default function PointCloudPanel({
   }, [equipment, selectedEquipmentId]);
 
   useEffect(() => {
-    if (variant !== "thermal") return undefined;
+    if (recording || variant !== "thermal") return undefined;
     return startPolling(
       (signal) => fetchJson("/api/v1/spatial/cloud/thermal/status", signal),
       (body) => {
@@ -188,7 +206,7 @@ export default function PointCloudPanel({
   }, [variant]);
 
   useEffect(() => {
-    if (archived) return undefined;
+    if (recording || archived) return undefined;
     // A session reset deliberately emits an empty authoritative snapshot.
     // Keep the first-fit pending until the first non-empty cloud arrives.
     firstCloudRef.current = true;
@@ -375,7 +393,7 @@ export default function PointCloudPanel({
   }, [archived?.id, spec.socketPath, variant]);
 
   useEffect(() => {
-    if (variant !== "thermal") return undefined;
+    if (recording || variant !== "thermal") return undefined;
     const scene = sceneRef.current;
     scene?.baseGeometry?.deleteAttribute("position");
     scene?.baseGeometry?.deleteAttribute("color");
@@ -451,7 +469,7 @@ export default function PointCloudPanel({
   ]);
 
   useEffect(() => {
-    if (!archived) return undefined;
+    if (recording || !archived) return undefined;
     const controller = new AbortController();
     const load = async () => {
       const currentScene = sceneRef.current;
@@ -569,7 +587,7 @@ export default function PointCloudPanel({
   const displayedCloudFresh = variant === "thermal"
     ? thermalLayer.updatedAtMs !== null && !thermalLayer.stale
     : cloudFresh;
-  const connectionLabel = archived
+  const connectionLabel = recording ? '실측 저장 자료 · 실시간 아님' : archived
     ? status.connection === "connected" && status.pointCount
       ? "저장된 3D 세션"
       : status.connection === "connecting" ? "저장 지도 변환 중" : "저장 지도 오류"
@@ -637,7 +655,7 @@ export default function PointCloudPanel({
           >
             <div className="thermal-layer-status-heading">
               <span />
-              <strong>{thermalActivityLabel}</strong>
+              <strong>{recording ? '저장된 열화상 기록' : thermalActivityLabel}</strong>
             </div>
             <dl>
               <div>
@@ -650,7 +668,7 @@ export default function PointCloudPanel({
               </div>
               <div>
                 <dt>마지막 갱신</dt>
-                <dd>{thermalLayerAge}</dd>
+                <dd>{recording ? new Date(recording.manifest.thermalRecordedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) : thermalLayerAge}</dd>
               </div>
               {thermalLayer.matchRatio !== null && (
                 <div>
@@ -659,7 +677,7 @@ export default function PointCloudPanel({
                 </div>
               )}
             </dl>
-            <p>다시 보이는 표면만 최신 온도로 갱신하고, 보지 않는 영역은 마지막 측정을 유지합니다.</p>
+            <p>{recording ? '저장 당시 관측된 표면만 표시합니다. 실시간 수집이나 위험 이벤트 판정은 하지 않습니다.' : '다시 보이는 표면만 최신 온도로 갱신하고, 보지 않는 영역은 마지막 측정을 유지합니다.'}</p>
           </aside>
         )}
         {!status.pointCount && !(variant === "thermal" && baseScene.ready) && (
@@ -696,7 +714,7 @@ export default function PointCloudPanel({
           {variant === "thermal"
             ? `관측 복셀 ${thermalLayer.observedVoxelCount.toLocaleString("ko-KR")}`
             : `${status.pointCount.toLocaleString("ko-KR")} points`}
-          {variant === "thermal"
+          {recording ? ' · 저장본' : variant === "thermal"
             ? thermalLayer.updatedAtMs === null ? "" : ` · ${thermalLayerAge}`
             : status.updatedAt ? ` · ${status.updatedAt.toLocaleTimeString("ko-KR", { hour12: false })}` : ""}
         </strong>
