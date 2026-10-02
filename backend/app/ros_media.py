@@ -399,8 +399,6 @@ class RosMediaAdapter:
         if self._cv_bridge is None:
             return
         try:
-            import cv2
-
             frame = self._cv_bridge.imgmsg_to_cv2(
                 message,
                 desired_encoding="bgr8",
@@ -414,18 +412,6 @@ class RosMediaAdapter:
                 self._image_source(
                     os.getenv("HAZARD_GUARD_RGB_TOPIC", "/camera/image_raw")
                 ),
-            )
-            if self._thermal_stream_seen:
-                return
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            thermal = cv2.applyColorMap(gray, cv2.COLORMAP_INFERNO)
-            self._label_image(thermal, "SYNTHETIC THERMAL", 0.65)
-            self._store_jpeg(
-                "thermal",
-                thermal,
-                width,
-                height,
-                "derived:rgb-colormap",
             )
         except Exception as exc:
             self._on_error(f"Camera conversion failed: {exc}")
@@ -445,14 +431,6 @@ class RosMediaAdapter:
             thermal = cv2.applyColorMap(
                 normalized,
                 cv2.COLORMAP_INFERNO,
-            )
-            physical = os.getenv(
-                "HAZARD_GUARD_DEPLOYMENT_TARGET", "simulation"
-            ).strip().lower() == "physical"
-            self._label_image(
-                thermal,
-                "TMC160F THERMAL" if physical else "GAZEBO THERMAL - SIMULATED",
-                0.55,
             )
             height, width = thermal.shape[:2]
             self._thermal_stream_seen = True
@@ -516,18 +494,3 @@ class RosMediaAdapter:
                 height=height,
                 source=source,
             )
-
-    @staticmethod
-    def _label_image(frame: Any, label: str, scale: float) -> None:
-        import cv2
-
-        cv2.putText(
-            frame,
-            label,
-            (14, 28),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            scale,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )

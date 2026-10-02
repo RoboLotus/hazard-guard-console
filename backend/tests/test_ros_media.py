@@ -4,6 +4,31 @@ from app.ros_media import RosMediaAdapter
 from app.stores import MediaStore, SpatialStore
 
 
+def test_rgb_never_generates_a_thermal_replacement():
+    import numpy as np
+    media = MediaStore()
+    adapter = RosMediaAdapter(media, SpatialStore(), lambda _: None)
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    adapter.configure(cv_bridge=SimpleNamespace(imgmsg_to_cv2=lambda *a, **k: frame), tf_buffer=None, ros_time_type=None)
+    adapter.on_rgb_image(SimpleNamespace(encoding="bgr8"))
+    assert media.get("rgb") is not None
+    assert media.get("thermal") is None
+
+
+def test_raw_thermal_does_not_burn_text_into_the_image(monkeypatch):
+    import cv2
+    import numpy as np
+    monkeypatch.setattr(cv2, "putText", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Text overlay is forbidden")))
+    media = MediaStore()
+    errors = []
+    adapter = RosMediaAdapter(media, SpatialStore(), errors.append)
+    frame = np.ones((32, 32), dtype=np.uint8) * 50
+    adapter.configure(cv_bridge=SimpleNamespace(imgmsg_to_cv2=lambda *a, **k: frame), tf_buffer=None, ros_time_type=None)
+    adapter.on_thermal_image(SimpleNamespace(encoding="mono8"))
+    assert errors == []
+    assert media.get("thermal") is not None
+
+
 def test_image_source_distinguishes_physical_ros_from_gazebo(monkeypatch):
     monkeypatch.setenv("HAZARD_GUARD_DEPLOYMENT_TARGET", "physical")
     assert RosMediaAdapter._image_source("/thermal_camera/image_raw") == (

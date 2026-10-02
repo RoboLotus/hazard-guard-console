@@ -17,24 +17,19 @@ import {
   Warning,
   WifiHigh,
 } from "@phosphor-icons/react";
+import { useCameraFeed, CameraFeedLabel, CameraFeedImage } from "../components/CameraFeed.jsx";
 import MapPanel from "../components/MapPanel.jsx";
 import { batteryPresentation } from "../batteryTelemetry.js";
 import { beaconSlots, incidentMapMarkers } from "../incidents.js";
 import { telemetryModeLabel, telemetryPresentation } from "../telemetry.js";
 import {
-  LiveImage,
-  ConnectionPlaceholder,
   PanelHeader,
   StatusPill,
 } from "../components/Common.jsx";
 
-function CameraPanel({ thermal = false, maxTemperature = null, mediaStatus, onOpen, className = "" }) {
+function CameraPanel({ thermal = false, mediaStatus, onOpen, className = "" }) {
   const stream = thermal ? mediaStatus?.thermal : mediaStatus?.rgb;
-  const live = Boolean(stream?.available);
-  const gazeboThermal = thermal && stream?.source === "gazebo:/thermal_camera/image_raw";
-  const physicalThermal = thermal && stream?.source === "ros:/thermal_camera/image_color";
-  const endpoint = thermal ? "/api/v1/media/thermal" : "/api/v1/media/rgb";
-  const temperatureAvailable = maxTemperature != null && Number.isFinite(Number(maxTemperature));
+  const feed = useCameraFeed(stream);
   return (
     <section className={`panel camera-panel ${className}`}>
       <PanelHeader
@@ -42,33 +37,13 @@ function CameraPanel({ thermal = false, maxTemperature = null, mediaStatus, onOp
         title={thermal ? "열화상 영상" : "실시간 영상"}
         action={
           <div className="panel-inline-actions">
-            <span className={`live-label ${live ? "" : "offline"}`}><span />{live ? (thermal && gazeboThermal ? "SIMULATED" : "LIVE") : "연결 필요"}</span>
+            <CameraFeedLabel feed={feed} />
             {onOpen && <button type="button" className="icon-action" aria-label={`${thermal ? "열화상" : "RGB"} 영상 상세 화면 열기`} onClick={onOpen}><CaretRight size={18} /></button>}
           </div>
         }
       />
       <div className="camera-stage">
-        {live ? <>
-          <LiveImage
-            endpoint={endpoint}
-            enabled
-            interval={thermal ? 400 : 300}
-            alt={thermal ? (physicalThermal ? "ThermoEye SDK 실시간 열화상 영상" : gazeboThermal ? "Gazebo 열화상 카메라 시뮬레이션 영상" : "열화상 카메라 영상") : "전방 RGB 카메라 영상"}
-          />
-          <div className="camera-meta top-left">CAM-{thermal ? "TH01" : "RGB01"}</div>
-          {thermal ? (
-          <>
-            {temperatureAvailable && <div className="thermal-reading"><span>MAX</span><strong>{Number(maxTemperature).toFixed(1)}°C</strong></div>}
-            <div className="camera-thermal-scale" aria-label="열화상 색상 범위"><span>40°</span><i /><span>20°</span></div>
-          </>
-          ) : null}
-        </> : (
-          <ConnectionPlaceholder
-            icon={thermal ? ThermometerHot : Camera}
-            title={`${thermal ? "열화상" : "RGB"} 카메라 연결이 필요합니다`}
-            description="센서와 서버가 연결되면 실시간 영상이 표시됩니다."
-          />
-        )}
+        <CameraFeedImage feed={feed} thermal={thermal} />
       </div>
     </section>
   );
@@ -259,7 +234,7 @@ export default function Overview({ events, onAcknowledge, onNavigate, notify, te
         <MapPanel mediaStatus={mediaStatus} spatialState={spatialState} incidentMarkers={incidentMapMarkers(incidents)} onLocate={() => notify("현재 로봇 위치를 지도 중앙에 표시했습니다.")} onOpen={() => onNavigate("map")} />
         <div className="camera-stack">
           <CameraPanel mediaStatus={mediaStatus} onOpen={() => onNavigate("video")} />
-          <CameraPanel thermal mediaStatus={mediaStatus} maxTemperature={telemetryLive ? telemetry?.max_temperature_c : null} onOpen={() => onNavigate("video")} />
+          <CameraPanel thermal mediaStatus={mediaStatus} onOpen={() => onNavigate("video")} />
         </div>
         <EventsPanel events={events} onAcknowledge={onAcknowledge} onViewAll={() => onNavigate("events")} />
       </div>

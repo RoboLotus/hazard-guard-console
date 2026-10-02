@@ -31,6 +31,7 @@ from .bridge import (
     thermal_delta_store,
     thermal_map_status_store,
 )
+from .event_status import event_status_router
 from .mode_manager import system_mode_manager
 from .dispenser_requests import (
     DispenserRequestStore,
@@ -1393,6 +1394,9 @@ def start_navigation_route(route: NavigationRoute):
 @app.delete("/api/v1/navigation/route")
 def cancel_navigation_route():
     return ros_bridge.cancel_route()
+
+
+app.include_router(event_status_router(spatial_store))
 
 
 @app.websocket("/ws/telemetry")

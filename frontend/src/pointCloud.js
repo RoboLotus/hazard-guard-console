@@ -69,9 +69,9 @@ export function resolveThermalLayerPresentation(
       THERMAL_CLOUD_FRESH_MS / 1000
     )) * 1000,
   );
-  const stale = elapsedMs === null
+  const stale = apiStatus.request_failed === true || (elapsedMs === null
     ? (typeof apiStatus.stale === "boolean" ? apiStatus.stale : true)
-    : elapsedMs >= staleAfterMs;
+    : elapsedMs >= staleAfterMs);
   const fixedMapAvailable = typeof apiStatus.fixed_map_available === "boolean"
     ? apiStatus.fixed_map_available
     : observedVoxelCount > 0 ? true : null;

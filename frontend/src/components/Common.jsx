@@ -87,7 +87,7 @@ export async function downloadAsset(source, filename) {
   URL.revokeObjectURL(url);
 }
 
-export function LiveImage({ endpoint, fallback, enabled, interval = 500, ...props }) {
+export function LiveImage({ endpoint, fallback, enabled, interval = 500, onLoadState, ...props }) {
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
@@ -109,9 +109,10 @@ export function LiveImage({ endpoint, fallback, enabled, interval = 500, ...prop
       src={source}
       onLoad={({ currentTarget }) => {
         currentTarget.hidden = false;
+        onLoadState?.(true);
       }}
       onError={({ currentTarget }) => {
-        currentTarget.onerror = null;
+        onLoadState?.(false);
         if (fallback) {
           currentTarget.src = fallback;
         } else {

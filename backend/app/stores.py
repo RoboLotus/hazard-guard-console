@@ -675,6 +675,8 @@ class SpatialStore:
 class TelemetryStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._received_monotonic = None
+        self._received_at = None
         self._battery_received_monotonic = 0.0
         self._battery_stale_after_sec = 5.0
         self._data: dict[str, Any] = {
@@ -710,6 +712,11 @@ class TelemetryStore:
         with self._lock:
             result = dict(self._data)
             battery_received = self._battery_received_monotonic
+            received = self._received_monotonic
+            result["received_at"] = self._received_at
+        age = max(0.0, time.monotonic() - received) if received is not None else None
+        result["age_sec"] = age
+        result["stale"] = age is None or age > 5.0 or result.get("mock", True)
         battery_age = (
             max(0.0, time.monotonic() - battery_received)
             if battery_received > 0.0
@@ -727,6 +734,10 @@ class TelemetryStore:
     def update(self, values: dict[str, Any]) -> None:
         with self._lock:
             self._data.update(values)
+            # Safety/battery callbacks must not refresh a stopped telemetry producer.
+            if "speed_mps" in values and values.get("mock") is False:
+                self._received_monotonic = time.monotonic()
+                self._received_at = utc_now()
 
     def update_battery(
         self,

@@ -1,3 +1,4 @@
+import { usePolling } from "../hooks/usePolling.js";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   Camera,
@@ -111,7 +112,7 @@ export default function MapPage({
       || (physicalTarget ? "기능 대기" : simulationTarget ? "시뮬레이션 비활성" : "상태 확인 필요");
   const spatialConnected = Boolean(
     spatialState
-    && spatialState.source !== "mock"
+    && spatialState.transport_live === true
     && !spatialState.mock,
   );
   const mapSpatialState = !spatialConnected
@@ -251,35 +252,8 @@ export default function MapPage({
     return () => controller.abort();
   }, [activeWorldId, systemMode?.active_map_session_id]);
 
-  useEffect(() => {
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch("/api/v1/navigation/status", { cache: "no-store" });
-        if (!disposed && response.ok) setNavigationStatus(await response.json());
-      } catch {
-        if (!disposed) setNavigationStatus(null);
-      }
-    };
-    void refresh();
-    const interval = window.setInterval(refresh, 750);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    const refreshMission = async () => {
-      try {
-        const response = await fetch("/api/v1/navigation/route/status", { cache: "no-store" });
-        if (!disposed && response.ok) setMissionStatus(await response.json());
-      } catch {
-        if (!disposed) setMissionStatus(null);
-      }
-    };
-    void refreshMission();
-    const interval = window.setInterval(refreshMission, 750);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
+  usePolling("/api/v1/navigation/status", setNavigationStatus, () => setNavigationStatus(null), 750);
+  usePolling("/api/v1/navigation/route/status", setMissionStatus, () => setMissionStatus(null), 750);
 
   const selectGoal = (candidate) => {
     if (equipmentPointMode) {
@@ -575,7 +549,7 @@ export default function MapPage({
         </div>
         <span className={`api-status ${mapLive ? "online" : ""}`}><span />{
           physicalTarget
-            ? mapLive ? "실물 로봇 지도 연결" : "실물 로봇 데이터 대기"
+            ? mapLive ? "지도 데이터 표시" : "실물 로봇 데이터 대기"
             : simulationTarget
               ? mapLive ? "시뮬레이션 공간 데이터 연결" : "시뮬레이션 지도 연결 필요"
               : "운용 환경 확인 중"

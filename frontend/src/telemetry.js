@@ -15,12 +15,20 @@ export function telemetryModeLabel(mode) {
 }
 
 function finiteNumber(value) {
+  if (value == null || typeof value === "boolean" || String(value).trim() === "") return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+export function isLiveTelemetry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value.mock !== false || value.stale === true) return false;
+  if (value.age_sec != null && (!Number.isFinite(value.age_sec) || value.age_sec > 5 || value.age_sec < 0)) return false;
+  return typeof value.mode === "string" && typeof value.robot_id === "string";
+}
+
 export function telemetryPresentation(telemetry, live) {
-  const available = Boolean(live && telemetry);
+  const available = Boolean(live && telemetry && telemetry.mock !== true && telemetry.stale !== true);
   const networkRssi = available ? finiteNumber(telemetry.network_rssi_dbm) : null;
   const lidarHz = available ? finiteNumber(telemetry.lidar_hz) : null;
   const speed = available ? finiteNumber(telemetry.speed_mps) : null;

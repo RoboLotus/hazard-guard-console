@@ -1,6 +1,7 @@
+import { applyEventStatuses, mergeEventStatuses } from "./eventStatuses.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle, Warning } from "@phosphor-icons/react";
-import { fallbackSpatialState, thermalDetectionsToEvents } from "./spatial.js";
+import { thermalDetectionsToEvents } from "./spatial.js";
 import { systemModeLabels } from "./components/Common.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import { navigationLabels } from "./data/dashboardData.js";
@@ -13,17 +14,20 @@ import Settings from "./pages/Settings.jsx";
 import VideoPage from "./pages/VideoPage.jsx";
 import RosbagPage from "./pages/RosbagPage.jsx";
 import { mergeIncidentEvents, normalizeDispenserBattery } from "./incidents.js";
-import { TELEMETRY_STALE_AFTER_MS } from "./telemetry.js";
+import { useSpatialStream } from "./hooks/useSpatialStream.js";
+import { usePolling } from "./hooks/usePolling.js";
+import { useTelemetryStream } from "./hooks/useTelemetryStream.js";
 
 export function App() {
   const [active, setActive] = useState("overview");
   const [events, setEvents] = useState([]);
+  const [eventStatuses, setEventStatuses] = useState(null);
+  const eventWrites = useRef(new Set());
   const [toast, setToast] = useState(null);
   const [apiOnline, setApiOnline] = useState(false);
-  const [telemetry, setTelemetry] = useState(null);
-  const [telemetryLive, setTelemetryLive] = useState(false);
+  const { telemetry, telemetryLive } = useTelemetryStream();
   const [mediaStatus, setMediaStatus] = useState(null);
-  const [spatialState, setSpatialState] = useState(fallbackSpatialState);
+  const spatialState = useSpatialStream();
   const [systemMode, setSystemMode] = useState({
     mode: "idle",
     state: "disabled",
@@ -47,117 +51,26 @@ export function App() {
   const notify = (message, tone = "success") => {
     setToast({ message, tone, id: Date.now() });
   };
-  useEffect(() => {
-    let disposed = false;
-    const checkHealth = async () => {
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 1200);
-      try {
-        const response = await fetch("/api/health", { signal: controller.signal });
-        if (!disposed) setApiOnline(response.ok);
-      } catch {
-        if (!disposed) setApiOnline(false);
-      } finally {
-        window.clearTimeout(timer);
-      }
-    };
-    void checkHealth();
-    const interval = window.setInterval(checkHealth, 5000);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    let requestSequence = 0;
-    let timer;
-    let controller;
-    const refreshIncidents = async () => {
-      const sequence = ++requestSequence;
-      controller = new AbortController();
-      const requestTimeout = window.setTimeout(() => controller.abort(), 3000);
-      try {
-        const response = await fetch("/api/v1/incidents", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(`Incident status ${response.status}`);
-        const payload = await response.json();
-        const battery = normalizeDispenserBattery(payload?.battery);
-        if (!battery) throw new Error("Incident response is missing battery status");
-        if (!disposed && sequence === requestSequence) {
-          setIncidents(Array.isArray(payload.incidents) ? payload.incidents : []);
-          setDispenserBattery(battery);
-        }
-      } catch {
-        if (!disposed && sequence === requestSequence) {
-          setDispenserBattery((current) => ({ ...current, stale: true, available_for_drop: 0 }));
-        }
-      } finally {
-        window.clearTimeout(requestTimeout);
-        if (!disposed) timer = window.setTimeout(refreshIncidents, 1000);
-      }
-    };
-    void refreshIncidents();
-    return () => {
-      disposed = true;
-      requestSequence += 1;
-      controller?.abort();
-      window.clearTimeout(timer);
-    };
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch("/api/v1/rosbag/status", { cache: "no-store" });
-        if (!disposed && response.ok) { const payload = await response.json(); setBagStatus(payload); setBagEnabled(Boolean(payload.recording_control_enabled)); }
-      } catch { if (!disposed) setBagStatus({ state: "offline", recording: false, control_enabled: false }); }
-    };
-    void refresh(); const timer = window.setInterval(refresh, 1500);
-    return () => { disposed = true; window.clearInterval(timer); };
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    const checkSystemMode = async () => {
-      try {
-        const response = await fetch("/api/v1/system/mode", { cache: "no-store" });
-        if (!disposed && response.ok) setSystemMode(await response.json());
-      } catch {
-        if (!disposed) {
-          setSystemMode((current) => ({
-            ...current,
-            state: "disabled",
-            control_enabled: false,
-          }));
-        }
-      }
-    };
-    void checkSystemMode();
-    const interval = window.setInterval(checkSystemMode, 1500);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    let socket;
-    let reconnectTimer;
-    const connect = () => {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/spatial`);
-      socket.onmessage = ({ data }) => {
-        try { setSpatialState(JSON.parse(data)); }
-        catch { /* keep the most recent valid spatial snapshot */ }
-      };
-      socket.onerror = () => socket.close();
-      socket.onclose = () => {
-        if (!disposed) reconnectTimer = window.setTimeout(connect, 1500);
-      };
-    };
-    connect();
-    return () => {
-      disposed = true;
-      window.clearTimeout(reconnectTimer);
-      socket?.close();
-    };
-  }, []);
+  usePolling("/api/v1/events/statuses", (payload) => {
+    setEventStatuses((current) => mergeEventStatuses(current, payload));
+  }, () => { /* Keep already acknowledged historical states, never claim a failed write succeeded. */ });
+  usePolling("/api/health", () => setApiOnline(true), () => setApiOnline(false), 5000);
+  usePolling("/api/v1/incidents", (payload) => {
+    const battery = normalizeDispenserBattery(payload?.battery);
+    if (!battery) throw new Error("Incident response is missing battery status");
+    setIncidents(Array.isArray(payload.incidents) ? payload.incidents : []);
+    setDispenserBattery(battery);
+  }, () => setDispenserBattery((current) => ({ ...current, stale: true, available_for_drop: 0 })), 1000);
+  usePolling("/api/v1/rosbag/status", (payload) => {
+    setBagStatus(payload);
+    setBagEnabled(Boolean(payload.recording_control_enabled));
+  }, () => {
+    setBagStatus({ state: "offline", recording: false, control_enabled: false });
+    setBagEnabled(false);
+  }, 1500);
+  usePolling("/api/v1/system/mode", setSystemMode, () => {
+    setSystemMode((current) => ({ ...current, state: "disabled", control_enabled: false, navigation_ready: false }));
+  }, 1500);
   useEffect(() => {
     if (spatialState?.source !== "ros" || spatialState?.mock) return;
     const nextEvents = thermalDetectionsToEvents(spatialState?.heatmap?.detections);
@@ -189,77 +102,47 @@ export function App() {
       notify(`열화상 위험 이벤트가 발생했습니다: ${summary}`, criticalCount ? "warning" : "info");
     }
   }, [spatialState]);
-  useEffect(() => {
-    let disposed = false;
-    const checkMedia = async () => {
-      try {
-        const response = await fetch("/api/v1/media/status", { cache: "no-store" });
-        if (!disposed && response.ok) setMediaStatus(await response.json());
-      } catch {
-        if (!disposed) setMediaStatus(null);
-      }
-    };
-    void checkMedia();
-    const interval = window.setInterval(checkMedia, 2000);
-    return () => { disposed = true; window.clearInterval(interval); };
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    let socket;
-    let reconnectTimer;
-    let staleTimer;
-    const connect = () => {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/telemetry`);
-      socket.onmessage = ({ data }) => {
-        try {
-          setTelemetry(JSON.parse(data));
-          setTelemetryLive(true);
-          window.clearTimeout(staleTimer);
-          staleTimer = window.setTimeout(() => {
-            if (!disposed) setTelemetryLive(false);
-          }, TELEMETRY_STALE_AFTER_MS);
-        }
-        catch { /* ignore malformed prototype telemetry */ }
-      };
-      socket.onerror = () => socket.close();
-      socket.onclose = () => {
-        if (!disposed) reconnectTimer = window.setTimeout(connect, 1500);
-      };
-    };
-    connect();
-    return () => {
-      disposed = true;
-      window.clearTimeout(reconnectTimer);
-      window.clearTimeout(staleTimer);
-      socket?.close();
-    };
-  }, []);
+  usePolling("/api/v1/media/status", setMediaStatus, () => {
+    // Saved map imagery remains useful offline; it is not a live sensor.
+    setMediaStatus((current) => current ? {
+      ...current, stale: true, rgb: { available: false }, thermal: { available: false },
+    } : null);
+  });
+
   useEffect(() => {
     if (!toast) return undefined;
     const timer = setTimeout(() => setToast(null), 3200);
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const acknowledge = (id) => {
-    setEvents((current) => current.map((event) => event.id === id ? { ...event, acknowledged: true, status: "acknowledged" } : event));
-    notify("이벤트를 확인 처리했습니다.");
+  const updateEventStatus = async (id, status) => {
+    if (eventWrites.current.has(id)) return false;
+    const event = events.find((item) => item.id === id);
+    if (!event) return false;
+    eventWrites.current.add(id);
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(`/api/v1/events/${encodeURIComponent(id)}/status`, {
+        method: "PUT", signal: controller.signal, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ map_id: spatialState?.map?.map_id, level: event.level, status }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "이벤트 상태를 저장하지 못했습니다.");
+      setEventStatuses((current) => mergeEventStatuses(current, { map_id: payload.map_id, statuses: [payload] }));
+      notify("이벤트 처리 상태를 저장했습니다.");
+      return true;
+    } catch (error) { notify(error.message, "warning"); return false; }
+    finally { clearTimeout(deadline); eventWrites.current.delete(id); }
   };
-  const updateEventStatus = (id, status) => {
-    setEvents((current) => current.map((event) => event.id === id ? {
-      ...event,
-      status,
-      acknowledged: status !== "new",
-      assignee: status === "new" ? "미지정" : status === "resolved" ? "관리자" : "관리자",
-    } : event));
-  };
+  const acknowledge = (id) => updateEventStatus(id, "acknowledged");
   const navigate = (id) => {
     if (["overview", "map", "events", "video", "report", "rosbag", "settings", "help"].includes(id)) setActive(id);
     else notify(`${navigationLabels[id] || "도움말"} 화면은 다음 단계에서 연결됩니다.`, "info");
   };
   const visibleEvents = useMemo(
-    () => mergeIncidentEvents(events, incidents),
-    [events, incidents],
+    () => mergeIncidentEvents(applyEventStatuses(events, eventStatuses, spatialState?.map?.map_id), incidents),
+    [events, incidents, eventStatuses, spatialState?.map?.map_id],
   );
   const decideIncident = async ({ incident, decision, adminToken, requestId }) => {
     const response = await fetch(`/api/v1/incidents/${encodeURIComponent(incident.incident_id)}/decision`, {
@@ -444,7 +327,7 @@ export function App() {
         {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} telemetryLive={telemetryLive} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} dispenserBattery={dispenserBattery} incidents={incidents} />}
         {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} telemetryLive={telemetryLive} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} incidents={incidents} />}
         {active === "events" && <EventsPage events={visibleEvents} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} dispenserBattery={dispenserBattery} onDecideIncident={decideIncident} />}
-        {active === "video" && <VideoPage mediaStatus={mediaStatus} telemetry={telemetry} events={visibleEvents} notify={notify} />}
+        {active === "video" && <VideoPage mediaStatus={mediaStatus} events={visibleEvents} notify={notify} />}
         {active === "report" && <ReportsPage notify={notify} />}
         {active === "rosbag" && <RosbagPage status={bagStatus} enabled={bagEnabled} onEnabledChange={changeBagEnabled} sessions={bagSessions} onRefreshSessions={refreshBagSessions} onControl={controlBag} />}
         {active === "settings" && <Settings notify={notify} apiOnline={apiOnline} />}
