@@ -3,6 +3,8 @@
 !README.md
 !RGB_STREAMING_WORKLOG.md
 !RGB_ADAPTIVE_EXPERIMENT.md
+!DEMO.md
+/frontend/public/demo-data/
 docs/
 AGENTS*
 .codex/
