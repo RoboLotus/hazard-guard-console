@@ -13,6 +13,7 @@ from .ros_media import RosMediaAdapter
 from .point_cloud import PointCloudAdapter, PointCloudStore
 from .thermal_delta import ThermalDeltaAdapter, ThermalDeltaStore
 from .sensor_diagnostics import SensorDiagnosticsStore
+from .dispenser_requests import command_authorization
 from .stores import (
     MediaStore,
     NavigationStore,
@@ -944,7 +945,7 @@ class RosBridge:
             }
 
     def publish_dispenser_drop(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Publish only a replay-safe JSON request, never an unkeyed drop."""
+        """Publish only a replay-safe, signed JSON request, never an unkeyed drop."""
 
         publisher = self._dispenser_command_publisher
         message_type = self._dispenser_string_type
@@ -953,12 +954,28 @@ class RosBridge:
                 "accepted": False,
                 "message": "ROS 디스펜서 브리지가 연결되지 않았습니다.",
             }
+        secret = os.getenv("HAZARD_GUARD_DISPENSER_APPROVAL_SECRET", "").strip()
+        if not secret:
+            # The dispenser node drops unsigned commands on the floor, so fail
+            # here with a reason the operator can act on instead of publishing
+            # a request that can only be refused.
+            return {
+                "accepted": False,
+                "message": "관리자 승인 서명 키가 설정되지 않아 배출을 발행하지 않았습니다.",
+            }
+        request_id = request["request_id"]
+        detection_id = request.get("detection_id")
         message = message_type()
         message.data = json.dumps(
             {
                 "command": "drop",
-                "request_id": request["request_id"],
-                "detection_id": request.get("detection_id"),
+                "request_id": request_id,
+                "detection_id": detection_id,
+                "authorization": command_authorization(
+                    secret,
+                    request_id=request_id,
+                    detection_id=detection_id,
+                ),
             },
             ensure_ascii=False,
             separators=(",", ":"),

@@ -295,6 +295,13 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .device-row button.installed span { color: #846f20; }
 .operation-buttons, .telemetry-grid, .device-row { flex: 1; min-height: 0; align-content: center; align-items: center; }
 
+/* 전시 시연 전용 수동 배출. 자동 탐지 경로와 눈에 띄게 구분한다. */
+.demo-drop { margin-top: clamp(7px, .45vw, 11px); min-height: clamp(38px, 2.6vw, 44px); padding: 0 clamp(8px, .5vw, 12px); display: inline-flex; align-items: center; justify-content: center; gap: clamp(5px, .35vw, 8px); color: #8a4b12; background: #fff6e9; border: 1px dashed #e4bf8d; border-radius: 7px; font-size: clamp(11px, .48vw, 13px); font-weight: 700; cursor: pointer; transition: 150ms ease; }
+.demo-drop:hover:not(:disabled) { background: #ffefd8; transform: translateY(-1px); }
+.demo-drop:disabled { opacity: .45; cursor: not-allowed; }
+.demo-drop > svg { width: clamp(17px, .72vw, 21px); height: clamp(17px, .72vw, 21px); flex: 0 0 auto; }
+.demo-drop small { font-weight: 600; font-size: clamp(9px, .36vw, 11px); color: #a9763c; }
+
 @container operation-control (max-width: 350px) {
   .operation-buttons .button { padding-inline: 0; gap: 0; }
   .operation-buttons .operation-label { display: none; }

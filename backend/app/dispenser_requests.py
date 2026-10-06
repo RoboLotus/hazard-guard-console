@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -38,6 +39,23 @@ class IdempotencyConflictError(DispenserRequestStoreError):
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def command_authorization(
+    secret: str,
+    *,
+    request_id: str,
+    detection_id: str | None,
+) -> str:
+    """Sign a drop command the way the robot verifies it.
+
+    Mirrors ``hazard_guard_dispenser.approval_auth.command_authorization``. The
+    dispenser node rejects every unsigned drop, so this payload layout must stay
+    byte-identical on both sides.
+    """
+
+    payload = "\n".join(("drop", request_id, detection_id or "")).encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
 
 def request_fingerprint(command: str, detection_id: str | None) -> str:

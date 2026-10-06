@@ -216,6 +216,12 @@ def dispenser_drop_enabled() -> bool:
     return os.getenv("HAZARD_GUARD_DISPENSER_DROP_ENABLED", "0") == "1"
 
 
+def dispenser_demo_drop_enabled() -> bool:
+    """Exhibition-only manual drop button. Off unless explicitly enabled."""
+
+    return os.getenv("HAZARD_GUARD_DISPENSER_DEMO_DROP", "0") == "1"
+
+
 def dispenser_safety_context(request: DispenserDropRequest) -> dict:
     if not dispenser_drop_enabled():
         raise HTTPException(
@@ -568,6 +574,7 @@ def health():
 def dispenser_status():
     return {
         "drop_enabled": dispenser_drop_enabled(),
+        "demo_drop_enabled": dispenser_demo_drop_enabled(),
         "ledger_available": dispenser_request_store is not None,
         "ledger_error": dispenser_request_store_error,
         "battery": ros_bridge.dispenser_battery_status(),
@@ -1353,6 +1360,59 @@ def request_dispenser_drop(request: DispenserDropRequest):
             "위험 이벤트 관리자 승인 흐름을 사용하세요."
         ),
     )
+
+
+@app.post("/api/v1/dispenser/demo/drop", status_code=202)
+def demo_dispenser_drop():
+    """Exhibition-only manual drop.
+
+    This replaces the *trigger* (a latched thermal incident) with an operator
+    button, not the safety chain. The dispenser node still verifies the HMAC
+    signature, that the robot is stably stopped against its own odometry, that
+    the servo is reachable, and that at least one cube is armed over BLE.
+
+    The console-side ``dispenser_safety_context`` pre-check is deliberately not
+    applied here: at a booth the telemetry stream is often partial, and a
+    missing ``speed_mps`` would block a drop that the robot's own odometry gate
+    would correctly allow. The robot's interlock is the authoritative one.
+
+    Disabled unless HAZARD_GUARD_DISPENSER_DEMO_DROP=1.
+    """
+
+    if not dispenser_demo_drop_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="시연용 수동 배출이 비활성화되어 있습니다.",
+        )
+    store = require_dispenser_store()
+    request_id = f"demo:{uuid.uuid4().hex}"
+    try:
+        record, _ = store.submit(
+            request_id=request_id,
+            detection_id=None,
+            audit_context={"source": "exhibition_demo"},
+        )
+    except DispenserRequestStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    result = ros_bridge.publish_dispenser_drop(record)
+    if not result.get("accepted"):
+        message = result.get("message") or "디스펜서 요청을 발행하지 못했습니다."
+        try:
+            record = store.transition(
+                request_id,
+                "dispatch_unavailable",
+                result_detail=message,
+                actuation_started=False,
+            )
+        except DispenserRequestStoreError:
+            pass
+        raise HTTPException(status_code=503, detail=message)
+    try:
+        record = store.transition(request_id, "dispatched")
+    except DispenserRequestStoreError:
+        pass
+    return record
 
 
 @app.get("/api/v1/dispenser/requests/{request_id}")
