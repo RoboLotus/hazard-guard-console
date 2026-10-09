@@ -68,7 +68,7 @@ if ($conflict.Count -gt 0) {
 
 # --- 기동 ------------------------------------------------------------------
 Say '  조이스틱 프로그램 기동...'
-$cmd = 'source /opt/ros/humble/setup.bash && source /home/jetson/yahboomcar_ros2_ws/yahboomcar_ws/install/setup.bash && export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1 && setsid nohup ros2 launch yahboomcar_ctrl yahboomcar_joy_launch.py > /tmp/joy-booth.log 2>&1 < /dev/null &'
+$cmd = 'exec >/tmp/joy-booth.log 2>&1 </dev/null; source /opt/ros/humble/setup.bash && source /home/jetson/yahboomcar_ros2_ws/yahboomcar_ws/install/setup.bash && export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1 && setsid ros2 launch yahboomcar_ctrl yahboomcar_joy_launch.py &'
 & $SshExe -o BatchMode=yes $Jetson $cmd 2>$null
 Start-Sleep -Seconds 12
 

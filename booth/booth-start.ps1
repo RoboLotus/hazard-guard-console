@@ -68,7 +68,7 @@ if ($already) {
     Say '      이미 떠 있음 (건너뜀)' DarkGray
 } else {
     # setsid nohup 없이 띄우면 SSH 를 끊는 순간 같이 죽습니다.
-    & $SshExe -o BatchMode=yes $Jetson 'cd ~/RoboLotus/hazard-guard-console && setsid nohup bash backend/scripts/start_hazardguard.sh > /tmp/hg-booth.log 2>&1 < /dev/null &' 2>$null
+    & $SshExe -o BatchMode=yes $Jetson 'exec >/tmp/hg-booth.log 2>&1 </dev/null; cd ~/RoboLotus/hazard-guard-console && setsid bash backend/scripts/start_hazardguard.sh &' 2>$null
 
     $up = $false
     foreach ($i in 1..24) {
@@ -131,7 +131,7 @@ if ($running) {
     # enable_physical_drop      : 서보를 실제로 움직인다
     # require_cube_confirmation : false = 큐브가 없어도 배출을 진행한다 (시연용)
     # allow_maintenance_manual_commands : home / angle:NN / reset_installed 허용
-    $cmd = 'cd ~/RoboLotus/hazard-guard-robot && source /opt/ros/humble/setup.bash && source install/setup.bash && set -a && . ~/.config/hazard-guard/runtime.env && set +a && export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1 && setsid nohup ros2 run hazard_guard_dispenser dispenser_node --ros-args --params-file src/hazard_guard_dispenser/config/dispenser_physical.yaml -p allow_maintenance_manual_commands:=true -p require_cube_confirmation:=false -p enable_physical_drop:=true > /tmp/disp-booth.log 2>&1 < /dev/null &'
+    $cmd = 'exec >/tmp/disp-booth.log 2>&1 </dev/null; cd ~/RoboLotus/hazard-guard-robot && source /opt/ros/humble/setup.bash && source install/setup.bash && set -a && . ~/.config/hazard-guard/runtime.env && set +a && export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1 && setsid ros2 run hazard_guard_dispenser dispenser_node --ros-args --params-file src/hazard_guard_dispenser/config/dispenser_physical.yaml -p allow_maintenance_manual_commands:=true -p require_cube_confirmation:=false -p enable_physical_drop:=true &'
     & $SshExe -o BatchMode=yes $Jetson $cmd 2>$null
     Start-Sleep -Seconds 20
     $running = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'lib/hazard_guard_[d]ispenser' | head -1" 2>$null
