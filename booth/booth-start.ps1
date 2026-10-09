@@ -42,6 +42,24 @@ if (-not $reachable) {
 }
 Say '      연결됨' Green
 
+# --- 1.5 벤더 조이스틱 자동시작 정리 ---------------------------------------
+# 부팅 때 ~/.config/autostart/sh-1.desktop 이 yahboomcar_joy_launch 를 띄웁니다.
+# 그 런치가 모터 드라이버를 함께 올리는데, 안전 게이트를 거치지 않는 raw
+# /cmd_vel 을 듣습니다. 조이스틱 스틱이 밀려 있으면 감속·정지 게이트를 건너뛰고
+# 바퀴가 돕니다. 게다가 디스펜서 서보와 같은 시리얼 포트를 물어 패킷이 깨집니다.
+#
+# 런치를 내리면 딸린 드라이버도 같이 내려갑니다. hazardguard-base.service 는
+# 건드리지 않습니다. 그건 운용 모드가 켜질 때 핸드오버 훅이 알아서 내립니다.
+Say '[1.5] 벤더 조이스틱 자동시작 정리...'
+$vendor = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'yahboom[c]ar_joy_launch' | head -1" 2>$null
+if ($vendor) {
+    & $SshExe -o BatchMode=yes $Jetson "pkill -f 'yahboom[c]ar_joy_launch'" 2>$null
+    Start-Sleep -Seconds 4
+    Say '      정리됨 (조이스틱 수동 주행은 비활성화됩니다)' Green
+} else {
+    Say '      떠 있지 않음 (건너뜀)' DarkGray
+}
+
 # --- 2. 콘솔 백엔드 ---------------------------------------------------------
 Say '[2/5] 콘솔 백엔드 기동...'
 $already = $null

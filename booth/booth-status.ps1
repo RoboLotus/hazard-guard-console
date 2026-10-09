@@ -47,6 +47,13 @@ if ($disp) {
     Say ('    서보 실제 동작={0}  큐브 확인 요구={1}' -f $vals[0], $vals[1]) DarkGray
 }
 
+# 부팅 자동시작으로 되살아나면 안전 게이트를 거치지 않는 /cmd_vel 경로가 열립니다.
+$vendor = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'yahboom[c]ar_joy_launch' | head -1" 2>$null
+if ($vendor) {
+    Say '!!  벤더 조이스틱 자동시작이 떠 있습니다 (안전 게이트 우회 경로)' Yellow
+    Say '    1 시작.bat 를 실행하면 정리됩니다.' DarkGray
+}
+
 $web = Get-NetTCPConnection -LocalPort 5180 -State Listen -ErrorAction SilentlyContinue
 Say ('{0}웹UI  :5180' -f (Mark $web))
 
