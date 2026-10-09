@@ -88,6 +88,17 @@ export function dropResultMessage(record) {
   }
 }
 
+// 한 대라도 붙어 있으면 로봇이 자동 탐색을 하지 않는다. 나중에 켠 큐브는
+// 운영자가 이걸 눌러야 찾는다.
+export async function requestCubeScan(fetchImpl = fetch) {
+  const response = await fetchImpl("/api/v1/dispenser/scan", { method: "POST" });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result?.detail || "큐브 탐색을 요청하지 못했습니다.");
+  }
+  return result;
+}
+
 export async function requestDemoDrop(fetchImpl = fetch) {
   const response = await fetchImpl("/api/v1/dispenser/demo/drop", {
     method: "POST",

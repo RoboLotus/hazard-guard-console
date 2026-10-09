@@ -1362,6 +1362,21 @@ def request_dispenser_drop(request: DispenserDropRequest):
     )
 
 
+@app.post("/api/v1/dispenser/scan", status_code=202)
+def request_dispenser_scan():
+    """Operator-requested cube discovery.
+
+    Scanning only listens, so this is not gated behind the demo flag or the
+    approval signature. It exists because the periodic partial rescan is
+    switched off while at least one cube is connected.
+    """
+
+    result = ros_bridge.publish_dispenser_scan()
+    if not result.get("accepted"):
+        raise HTTPException(status_code=503, detail=result.get("message"))
+    return result
+
+
 @app.post("/api/v1/dispenser/demo/drop", status_code=202)
 def demo_dispenser_drop():
     """Exhibition-only manual drop.

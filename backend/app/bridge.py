@@ -984,6 +984,26 @@ class RosBridge:
         publisher.publish(message)
         return {"accepted": True, "message": "디스펜서 요청을 발행했습니다."}
 
+    def publish_dispenser_scan(self) -> dict[str, Any]:
+        """Ask the robot for one operator-requested cube discovery pass.
+
+        Discovery only listens; it moves nothing and needs no signature. The
+        periodic partial rescan is off while a cube is connected, so this is
+        how a cube powered on later gets picked up.
+        """
+
+        publisher = self._dispenser_command_publisher
+        message_type = self._dispenser_string_type
+        if not self.active or publisher is None or message_type is None:
+            return {
+                "accepted": False,
+                "message": "ROS 디스펜서 브리지가 연결되지 않았습니다.",
+            }
+        message = message_type()
+        message.data = "rescan"
+        publisher.publish(message)
+        return {"accepted": True, "message": "큐브 탐색을 요청했습니다."}
+
     def lookup_dispenser_request(
         self, request_id: str, detection_id: str = ""
     ) -> dict[str, Any] | None:

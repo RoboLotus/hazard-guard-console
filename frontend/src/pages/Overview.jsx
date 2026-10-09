@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  ArrowsClockwise,
   Bell,
   Camera,
   CaretRight,
@@ -21,7 +22,7 @@ import { useCameraFeed, CameraFeedLabel, CameraFeedImage } from "../components/C
 import MapPanel from "../components/MapPanel.jsx";
 import { batteryPresentation } from "../batteryTelemetry.js";
 import { beaconSlots, incidentMapMarkers } from "../incidents.js";
-import { awaitDropResult, demoDropAvailability, dropResultMessage, requestDemoDrop } from "../demoDrop.js";
+import { awaitDropResult, demoDropAvailability, dropResultMessage, requestCubeScan, requestDemoDrop } from "../demoDrop.js";
 import { telemetryModeLabel, telemetryPresentation } from "../telemetry.js";
 import {
   PanelHeader,
@@ -137,6 +138,36 @@ function RobotStatusCard({ telemetry, telemetryLive }) {
   );
 }
 
+function CubeScanButton({ notify }) {
+  const [busy, setBusy] = useState(false);
+  // 한 대라도 붙어 있으면 로봇이 자동 탐색을 멈춘다. 스캔이 살아 있는 BLE
+  // 연결을 흔들기 때문이다. 나중에 켠 큐브는 이 버튼으로 찾는다.
+  const scan = async () => {
+    setBusy(true);
+    try {
+      await requestCubeScan();
+      notify("큐브를 탐색합니다. 30초쯤 걸립니다.", "info");
+      await new Promise((resolve) => setTimeout(resolve, 32000));
+    } catch (error) {
+      notify(error.message, "warning");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      className={`cube-scan${busy ? " busy" : ""}`}
+      disabled={busy}
+      onClick={scan}
+      title={busy ? "큐브 탐색 중" : "큐브 다시 찾기 (30초)"}
+      aria-label="큐브 다시 찾기"
+    >
+      <ArrowsClockwise size={15} />
+    </button>
+  );
+}
+
 function DemoDropButton({ battery, notify }) {
   const [busy, setBusy] = useState(false);
   const { visible, disabled, reason } = demoDropAvailability({
@@ -183,7 +214,12 @@ function WarningDevicesCard({ battery, demoDropEnabled, notify }) {
     : `${battery?.connected || 0}/${battery?.expected || 3} 연결`;
   return (
     <article className="dock-block devices">
-      <div className="dock-title"><Bell size={18} /><span>후면 경고장치</span><span className={`status-pill ${battery?.stale ? "offline" : "online"}`}>{connectionLabel}</span></div>
+      <div className="dock-title">
+        <Bell size={18} />
+        <span>후면 경고장치</span>
+        <CubeScanButton notify={notify} />
+        <span className={`status-pill ${battery?.stale ? "offline" : "online"}`}>{connectionLabel}</span>
+      </div>
       <div className="device-row">
         {slots.map((slot) => (
           <button
