@@ -87,6 +87,41 @@ if ($already) {
     Say '      기동됨' Green
 }
 
+# --- 2.5 운용 모드 ----------------------------------------------------------
+# 카메라/열화상/LiDAR/odom 은 전부 운용 모드에서 올라옵니다. 전원을 껐다 켜면
+# 모드가 꺼진 상태로 시작하므로 여기서 켜야 합니다.
+#
+# /odom 이 없으면 디스펜서가 "정지했다"를 확인하지 못해 배출을 거부합니다
+# (robot_not_stably_stopped). 즉 모드를 켜지 않으면 영상도 배출도 안 됩니다.
+Say '[2.5] 운용 모드 기동...'
+$modeOk = $false
+try {
+    $m = Invoke-RestMethod -Uri "$Backend/api/v1/system/mode" -TimeoutSec 8
+    if ($m.state -eq 'running') { $modeOk = $true; Say '      이미 켜져 있음 (건너뜀)' DarkGray }
+} catch { }
+if (-not $modeOk) {
+    Say '      로봇 주변을 확인하세요. 모터 드라이버가 올라옵니다.' Yellow
+    try {
+        $body = '{"mode":"patrol","patrol_slam":false}'
+        $null = Invoke-RestMethod -Uri "$Backend/api/v1/system/mode" -Method Put -Body $body -ContentType 'application/json' -TimeoutSec 90
+    } catch {
+        Say '      모드 요청 실패' Red
+    }
+    foreach ($i in 1..12) {
+        Start-Sleep -Seconds 8
+        try {
+            $s2 = Invoke-RestMethod -Uri "$Backend/api/v1/system/sensors" -TimeoutSec 8
+            $live = ($s2.sensors | Where-Object { $_.state -eq 'live' }).Count
+            if ($live -ge 6) { $modeOk = $true; Say ('      기동됨 (센서 {0}개 live)' -f $live) Green; break }
+            Say ('      대기 중... 센서 {0}개' -f $live) DarkGray
+        } catch { }
+    }
+    if (-not $modeOk) {
+        Say '      센서가 올라오지 않았습니다.' Yellow
+        Say '      카메라 USB 를 뽑았다 꽂고 5 영상복구.bat 를 실행하세요.' DarkGray
+    }
+}
+
 # --- 3. 디스펜서 노드 -------------------------------------------------------
 Say '[3/5] 디스펜서 노드 기동...'
 $running = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'lib/hazard_guard_[d]ispenser' | head -1" 2>$null
