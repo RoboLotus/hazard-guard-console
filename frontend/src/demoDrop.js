@@ -24,15 +24,18 @@ export function isTerminalDropState(state) {
   return TERMINAL_STATES.has(String(state || ""));
 }
 
-// Why the button is unavailable, in the order an operator should fix it.
+// A missing cube is reported, not blocked. The robot owns that decision: with
+// require_cube_confirmation it refuses the drop itself, and without it the
+// operator is deliberately running the dispenser alone. Blocking here too
+// would make the dispenser-only demo impossible.
 export function demoDropAvailability({ enabled, battery, busy }) {
   if (!enabled) return { visible: false, disabled: true, reason: "" };
   if (busy) return { visible: true, disabled: true, reason: "배출 진행 중" };
   if (battery?.stale) {
-    return { visible: true, disabled: true, reason: "큐브 상태 미확인" };
+    return { visible: true, disabled: false, reason: "큐브 상태 미확인" };
   }
   if (!Number(battery?.available_for_drop)) {
-    return { visible: true, disabled: true, reason: "배출 가능한 큐브 없음" };
+    return { visible: true, disabled: false, reason: "큐브 미연결 — 낙하 미확인" };
   }
   return { visible: true, disabled: false, reason: "" };
 }

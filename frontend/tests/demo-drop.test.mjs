@@ -15,13 +15,14 @@ test("버튼은 데모 플래그가 꺼져 있으면 아예 보이지 않는다"
   assert.equal(state.visible, false);
 });
 
-test("큐브가 없거나 상태를 모르면 누를 수 없다", () => {
+test("큐브가 없어도 누를 수 있고, 대신 경고를 보여준다", () => {
+  // 디스펜서만 두고 돌리는 시연이 가능해야 한다. 막는 판단은 로봇이 한다.
   const stale = demoDropAvailability({
     enabled: true,
     battery: { ...connected, stale: true },
     busy: false,
   });
-  assert.equal(stale.disabled, true);
+  assert.equal(stale.disabled, false);
   assert.match(stale.reason, /미확인/);
 
   const none = demoDropAvailability({
@@ -29,15 +30,14 @@ test("큐브가 없거나 상태를 모르면 누를 수 없다", () => {
     battery: { ...connected, available_for_drop: 0 },
     busy: false,
   });
-  assert.equal(none.disabled, true);
+  assert.equal(none.disabled, false);
   assert.match(none.reason, /큐브/);
 
-  // 부스에서 제일 흔한 실패: BLE가 끊긴 줄 모르고 누르는 것
+  // 상태를 아예 못 받아도 버튼은 살아 있고 사유만 붙는다
   for (const battery of [null, undefined, {}, { available_for_drop: null }]) {
-    assert.equal(
-      demoDropAvailability({ enabled: true, battery, busy: false }).disabled,
-      true,
-    );
+    const state = demoDropAvailability({ enabled: true, battery, busy: false });
+    assert.equal(state.disabled, false);
+    assert.notEqual(state.reason, "");
   }
 });
 
