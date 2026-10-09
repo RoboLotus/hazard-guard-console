@@ -39,7 +39,7 @@ if ($health) {
     Say ('    ros_bridge={0}  target={1}  mode={2}' -f $health.ros_bridge, $health.deployment_target, $health.mode) DarkGray
 }
 
-$disp = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'lib/hazard_guard_dispenser' | head -1" 2>$null
+$disp = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'lib/hazard_guard_[d]ispenser' | head -1" 2>$null
 Say ('{0}디스펜서 노드' -f (Mark $disp))
 if ($disp) {
     $raw = & $SshExe -o BatchMode=yes $Jetson 'source /opt/ros/humble/setup.bash; export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1; timeout 8 ros2 param get /dispenser_node enable_physical_drop; timeout 8 ros2 param get /dispenser_node require_cube_confirmation' 2>$null

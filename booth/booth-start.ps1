@@ -71,7 +71,7 @@ if ($already) {
 
 # --- 3. 디스펜서 노드 -------------------------------------------------------
 Say '[3/5] 디스펜서 노드 기동...'
-$running = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'lib/hazard_guard_dispenser' | head -1" 2>$null
+$running = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'lib/hazard_guard_[d]ispenser' | head -1" 2>$null
 if ($running) {
     Say '      이미 떠 있음 (건너뜀)' DarkGray
 } else {
@@ -81,7 +81,7 @@ if ($running) {
     $cmd = 'cd ~/RoboLotus/hazard-guard-robot && source /opt/ros/humble/setup.bash && source install/setup.bash && set -a && . ~/.config/hazard-guard/runtime.env && set +a && export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1 && setsid nohup ros2 run hazard_guard_dispenser dispenser_node --ros-args --params-file src/hazard_guard_dispenser/config/dispenser_physical.yaml -p allow_maintenance_manual_commands:=true -p require_cube_confirmation:=false -p enable_physical_drop:=true > /tmp/disp-booth.log 2>&1 < /dev/null &'
     & $SshExe -o BatchMode=yes $Jetson $cmd 2>$null
     Start-Sleep -Seconds 20
-    $running = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'lib/hazard_guard_dispenser' | head -1" 2>$null
+    $running = & $SshExe -o BatchMode=yes $Jetson "pgrep -f 'lib/hazard_guard_[d]ispenser' | head -1" 2>$null
     if ($running) {
         Say '      기동됨' Green
     } else {
