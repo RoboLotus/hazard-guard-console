@@ -45,7 +45,7 @@
 어긋납니다. 전원을 켠 뒤 첫 배출 전에 한 번 원점을 맞춰 주세요.
 
 ```
-ssh jetson@100.107.60.123 "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1 && ros2 topic pub --once /hazard_guard/dispenser/command std_msgs/String '{data: \"home\"}'"
+ssh jetson@100.107.60.123 "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1 && ros2 topic pub --once -w 1 /hazard_guard/dispenser/command std_msgs/String '{data: \"home\"}'"
 ```
 
 **카메라가 USB 에서 빠지면 스스로 복구하지 못합니다.** `ascamera` 노드는 죽지
@@ -75,6 +75,10 @@ ssh jetson@100.107.60.123 "source /opt/ros/humble/setup.bash && export ROS_DOMAI
 
 **라이다는 연결돼 있지 않습니다.** 2D 지도와 자율 주행에만 필요하므로 비콘
 배출 시연에는 영향이 없습니다.
+
+> `ros2 topic pub --once` 는 발행자를 만들자마자 한 번 쏘고 끝냅니다. 구독자와
+> 연결이 맺어지기 전이면 메시지가 그냥 사라져서, 명령이 될 때도 있고 안 될 때도
+> 있습니다. `-w 1` 로 구독자가 붙을 때까지 기다리게 하세요.
 
 ## 안 될 때
 
