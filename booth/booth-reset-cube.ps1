@@ -20,7 +20,7 @@ Say '=== 큐브 설치 기록 초기화 ===' Cyan
 
 # ros2 topic pub 의 인자에 큰따옴표를 중첩하면 PowerShell 이 ssh 로 넘기는
 # 과정에서 깨진다. YAML 평범한 스칼라로 쓰면 중첩이 없어진다.
-$cmd = 'source /opt/ros/humble/setup.bash; export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1; timeout 20 ros2 topic pub --once -w 1 /hazard_guard/dispenser/command std_msgs/String "{data: reset_installed}" >/dev/null 2>&1; sleep 3; cat ~/.local/state/hazard_guard/dispenser/installed_beacons.json'
+$cmd = 'source /opt/ros/humble/setup.bash; export ROS_DOMAIN_ID=61 ROS_LOCALHOST_ONLY=1; timeout 20 ros2 topic pub --once -w 1 /hazard_guard/dispenser/command std_msgs/String ''{data: reset_installed}'' >/dev/null 2>&1 || echo PUBFAIL; sleep 3; cat ~/.local/state/hazard_guard/dispenser/installed_beacons.json'
 
 # 접속 가능 여부를 먼저 따로 확인한다. 그래야 원격 명령이 실패했을 때
 # "접속할 수 없습니다" 라는 엉뚱한 안내를 하지 않는다.
@@ -37,6 +37,11 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+if ($result -match 'PUBFAIL') {
+    Say '  초기화 명령을 발행하지 못했습니다.' Red
+    Say '  디스펜서 노드가 떠 있는지 2 상태.bat 로 확인하세요.' DarkGray
+    exit 1
+}
 Say ("  상태 파일: {0}" -f $result)
 if ($result -match '"installed"\s*:\s*\[\s*\]') {
     Say '  초기화 완료. 다시 배출할 수 있습니다.' Green
