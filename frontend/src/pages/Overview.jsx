@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  ArrowsClockwise,
   Bell,
   Camera,
   CaretRight,
@@ -21,6 +22,7 @@ import { useCameraFeed, CameraFeedLabel, CameraFeedImage } from "../components/C
 import MapPanel from "../components/MapPanel.jsx";
 import { batteryPresentation } from "../batteryTelemetry.js";
 import { beaconSlots, incidentMapMarkers } from "../incidents.js";
+import { awaitDropResult, demoDropAvailability, dropResultMessage, requestCubeScan, requestDemoDrop } from "../demoDrop.js";
 import { telemetryModeLabel, telemetryPresentation } from "../telemetry.js";
 import {
   PanelHeader,
@@ -136,14 +138,88 @@ function RobotStatusCard({ telemetry, telemetryLive }) {
   );
 }
 
-function WarningDevicesCard({ battery }) {
+function CubeScanButton({ notify }) {
+  const [busy, setBusy] = useState(false);
+  // 한 대라도 붙어 있으면 로봇이 자동 탐색을 멈춘다. 스캔이 살아 있는 BLE
+  // 연결을 흔들기 때문이다. 나중에 켠 큐브는 이 버튼으로 찾는다.
+  const scan = async () => {
+    setBusy(true);
+    try {
+      await requestCubeScan();
+      notify("큐브를 탐색합니다. 30초쯤 걸립니다.", "info");
+      await new Promise((resolve) => setTimeout(resolve, 32000));
+    } catch (error) {
+      notify(error.message, "warning");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      className={`cube-scan${busy ? " busy" : ""}`}
+      disabled={busy}
+      onClick={scan}
+      title={busy ? "큐브 탐색 중" : "큐브 다시 찾기 (30초)"}
+      aria-label="큐브 다시 찾기"
+    >
+      <ArrowsClockwise size={15} />
+    </button>
+  );
+}
+
+function DemoDropButton({ battery, notify }) {
+  const [busy, setBusy] = useState(false);
+  const { visible, disabled, reason } = demoDropAvailability({
+    enabled: true,
+    battery,
+    busy,
+  });
+  if (!visible) return null;
+
+  const drop = async () => {
+    setBusy(true);
+    try {
+      const record = await requestDemoDrop();
+      notify("배출 요청을 로봇에 전달했습니다. 낙하 보고를 기다립니다.", "info");
+      const result = await awaitDropResult(record.request_id);
+      const { tone, text } = dropResultMessage(result);
+      notify(text, tone);
+    } catch (error) {
+      notify(error.message, "warning");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className="demo-drop"
+      disabled={disabled}
+      onClick={drop}
+      title={reason || "시연용으로 비콘을 즉시 배출합니다"}
+    >
+      <Siren size={16} weight={busy ? "fill" : "regular"} />
+      <span>{busy ? "배출 중…" : "비콘 수동 배출 (시연용)"}</span>
+      {reason ? <small>{reason}</small> : null}
+    </button>
+  );
+}
+
+function WarningDevicesCard({ battery, demoDropEnabled, notify }) {
   const slots = beaconSlots(battery);
   const connectionLabel = battery?.stale
     ? "상태 확인 필요"
     : `${battery?.connected || 0}/${battery?.expected || 3} 연결`;
   return (
     <article className="dock-block devices">
-      <div className="dock-title"><Bell size={18} /><span>후면 경고장치</span><span className={`status-pill ${battery?.stale ? "offline" : "online"}`}>{connectionLabel}</span></div>
+      <div className="dock-title">
+        <Bell size={18} />
+        <span>후면 경고장치</span>
+        <CubeScanButton notify={notify} />
+        <span className={`status-pill ${battery?.stale ? "offline" : "online"}`}>{connectionLabel}</span>
+      </div>
       <div className="device-row">
         {slots.map((slot) => (
           <button
@@ -159,15 +235,16 @@ function WarningDevicesCard({ battery }) {
           </button>
         ))}
       </div>
+      {demoDropEnabled ? <DemoDropButton battery={battery} notify={notify} /> : null}
     </article>
   );
 }
 
-function ControlDock({ telemetry, telemetryLive, battery, patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
+function ControlDock({ telemetry, telemetryLive, battery, demoDropEnabled, notify, patrolState, controllerEnabled, onTogglePatrol, onStop, onToggleController }) {
   return (
     <section className="control-dock" aria-label="로봇 관제 제어 및 상태">
       <RobotStatusCard telemetry={telemetry} telemetryLive={telemetryLive} />
-      <WarningDevicesCard battery={battery} />
+      <WarningDevicesCard battery={battery} demoDropEnabled={demoDropEnabled} notify={notify} />
       <OperationControlCard
         patrolState={patrolState}
         controllerEnabled={controllerEnabled}
@@ -180,7 +257,7 @@ function ControlDock({ telemetry, telemetryLive, battery, patrolState, controlle
   );
 }
 
-export default function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, telemetryLive, mediaStatus, spatialState, sendCommand, dispenserBattery, incidents }) {
+export default function Overview({ events, onAcknowledge, onNavigate, notify, telemetry, telemetryLive, mediaStatus, spatialState, sendCommand, dispenserBattery, demoDropEnabled, incidents }) {
   const [patrolState, setPatrolState] = useState("unknown");
   const [controllerEnabled, setControllerEnabled] = useState(false);
 
@@ -242,6 +319,8 @@ export default function Overview({ events, onAcknowledge, onNavigate, notify, te
         telemetry={telemetry}
         telemetryLive={telemetryLive}
         battery={dispenserBattery}
+        demoDropEnabled={demoDropEnabled}
+        notify={notify}
         patrolState={patrolState}
         controllerEnabled={controllerEnabled}
         onTogglePatrol={togglePatrol}

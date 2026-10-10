@@ -397,3 +397,60 @@ Overview·영상 페이지는 backend의 미디어 상태에 따라 자동 선�
 로컬 기능 검증: 백엔드에서 `python -m scripts.rgb_stream_smoke`,
 프런트는 `HAZARD_GUARD_BACKEND_URL=http://127.0.0.1:8891`로 실행한 뒤
 `/tests/rgb-preview-harness.html`을 엽니다. 이 서버는 ROS·모터를 사용하지 않는 색상 영상 fixture입니다.
+
+## 전시 시연용 수동 배출 버튼
+
+부스에서는 설비 세트장과 열화상 탐지를 재현할 수 없어 탐지 과정은 영상으로
+대체하고, 비콘 배출만 관람객 앞에서 실연합니다. 이 버튼은 **배출을 일으키는
+트리거만** 열화상 이벤트에서 운영자 클릭으로 바꿉니다. 로봇 측 안전 사슬은
+그대로입니다.
+
+버튼을 눌러도 다음은 전부 로봇에서 그대로 검증됩니다.
+
+| 관문 | 어디서 |
+|---|---|
+| HMAC 서명 (`drop\|request_id\|detection_id`) | `dispenser_node` |
+| 오도메트리 기준 완전 정지 | `dispenser_node` |
+| 서보 하드웨어 도달 가능 | `dispenser_node` |
+| 큐브 1개 이상 BLE ARM | `dispenser_node` |
+
+`POST /api/v1/dispenser/requests/drop`(410)은 **그대로 둡니다.** 위험 이벤트
+관리자 승인 흐름이 운영 경로이고, 이 버튼은 그 옆에 따로 난 시연 전용 문입니다.
+
+### 켜는 법
+
+```bash
+# WebUI 백엔드
+HAZARD_GUARD_DISPENSER_DEMO_DROP=1
+HAZARD_GUARD_DISPENSER_APPROVAL_SECRET=<로봇과 동일한 값>
+
+# Robot (hazard_guard_dispenser)
+ros2 launch hazard_guard_dispenser dispenser.launch.py enable_physical_drop:=true
+# 노드 프로세스에도 같은 HAZARD_GUARD_DISPENSER_APPROVAL_SECRET 필요
+```
+
+둘 중 하나라도 빠지면 조용히 실패하지 않고 사유가 화면에 뜹니다. 서명 키가
+없으면 백엔드가 아예 발행하지 않고(`관리자 승인 서명 키가 설정되지 않아…`),
+로봇 쪽 `enable_physical_drop`이 꺼져 있으면 `safety_interlock
+(physical_drop_disabled)`로 돌아옵니다.
+
+### 화면
+
+개요 탭 `후면 경고장치` 카드 안에 `비콘 수동 배출 (시연용)` 버튼이 생깁니다.
+`HAZARD_GUARD_DISPENSER_DEMO_DROP=1`이 아니면 렌더링되지 않습니다.
+
+- 배출 가능한 큐브가 0개이거나 상태가 오래되면 눌리지 않고 사유를 표시합니다.
+  부스에서 가장 흔한 실패가 BLE 끊김을 모르고 누르는 것입니다.
+- 누른 뒤에는 결과가 올 때까지 잠깁니다. 연타해도 요청이 겹치지 않습니다.
+- **서보가 움직인 것은 성공이 아닙니다.** 큐브가 `DROPPED`를 보고한
+  `succeeded`만 "배출 확인"으로 표시하고, `jam_suspected`나
+  `command_completed_unverified`는 챔버를 확인하라고 안내합니다.
+- 20초 안에 결과가 오지 않으면 성공으로 단정하지 않고 시간 초과로 알립니다.
+
+### 매 배출 뒤
+
+큐브는 자동으로 돌아오지 않습니다. 관람객 한 팀마다 떨어진 큐브를 주워
+매거진에 다시 채우고, 큐브를 흔들어 경광등을 끈 뒤(또는 30분 자동 소등을
+기다린 뒤) 다음 시연을 합니다. 큐브 펌웨어와 하드웨어는
+[RoboLotus/hazard-guard-beacon-cube](https://github.com/RoboLotus/hazard-guard-beacon-cube)에
+있습니다.
