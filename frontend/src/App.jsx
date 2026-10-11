@@ -39,6 +39,7 @@ export function App() {
   const [bagSessions, setBagSessions] = useState([]);
   const [bagEnabled, setBagEnabled] = useState(false);
   const [incidents, setIncidents] = useState([]);
+  const [demoDropEnabled, setDemoDropEnabled] = useState(false);
   const [dispenserBattery, setDispenserBattery] = useState({
     expected: 3,
     connected: 0,
@@ -61,6 +62,10 @@ export function App() {
     setIncidents(Array.isArray(payload.incidents) ? payload.incidents : []);
     setDispenserBattery(battery);
   }, () => setDispenserBattery((current) => ({ ...current, stale: true, available_for_drop: 0 })), 1000);
+  // Exhibition button. Fail closed: if the flag cannot be read, hide the button.
+  usePolling("/api/v1/dispenser/status", (payload) => {
+    setDemoDropEnabled(Boolean(payload?.demo_drop_enabled));
+  }, () => setDemoDropEnabled(false), 5000);
   usePolling("/api/v1/rosbag/status", (payload) => {
     setBagStatus(payload);
     setBagEnabled(Boolean(payload.recording_control_enabled));
@@ -324,7 +329,7 @@ export function App() {
         pendingEvents={visibleEvents.filter((event) => event.status === "new").length}
       />
       <main className="main-content">
-        {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} telemetryLive={telemetryLive} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} dispenserBattery={dispenserBattery} incidents={incidents} />}
+        {active === "overview" && <Overview events={visibleEvents} onAcknowledge={acknowledge} onNavigate={navigate} notify={notify} telemetry={telemetry} telemetryLive={telemetryLive} mediaStatus={mediaStatus} spatialState={spatialState} sendCommand={sendCommand} dispenserBattery={dispenserBattery} demoDropEnabled={demoDropEnabled} incidents={incidents} />}
         {active === "map" && <MapPage mediaStatus={mediaStatus} telemetry={telemetry} telemetryLive={telemetryLive} spatialState={spatialState} systemMode={systemMode} modeBusy={modeBusy} onModeChange={changeSystemMode} onInitializeLocalization={initializeLocalization} onSystemModeUpdate={setSystemMode} onSaveSystemMap={saveSystemMap} onSaveAndStop={saveAndStopSystemMap} onStopSystemMode={stopSystemMode} notify={notify} incidents={incidents} />}
         {active === "events" && <EventsPage events={visibleEvents} onUpdateStatus={updateEventStatus} notify={notify} onOpenVideo={() => navigate("video")} dispenserBattery={dispenserBattery} onDecideIncident={decideIncident} />}
         {active === "video" && <VideoPage mediaStatus={mediaStatus} events={visibleEvents} notify={notify} />}

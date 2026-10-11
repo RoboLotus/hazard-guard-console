@@ -295,6 +295,23 @@ body { margin: 0; min-width: 1100px; min-height: 100vh; background: #eef2f6; -we
 .device-row button.installed span { color: #846f20; }
 .operation-buttons, .telemetry-grid, .device-row { flex: 1; min-height: 0; align-content: center; align-items: center; }
 
+/* 큐브 다시 찾기. 제목 옆에 작게 두고 평소엔 눈에 띄지 않게 한다. */
+.cube-scan { margin-left: 2px; padding: 2px; display: inline-flex; align-items: center; justify-content: center; color: #b3bcc7; background: none; border: 0; border-radius: 5px; cursor: pointer; transition: 150ms ease; }
+.cube-scan:hover:not(:disabled) { color: #5b6b7d; background: #eef1f5; }
+.cube-scan:disabled { cursor: progress; color: #c9d1da; }
+.cube-scan.busy > svg { animation: cube-scan-spin 1.1s linear infinite; }
+@keyframes cube-scan-spin { to { transform: rotate(360deg); } }
+
+/* 제목과 비콘 버튼이 붙어 보여 사이를 띄운다. */
+.dock-block.devices .device-row { margin-top: clamp(8px, .5vw, 13px); }
+
+/* 전시 시연 전용 수동 배출. 자동 탐지 경로와 눈에 띄게 구분한다. */
+.demo-drop { margin-top: clamp(7px, .45vw, 11px); min-height: clamp(38px, 2.6vw, 44px); padding: 0 clamp(8px, .5vw, 12px); display: inline-flex; align-items: center; justify-content: center; gap: clamp(5px, .35vw, 8px); color: #8a4b12; background: #fff6e9; border: 1px dashed #e4bf8d; border-radius: 7px; font-size: clamp(11px, .48vw, 13px); font-weight: 700; cursor: pointer; transition: 150ms ease; }
+.demo-drop:hover:not(:disabled) { background: #ffefd8; transform: translateY(-1px); }
+.demo-drop:disabled { opacity: .45; cursor: not-allowed; }
+.demo-drop > svg { width: clamp(17px, .72vw, 21px); height: clamp(17px, .72vw, 21px); flex: 0 0 auto; }
+.demo-drop small { font-weight: 600; font-size: clamp(9px, .36vw, 11px); color: #a9763c; }
+
 @container operation-control (max-width: 350px) {
   .operation-buttons .button { padding-inline: 0; gap: 0; }
   .operation-buttons .operation-label { display: none; }
