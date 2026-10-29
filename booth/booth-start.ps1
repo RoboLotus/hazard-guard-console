@@ -16,7 +16,9 @@ foreach ($cand in @('C:\Program Files\Git\usr\bin\ssh.exe',
 
 $Jetson   = 'jetson@100.107.60.123'
 $Backend  = 'http://100.107.60.123:8000'
-$WebUiDir = 'C:\Users\coco2\hg-console\frontend'
+# booth 폴더는 hg-console 저장소 안에 있으므로 frontend 는 바로 옆이다.
+# 사용자 이름이나 받은 위치가 달라도 저장소째 받으면 그대로 동작한다.
+$WebUiDir = (Resolve-Path (Join-Path $PSScriptRoot '..\frontend')).Path
 $WebUiUrl = 'http://127.0.0.1:5180'
 
 function Say($text, $color = 'White') { Write-Host $text -ForegroundColor $color }
@@ -162,6 +164,10 @@ try {
 
 Say ''
 Say "준비 완료 -> $WebUiUrl" Green
-Say '  폰/태블릿에서는 http://172.21.161.29:5180' DarkGray
+# 이 PC 의 LAN 주소는 기기마다 다르므로 그때그때 찾는다.
+$lan = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.|100\.)' } |
+    Select-Object -First 1 -ExpandProperty IPAddress
+if ($lan) { Say ("  폰/태블릿에서는 http://{0}:5180" -f $lan) DarkGray }
 Say ''
 Start-Process $WebUiUrl
